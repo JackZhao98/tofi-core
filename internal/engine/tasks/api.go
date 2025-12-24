@@ -14,7 +14,9 @@ func (a *API) Execute(n *models.Node, ctx *models.ExecutionContext) (string, err
 	method := strings.ToUpper(ctx.ReplaceParams(n.Config["method"]))
 	url := ctx.ReplaceParams(n.Config["url"])
 	auth := ctx.ReplaceParams(n.Config["api_key"])
-	body := ctx.ReplaceParams(n.Config["body"])
+
+	// 2. 解析输入
+	body := ctx.ReplaceParams(n.Input["body"])
 
 	if method == "" {
 		method = "POST"

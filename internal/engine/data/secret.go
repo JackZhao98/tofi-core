@@ -9,13 +9,29 @@ import (
 type Secret struct{}
 
 func (s *Secret) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	// 如果是单值模式
-	if val, ok := n.Config["value"]; ok && len(n.Config) == 1 {
-		return ctx.ReplaceParams(val), nil
+	// 规范：Secret 数据存储在 Data 字段
+
+	// 1. 单值模式
+	if len(n.Data) == 1 {
+		if val, ok := n.Data["value"]; ok {
+			if strVal, isStr := val.(string); isStr {
+				return ctx.ReplaceParams(strVal), nil
+			}
+		}
 	}
 
-	// 如果是多值模式，序列化为 JSON
-	jsonData, err := json.Marshal(n.Config)
+	// 2. 多值模式
+	finalData := make(map[string]interface{})
+	for k, v := range n.Data {
+		if strVal, ok := v.(string); ok {
+			finalData[k] = ctx.ReplaceParams(strVal)
+		} else {
+			finalData[k] = v
+		}
+	}
+
+	// 3. 序列化
+	jsonData, err := json.Marshal(finalData)
 	if err != nil {
 		return "", fmt.Errorf("Secret 节点数据处理失败: %v", err)
 	}

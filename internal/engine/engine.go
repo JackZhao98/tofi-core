@@ -22,6 +22,8 @@ func GetAction(nodeType string) Action {
 		return &tasks.AI{}
 	case "api":
 		return &tasks.API{}
+	case "workflow":
+		return &WorkflowTask{}
 	case "if":
 		return &logic.If{}
 	case "check":
@@ -62,23 +64,40 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 
 		// 【传播逻辑】：如果父节点是“失败”或“跳过”
 		if strings.HasPrefix(res, "ERR_PROPAGATION:") || strings.HasPrefix(res, "SKIPPED_BY:") {
-			// 只有第一个到达这里的协程负责标记 SKIP 并传播
-			if ctx.CheckAndSetStarted(nodeID) {
+			// 关键修复：检查我是不是父节点的“救生员”（OnFailure分支）
+			// 如果是，那么父节点的失败正是我启动的原因，不能跳过！
+			parentNode, ok := wf.Nodes[depID]
+			isRescue := false
+			if ok {
+				for _, failID := range parentNode.OnFailure {
+					if failID == node.ID {
+						isRescue = true
+						break
+					}
+				}
+			}
+
+			// 如果不是救生员，才执行跳过逻辑
+			if !isRescue {
+				// 只有第一个到达这里的协程负责标记 SKIP 并传播
+				if ctx.CheckAndSetStarted(nodeID) {
+					return
+				}
+
+				skipMsg := fmt.Sprintf("SKIPPED_BY: %s", depID)
+				ctx.RecordStat(models.NodeStat{
+					NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
+				})
+				ctx.SetResult(node.ID, skipMsg)
+				log.Printf("[%s] [SKIP]    [%s] 由于上游失败自动跳过", ctx.ExecutionID, node.ID)
+
+				for _, nextID := range node.Next {
+					ctx.Wg.Add(1)
+					go RunNode(wf, nextID, ctx)
+				}
 				return
 			}
-
-			skipMsg := fmt.Sprintf("SKIPPED_BY: %s", depID)
-			ctx.RecordStat(models.NodeStat{
-				NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
-			})
-			ctx.SetResult(node.ID, skipMsg)
-			log.Printf("[%s] [SKIP]    [%s] 由于上游失败自动跳过", ctx.ExecutionID, node.ID)
-
-			for _, nextID := range node.Next {
-				ctx.Wg.Add(1)
-				go RunNode(wf, nextID, ctx)
-			}
-			return
+			// 如果是 Rescue，继续执行（就像收到 Success 一样）
 		}
 	}
 

@@ -10,9 +10,9 @@ import (
 type Text struct{}
 
 func (t *Text) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	target := ctx.ReplaceParams(n.Config["target"]) // 待检查的文本
-	pattern := ctx.ReplaceParams(n.Config["value"]) // 匹配的内容
-	mode := n.Config["mode"]                        // "contains", "starts_with", "matches"
+	target := ctx.ReplaceParams(n.Input["target"]) // 待检查的文本
+	pattern := ctx.ReplaceParams(n.Input["value"]) // 匹配的内容
+	mode := n.Config["mode"]                       // "contains", "starts_with", "matches"
 
 	var result bool
 	switch mode {

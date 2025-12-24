@@ -32,5 +32,10 @@ func LoadWorkflow(path string) (*models.Workflow, error) {
 		return nil, err
 	}
 
+	// 注入 ID (Map Key -> Node.ID)
+	for id, node := range wf.Nodes {
+		node.ID = id
+	}
+
 	return &wf, nil
 }

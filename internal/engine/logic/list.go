@@ -10,8 +10,8 @@ import (
 type List struct{}
 
 func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	listRaw := ctx.ReplaceParams(n.Config["list"]) // 预期是 JSON 数组
-	mode := n.Config["mode"]                       // "length_is", "contains"
+	listRaw := ctx.ReplaceParams(n.Input["list"]) // 预期是 JSON 数组
+	mode := n.Config["mode"]                      // "length_is", "contains"
 
 	var list []interface{}
 	if err := json.Unmarshal([]byte(listRaw), &list); err != nil {
@@ -20,12 +20,12 @@ func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 
 	switch mode {
 	case "length_is":
-		expectedLen, _ := strconv.Atoi(n.Config["value"])
+		expectedLen, _ := strconv.Atoi(n.Input["value"])
 		if len(list) != expectedLen {
 			return "", fmt.Errorf("CONDITION_NOT_MET")
 		}
 	case "contains":
-		item := ctx.ReplaceParams(n.Config["value"])
+		item := ctx.ReplaceParams(n.Input["value"])
 		found := false
 		for _, v := range list {
 			if fmt.Sprint(v) == item {

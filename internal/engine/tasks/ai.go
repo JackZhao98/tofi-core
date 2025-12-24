@@ -12,12 +12,15 @@ import (
 type AI struct{}
 
 func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
+	// Config: 静态配置
 	endpoint := ctx.ReplaceParams(n.Config["endpoint"])
 	apiKey := ctx.ReplaceParams(n.Config["api_key"])
 	model := ctx.ReplaceParams(n.Config["model"])
-	system := ctx.ReplaceParams(n.Config["system"])
-	prompt := ctx.ReplaceParams(n.Config["prompt"])
 	provider := strings.ToLower(n.Config["provider"])
+
+	// Input: 动态输入
+	system := ctx.ReplaceParams(n.Input["system"])
+	prompt := ctx.ReplaceParams(n.Input["prompt"])
 
 	headers := make(map[string]string)
 	var payload map[string]interface{}
