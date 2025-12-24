@@ -22,7 +22,12 @@ func (a *API) Execute(n *models.Node, ctx *models.ExecutionContext) (string, err
 	var body string
 	if rawBody, ok := n.Input["body"]; ok {
 		if strBody, isStr := rawBody.(string); isStr {
-			body = ctx.ReplaceParams(strBody)
+			// 使用严格模式进行变量替换
+			var err error
+			body, err = ctx.ReplaceParamsStrict(strBody)
+			if err != nil {
+				return "", fmt.Errorf("input.body 变量替换失败: %v", err)
+			}
 		} else {
 			// 如果是对象/列表，递归替换变量后序列化为 JSON
 			processedBody := ctx.ReplaceParamsAny(rawBody)
@@ -46,11 +51,19 @@ func (a *API) Execute(n *models.Node, ctx *models.ExecutionContext) (string, err
 		// 情况 A: Map (YAML Object)
 		if headerMap, isMap := rawHeaders.(map[string]interface{}); isMap {
 			for k, v := range headerMap {
-				headers[k] = ctx.ReplaceParams(fmt.Sprint(v))
+				// 使用严格模式进行变量替换
+				val, err := ctx.ReplaceParamsStrict(fmt.Sprint(v))
+				if err != nil {
+					return "", fmt.Errorf("input.headers.%s 变量替换失败: %v", k, err)
+				}
+				headers[k] = val
 			}
 		} else if headerStr, isStr := rawHeaders.(string); isStr {
-			// 情况 B: JSON String
-			processedStr := ctx.ReplaceParams(headerStr)
+			// 情况 B: JSON String - 使用严格模式
+			processedStr, err := ctx.ReplaceParamsStrict(headerStr)
+			if err != nil {
+				return "", fmt.Errorf("input.headers 变量替换失败: %v", err)
+			}
 			if processedStr != "" {
 				var hm map[string]string
 				if err := json.Unmarshal([]byte(processedStr), &hm); err == nil {
@@ -69,10 +82,19 @@ func (a *API) Execute(n *models.Node, ctx *models.ExecutionContext) (string, err
 	if rawParams, ok := n.Input["params"]; ok {
 		if paramMap, isMap := rawParams.(map[string]interface{}); isMap {
 			for k, v := range paramMap {
-				queryParams[k] = ctx.ReplaceParams(fmt.Sprint(v))
+				// 使用严格模式进行变量替换
+				val, err := ctx.ReplaceParamsStrict(fmt.Sprint(v))
+				if err != nil {
+					return "", fmt.Errorf("input.params.%s 变量替换失败: %v", k, err)
+				}
+				queryParams[k] = val
 			}
 		} else if paramStr, isStr := rawParams.(string); isStr {
-			processedStr := ctx.ReplaceParams(paramStr)
+			// 使用严格模式进行变量替换
+			processedStr, err := ctx.ReplaceParamsStrict(paramStr)
+			if err != nil {
+				return "", fmt.Errorf("input.params 变量替换失败: %v", err)
+			}
 			if processedStr != "" {
 				var pm map[string]string
 				if err := json.Unmarshal([]byte(processedStr), &pm); err == nil {

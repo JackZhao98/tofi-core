@@ -15,6 +15,14 @@ import (
 	"github.com/Knetic/govaluate"
 )
 
+// init 包初始化函数，注入依赖
+func init() {
+	// 为 Loop 注入 GetAction 函数，解决循环依赖
+	logic.SetActionGetter(func(nodeType string) logic.Action {
+		return GetAction(nodeType)
+	})
+}
+
 // GetAction 工厂函数：将节点类型映射到对应的子包实现
 func GetAction(nodeType string) Action {
 	switch nodeType {
@@ -36,6 +44,8 @@ func GetAction(nodeType string) Action {
 		return &logic.Math{}
 	case "list":
 		return &logic.List{}
+	case "loop":
+		return &logic.Loop{}
 	case "var", "const":
 		return &data.Var{}
 	case "secret":

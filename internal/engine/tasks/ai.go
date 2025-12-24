@@ -25,8 +25,19 @@ func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, erro
 		return "", fmt.Errorf("AI prompt 必须是字符串")
 	}
 
-	system = ctx.ReplaceParams(system)
-	prompt = ctx.ReplaceParams(prompt)
+	// 使用严格模式进行变量替换
+	var err error
+	if system != "" {
+		system, err = ctx.ReplaceParamsStrict(system)
+		if err != nil {
+			return "", fmt.Errorf("input.system 变量替换失败: %v", err)
+		}
+	}
+
+	prompt, err = ctx.ReplaceParamsStrict(prompt)
+	if err != nil {
+		return "", fmt.Errorf("input.prompt 变量替换失败: %v", err)
+	}
 
 	headers := make(map[string]string)
 	var payload map[string]interface{}

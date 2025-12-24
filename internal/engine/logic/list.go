@@ -22,8 +22,11 @@ func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 		replaced := ctx.ReplaceParamsAny(listObj)
 		list = replaced.([]interface{})
 	} else if listStr, ok := rawList.(string); ok {
-		// Case 2: JSON String
-		replacedStr := ctx.ReplaceParams(listStr)
+		// Case 2: JSON String - 使用严格模式
+		replacedStr, err := ctx.ReplaceParamsStrict(listStr)
+		if err != nil {
+			return "", fmt.Errorf("input.list 变量替换失败: %v", err)
+		}
 		if err := json.Unmarshal([]byte(replacedStr), &list); err != nil {
 			return "", fmt.Errorf("列表解析失败，请确保输入是 JSON 格式: %v", err)
 		}
@@ -31,7 +34,11 @@ func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 		return "", fmt.Errorf("list 输入无效，必须是 JSON 字符串或数组")
 	}
 
-	targetVal := ctx.ReplaceParams(fmt.Sprint(n.Input["value"]))
+	// 使用严格模式进行变量替换
+	targetVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["value"]))
+	if err != nil {
+		return "", fmt.Errorf("input.value 变量替换失败: %v", err)
+	}
 
 	switch mode {
 	case "length_is":

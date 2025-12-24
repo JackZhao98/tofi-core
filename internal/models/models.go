@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -107,7 +108,20 @@ func (ctx *ExecutionContext) GetResult(nodeID string) (string, bool) {
 }
 
 // ReplaceParams 变量替换逻辑 (支持 JSON 路径)
+// 注意：为了向后兼容，此方法仍然返回 string，字段不存在时返回空字符串
+// 新代码应使用 ReplaceParamsStrict 以获得更好的错误检测
 func (ctx *ExecutionContext) ReplaceParams(script string) string {
+	result, _ := ctx.replaceParamsInternal(script, false)
+	return result
+}
+
+// ReplaceParamsStrict 严格模式的变量替换，字段不存在时会返回错误
+func (ctx *ExecutionContext) ReplaceParamsStrict(script string) (string, error) {
+	return ctx.replaceParamsInternal(script, true)
+}
+
+// replaceParamsInternal 内部实现，支持严格模式
+func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (string, error) {
 	ctx.mu.RLock()
 	defer ctx.mu.RUnlock()
 
@@ -125,11 +139,50 @@ func (ctx *ExecutionContext) ReplaceParams(script string) string {
 			endIdx := strings.Index(finalScript[startIdx:], "}}") + startIdx
 			fullPath := finalScript[startIdx+2 : endIdx]
 			jsonPath := strings.TrimPrefix(fullPath, nodeID+".")
-			value := gjson.Get(output, jsonPath).String()
+
+			result := gjson.Get(output, jsonPath)
+
+			// 严格模式：检查字段是否存在
+			if strict && !result.Exists() {
+				return "", fmt.Errorf("字段不存在: {{%s}}\n"+
+					"  节点 '%s' 的输出中没有字段 '%s'\n"+
+					"  实际输出: %s",
+					fullPath, nodeID, jsonPath, truncateString(output, 200))
+			}
+
+			value := result.String()
 			finalScript = strings.ReplaceAll(finalScript, "{{"+fullPath+"}}", value)
 		}
 	}
-	return finalScript
+
+	// 严格模式：检查是否还有未被替换的变量（说明引用的节点不存在）
+	if strict && strings.Contains(finalScript, "{{") {
+		// 提取第一个未被替换的变量
+		startIdx := strings.Index(finalScript, "{{")
+		endIdx := strings.Index(finalScript[startIdx:], "}}") + startIdx
+		if endIdx > startIdx {
+			unresolvedVar := finalScript[startIdx+2 : endIdx]
+			// 提取节点ID
+			nodeID := unresolvedVar
+			if dotIdx := strings.Index(unresolvedVar, "."); dotIdx > 0 {
+				nodeID = unresolvedVar[:dotIdx]
+			}
+			return "", fmt.Errorf("节点不存在: {{%s}}\n"+
+				"  引用的节点 '%s' 不存在或尚未执行\n"+
+				"  提示: 请检查节点ID拼写和依赖关系",
+				unresolvedVar, nodeID)
+		}
+	}
+
+	return finalScript, nil
+}
+
+// truncateString 截断字符串用于错误提示
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // ReplaceParamsAny 递归处理任意类型中的字符串变量替换
@@ -195,4 +248,31 @@ func (ctx *ExecutionContext) Snapshot() (map[string]string, []NodeStat) {
 	copy(stats, ctx.Stats)
 
 	return results, stats
+}
+
+// Clone 创建一个新的 ExecutionContext，复制当前上下文的 Results 和 SecretValues
+// 用于循环迭代或子任务执行时创建隔离的上下文
+func (ctx *ExecutionContext) Clone() *ExecutionContext {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+
+	// 创建新的上下文，共享相同的 Paths 和 ExecutionID 前缀
+	cloned := &ExecutionContext{
+		ExecutionID: ctx.ExecutionID, // 保持相同的 ExecutionID
+		Paths:       ctx.Paths,       // 共享路径配置
+		Results:     make(map[string]string),
+		startedNodes: make(map[string]bool),
+		Stats:       []NodeStat{},
+		SecretValues: make([]string, len(ctx.SecretValues)),
+	}
+
+	// 复制 Results（深拷贝）
+	for k, v := range ctx.Results {
+		cloned.Results[k] = v
+	}
+
+	// 复制 SecretValues（深拷贝）
+	copy(cloned.SecretValues, ctx.SecretValues)
+
+	return cloned
 }

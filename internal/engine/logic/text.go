@@ -10,9 +10,18 @@ import (
 type Text struct{}
 
 func (t *Text) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	target := ctx.ReplaceParams(fmt.Sprint(n.Input["target"])) // 待检查的文本
-	pattern := ctx.ReplaceParams(fmt.Sprint(n.Input["value"])) // 匹配的内容
-	mode := n.Config["mode"]                       // "contains", "starts_with", "matches"
+	// 使用严格模式进行变量替换，字段不存在时会直接报错
+	target, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["target"]))
+	if err != nil {
+		return "", fmt.Errorf("input.target 变量替换失败: %v", err)
+	}
+
+	pattern, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["value"]))
+	if err != nil {
+		return "", fmt.Errorf("input.value 变量替换失败: %v", err)
+	}
+
+	mode := n.Config["mode"] // "contains", "starts_with", "matches"
 
 	var result bool
 	switch mode {

@@ -10,14 +10,31 @@ import (
 type Math struct{}
 
 func (m *Math) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	leftVal := ctx.ReplaceParams(fmt.Sprint(n.Input["left"]))
-	rightVal := ctx.ReplaceParams(fmt.Sprint(n.Input["right"]))
+	// 使用严格模式进行变量替换，字段不存在时会直接报错
+	leftVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["left"]))
+	if err != nil {
+		return "", fmt.Errorf("input.left 变量替换失败: %v", err)
+	}
+
+	rightVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["right"]))
+	if err != nil {
+		return "", fmt.Errorf("input.right 变量替换失败: %v", err)
+	}
+
 	operator := n.Config["operator"] // ">", "<", "==", ">=", "<="
 
 	l, errL := strconv.ParseFloat(leftVal, 64)
 	r, errR := strconv.ParseFloat(rightVal, 64)
 	if errL != nil || errR != nil {
-		return "", fmt.Errorf("数值转换失败: %s 或 %s 不是数字", leftVal, rightVal)
+		// 提供更友好的错误信息
+		errMsg := "数值转换失败。"
+		if errL != nil {
+			errMsg += fmt.Sprintf("\n  - left = '%s' 不是有效数字", leftVal)
+		}
+		if errR != nil {
+			errMsg += fmt.Sprintf("\n  - right = '%s' 不是有效数字", rightVal)
+		}
+		return "", fmt.Errorf(errMsg)
 	}
 
 	var result bool
