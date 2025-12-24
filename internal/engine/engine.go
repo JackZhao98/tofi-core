@@ -21,6 +21,9 @@ func init() {
 	logic.SetActionGetter(func(nodeType string) logic.Action {
 		return GetAction(nodeType)
 	})
+
+	// 为 Handoff 注入 Start 函数，解决循环依赖
+	tasks.SetWorkflowStarter(Start)
 }
 
 // GetAction 工厂函数：将节点类型映射到对应的子包实现
@@ -33,7 +36,7 @@ func GetAction(nodeType string) Action {
 	case "api":
 		return &tasks.API{}
 	case "workflow":
-		return &WorkflowTask{}
+		return &tasks.Handoff{}
 	case "if":
 		return &logic.If{}
 	case "check":

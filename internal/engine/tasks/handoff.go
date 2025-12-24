@@ -1,4 +1,4 @@
-package engine
+package tasks
 
 import (
 	"encoding/json"
@@ -7,9 +7,18 @@ import (
 	"tofi-core/internal/parser"
 )
 
-type WorkflowTask struct{}
+type Handoff struct{}
 
-func (w *WorkflowTask) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
+// workflowStarter 是用于启动子工作流的函数类型（避免循环依赖）
+// 这个函数会在 engine 包中注入
+var workflowStarter func(*models.Workflow, *models.ExecutionContext)
+
+// SetWorkflowStarter 由 engine 包调用，注入 Start 函数
+func SetWorkflowStarter(starter func(*models.Workflow, *models.ExecutionContext)) {
+	workflowStarter = starter
+}
+
+func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
 	// 1. 获取子工作流文件路径 (Config)
 	filePath := ctx.ReplaceParams(n.Config["file"])
 	if filePath == "" {
@@ -36,8 +45,11 @@ func (w *WorkflowTask) Execute(n *models.Node, ctx *models.ExecutionContext) (st
 	inputsJSON, _ := json.Marshal(inputsMap)
 	childCtx.SetResult("inputs", string(inputsJSON))
 
-	// 5. 执行子工作流 (可以直接调用 Start，因为在同一个包)
-	Start(childWf, childCtx)
+	// 5. 执行子工作流 (通过注入的 starter 函数)
+	if workflowStarter == nil {
+		return "", fmt.Errorf("workflowStarter not initialized - call SetWorkflowStarter first")
+	}
+	workflowStarter(childWf, childCtx)
 	
 	// 6. 等待完成
 	childCtx.Wg.Wait()
@@ -65,7 +77,7 @@ func (w *WorkflowTask) Execute(n *models.Node, ctx *models.ExecutionContext) (st
 	return string(outputsJSON), nil
 }
 
-func (w *WorkflowTask) Validate(n *models.Node) error {
+func (h *Handoff) Validate(n *models.Node) error {
 	if n.Config["file"] == "" {
 		return fmt.Errorf("config.file is required")
 	}
