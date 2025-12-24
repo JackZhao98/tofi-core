@@ -54,9 +54,15 @@ func (i *If) Execute(n *models.Node, ctx *models.ExecutionContext) (string, erro
 	}
 
 	if isPassed, ok := result.(bool); !ok || !isPassed {
+		if strings.ToLower(n.Config["output_bool"]) == "true" {
+			return "false", nil
+		}
 		return exprStr, fmt.Errorf("CONDITION_NOT_MET")
 	}
 
+	if strings.ToLower(n.Config["output_bool"]) == "true" {
+		return "true", nil
+	}
 	return "EXPR_MATCHED", nil
 }
 

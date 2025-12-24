@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"tofi-core/internal/models"
 )
 
@@ -14,7 +15,7 @@ func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 	mode := n.Config["mode"] // "length_is", "contains"
 
 	var list []interface{}
-	
+
 	// Case 1: List Object (YAML array)
 	if listObj, ok := rawList.([]interface{}); ok {
 		// 递归替换变量
@@ -36,6 +37,9 @@ func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 	case "length_is":
 		expectedLen, _ := strconv.Atoi(targetVal)
 		if len(list) != expectedLen {
+			if strings.ToLower(n.Config["output_bool"]) == "true" {
+				return "false", nil
+			}
 			return "", fmt.Errorf("CONDITION_NOT_MET")
 		}
 	case "contains":
@@ -48,10 +52,16 @@ func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 			}
 		}
 		if !found {
+			if strings.ToLower(n.Config["output_bool"]) == "true" {
+				return "false", nil
+			}
 			return "", fmt.Errorf("CONDITION_NOT_MET")
 		}
 	}
 
+	if strings.ToLower(n.Config["output_bool"]) == "true" {
+		return "true", nil
+	}
 	return "LIST_OK", nil
 }
 

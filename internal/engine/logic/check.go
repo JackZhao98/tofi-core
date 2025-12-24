@@ -27,7 +27,15 @@ func (c *Check) Execute(n *models.Node, ctx *models.ExecutionContext) (string, e
 	}
 
 	if !result {
+		// 如果开启了 output_bool 模式，则返回 "false" 而不是报错
+		if strings.ToLower(n.Config["output_bool"]) == "true" {
+			return "false", nil
+		}
 		return val, fmt.Errorf("CONDITION_NOT_MET")
+	}
+	
+	if strings.ToLower(n.Config["output_bool"]) == "true" {
+		return "true", nil
 	}
 	return "CHECK_PASSED", nil
 }

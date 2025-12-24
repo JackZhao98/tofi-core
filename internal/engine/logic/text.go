@@ -31,7 +31,13 @@ func (t *Text) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 	}
 
 	if !result {
+		if strings.ToLower(n.Config["output_bool"]) == "true" {
+			return "false", nil
+		}
 		return "TEXT_NOT_MATCH", fmt.Errorf("CONDITION_NOT_MET")
+	}
+	if strings.ToLower(n.Config["output_bool"]) == "true" {
+		return "true", nil
 	}
 	return "TEXT_MATCHED", nil
 }

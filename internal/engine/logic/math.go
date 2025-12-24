@@ -3,6 +3,7 @@ package logic
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"tofi-core/internal/models"
 )
 
@@ -38,7 +39,13 @@ func (m *Math) Execute(n *models.Node, ctx *models.ExecutionContext) (string, er
 	}
 
 	if !result {
+		if strings.ToLower(n.Config["output_bool"]) == "true" {
+			return "false", nil
+		}
 		return fmt.Sprintf("%f %s %f 不成立", l, operator, r), fmt.Errorf("CONDITION_NOT_MET")
+	}
+	if strings.ToLower(n.Config["output_bool"]) == "true" {
+		return "true", nil
 	}
 	return "MATH_PASSED", nil
 }

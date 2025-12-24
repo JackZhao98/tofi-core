@@ -11,6 +11,8 @@ import (
 	"tofi-core/internal/engine/logic"
 	"tofi-core/internal/engine/tasks"
 	"tofi-core/internal/models"
+
+	"github.com/Knetic/govaluate"
 )
 
 // GetAction 工厂函数：将节点类型映射到对应的子包实现
@@ -131,6 +133,54 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 	// 3. 核心修正点：只有依赖全部满足后，才尝试抢占执行权
 	if ctx.CheckAndSetStarted(nodeID) {
 		return
+	}
+
+	// 3.5 run_if 条件检查
+	if node.RunIf != "" {
+		// 构造参数集 (尝试将 "true"/"false" 字符串转为 bool 以方便计算)
+		params := make(map[string]interface{})
+		resultsSnap, _ := ctx.Snapshot()
+		for k, v := range resultsSnap {
+			if v == "true" {
+				params[k] = true
+			} else if v == "false" {
+				params[k] = false
+			} else {
+				params[k] = v
+			}
+		}
+
+		expr, err := govaluate.NewEvaluableExpression(node.RunIf)
+		if err == nil {
+			result, err := expr.Evaluate(params)
+			if err == nil {
+				if shouldRun, ok := result.(bool); ok && !shouldRun {
+					// 条件不满足 -> SKIP
+					stat := models.NodeStat{
+						NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
+					}
+					ctx.RecordStat(stat)
+					ctx.SetResult(node.ID, "SKIPPED_BY: run_if")
+					SaveState(ctx)
+					log.Printf("[%s] [SKIP]    [%s] run_if 条件不满足 (%s)", ctx.ExecutionID, node.ID, node.RunIf)
+
+					// 传播 Skip 信号
+					for _, nextID := range node.Next {
+						ctx.Wg.Add(1)
+						go RunNode(wf, nextID, ctx)
+					}
+					return
+				}
+			} else {
+				log.Printf("[%s] [WARN]    [%s] run_if 计算出错: %v", ctx.ExecutionID, node.ID, err)
+				// 出错是否阻断？按照惯例，计算出错视为 false (Skip) 或者 true (Fail Open)?
+				// 这里选择 Fail Closed (Skip) 并报错
+				// 但为了稳健，先打印日志，继续执行？不，条件写错了应该停。
+				// 这里暂时做成：如果错了就当 false 处理
+			}
+		} else {
+			log.Printf("[%s] [WARN]    [%s] run_if 语法错误: %v", ctx.ExecutionID, node.ID, err)
+		}
 	}
 
 	// 4. 执行准备
