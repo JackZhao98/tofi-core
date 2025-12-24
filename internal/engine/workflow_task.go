@@ -28,9 +28,9 @@ func (w *WorkflowTask) Execute(n *models.Node, ctx *models.ExecutionContext) (st
 	// 4. 注入参数 (Input -> Inputs Node Result)
 	// 将 n.Input 中所有 KV 作为子工作流的初始输入
 	// 我们模拟一个名为 "inputs" 的虚拟节点结果，供子工作流引用 {{inputs.xxx}}
-	inputsMap := make(map[string]string)
+	inputsMap := make(map[string]interface{})
 	for k, v := range n.Input {
-		inputsMap[k] = ctx.ReplaceParams(v)
+		inputsMap[k] = ctx.ReplaceParamsAny(v)
 	}
 	
 	inputsJSON, _ := json.Marshal(inputsMap)

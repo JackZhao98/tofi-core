@@ -9,7 +9,7 @@ import (
 type Check struct{}
 
 func (c *Check) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	val := ctx.ReplaceParams(n.Input["value"])
+	val := ctx.ReplaceParams(fmt.Sprint(n.Input["value"]))
 	mode := n.Config["mode"] // "is_true", "is_false", "is_empty", "exists"
 
 	var result bool

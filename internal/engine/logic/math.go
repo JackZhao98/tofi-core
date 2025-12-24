@@ -9,8 +9,8 @@ import (
 type Math struct{}
 
 func (m *Math) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	leftVal := ctx.ReplaceParams(n.Input["left"])
-	rightVal := ctx.ReplaceParams(n.Input["right"])
+	leftVal := ctx.ReplaceParams(fmt.Sprint(n.Input["left"]))
+	rightVal := ctx.ReplaceParams(fmt.Sprint(n.Input["right"]))
 	operator := n.Config["operator"] // ">", "<", "==", ">=", "<="
 
 	l, errL := strconv.ParseFloat(leftVal, 64)

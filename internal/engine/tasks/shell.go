@@ -10,7 +10,10 @@ import (
 type Shell struct{}
 
 func (s *Shell) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	rawScript := n.Input["script"]
+	rawScript, ok := n.Input["script"].(string)
+	if !ok {
+		return "", fmt.Errorf("shell script 必须是字符串")
+	}
 
 	// 🔒 安全强校验：禁止在 Script 中直接使用模版语法
 	// 强制用户通过 Env 注入变量，防止 Shell 注入攻击

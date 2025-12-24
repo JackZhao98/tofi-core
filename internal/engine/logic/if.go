@@ -13,7 +13,10 @@ type If struct{}
 func (i *If) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
 	// 1. 【关键】直接获取原始表达式，绝对不要在这里调用 ctx.ReplaceParams
 	// 这样表达式里就不会被塞入几千字的 Markdown，保持公式干净
-	exprStr := n.Input["if"]
+	exprStr, ok := n.Input["if"].(string)
+	if !ok {
+		return "", fmt.Errorf("if 表达式必须是字符串")
+	}
 
 	// 2. 注入常用函数库
 	functions := map[string]govaluate.ExpressionFunction{

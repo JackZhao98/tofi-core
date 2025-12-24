@@ -21,10 +21,10 @@ type Node struct {
 	ID           string            `json:"id" yaml:"id"`
 	Type         string            `json:"type" yaml:"type"`
 	Config       map[string]string `json:"config" yaml:"config"`
-	Input        map[string]string      `json:"input" yaml:"input"` // 新增：专门用于接收节点的输入数据
-	Env          map[string]string      `json:"env" yaml:"env"`     // 新增：进程环境变量 (参考 GitHub Actions)
-	Data         map[string]interface{} `json:"data" yaml:"data"`   // 新增：Var/Const/Secret 专用数据字段 (支持任意结构)
-	Next         []string               `json:"next" yaml:"next"`
+	Input        map[string]interface{} `json:"input" yaml:"input"` // 支持任意结构
+	Env          map[string]string      `json:"env" yaml:"env"`
+	Data         map[string]interface{} `json:"data" yaml:"data"`
+	Next         []string          `json:"next" yaml:"next"`
 	Dependencies []string          `json:"dependencies" yaml:"dependencies"`
 	RetryCount   int               `json:"retry_count" yaml:"retry_count"`
 	OnFailure    []string          `json:"on_failure" yaml:"on_failure"`
@@ -114,6 +114,28 @@ func (ctx *ExecutionContext) ReplaceParams(script string) string {
 		}
 	}
 	return finalScript
+}
+
+// ReplaceParamsAny 递归处理任意类型中的字符串变量替换
+func (ctx *ExecutionContext) ReplaceParamsAny(val interface{}) interface{} {
+	switch v := val.(type) {
+	case string:
+		return ctx.ReplaceParams(v)
+	case map[string]interface{}:
+		newMap := make(map[string]interface{})
+		for k, subVal := range v {
+			newMap[k] = ctx.ReplaceParamsAny(subVal)
+		}
+		return newMap
+	case []interface{}:
+		newSlice := make([]interface{}, len(v))
+		for i, subVal := range v {
+			newSlice[i] = ctx.ReplaceParamsAny(subVal)
+		}
+		return newSlice
+	default:
+		return v
+	}
 }
 
 // ExecutionResult 代表一次完整工作流运行的最终产物

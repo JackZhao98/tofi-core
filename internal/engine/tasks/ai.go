@@ -19,8 +19,14 @@ func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, erro
 	provider := strings.ToLower(n.Config["provider"])
 
 	// Input: 动态输入
-	system := ctx.ReplaceParams(n.Input["system"])
-	prompt := ctx.ReplaceParams(n.Input["prompt"])
+	system, _ := n.Input["system"].(string) // system 是可选的，默认空字符串
+	prompt, ok := n.Input["prompt"].(string)
+	if !ok {
+		return "", fmt.Errorf("AI prompt 必须是字符串")
+	}
+
+	system = ctx.ReplaceParams(system)
+	prompt = ctx.ReplaceParams(prompt)
 
 	headers := make(map[string]string)
 	var payload map[string]interface{}
