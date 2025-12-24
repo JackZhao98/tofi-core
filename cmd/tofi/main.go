@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"io"
 	"log"
 	"os"
@@ -14,6 +15,10 @@ import (
 )
 
 func main() {
+	// 0. 解析命令行参数
+	workflowPath := flag.String("workflow", "workflows/tofi_test_2.yaml", "工作流 YAML 文件路径")
+	flag.Parse()
+
 	// 1. 环境准备
 	uuid := uuid.New().String()[:4]
 	execID := time.Now().Format("102150405") + "-" + uuid
@@ -26,9 +31,9 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, f))
 
 	// 2. 加载 YAML 工作流
-	wf, err := parser.LoadWorkflow("workflows/tofi_test_2.yaml")
+	wf, err := parser.LoadWorkflow(*workflowPath)
 	if err != nil {
-		log.Fatalf("无法加载工作流: %v", err)
+		log.Fatalf("无法加载工作流 %s: %v", *workflowPath, err)
 	}
 
 	// 3. 【关键】：使用构造函数初始化上下文
