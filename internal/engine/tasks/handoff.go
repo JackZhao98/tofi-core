@@ -3,6 +3,8 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	actionlib "tofi-core/action_library"
 	"tofi-core/internal/models"
 	"tofi-core/internal/parser"
 )
@@ -19,16 +21,43 @@ func SetWorkflowStarter(starter func(*models.Workflow, *models.ExecutionContext)
 }
 
 func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	// 1. 获取子工作流文件路径 (Config)
-	filePath := ctx.ReplaceParams(n.Config["file"])
-	if filePath == "" {
-		return "", fmt.Errorf("missing 'file' in config")
-	}
+	var childWf *models.Workflow
+	var err error
 
-	// 2. 加载子工作流定义
-	childWf, err := parser.LoadWorkflow(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to load workflow %s: %v", filePath, err)
+	// 1. 优先处理 action 字段 (官方库)
+	if action := ctx.ReplaceParams(n.Config["action"]); action != "" {
+		if strings.HasPrefix(action, "tofi/") {
+			// 提取 action 名称
+			actionName := strings.TrimPrefix(action, "tofi/")
+
+			// 从 action_library 读取
+			data, err := actionlib.ReadAction(actionName)
+			if err != nil {
+				return "", err
+			}
+
+			// 解析 YAML
+			childWf, err = parser.ParseWorkflowFromBytes(data, "yaml")
+			if err != nil {
+				return "", fmt.Errorf("解析官方 action %s 失败: %v", action, err)
+			}
+		} else {
+			return "", fmt.Errorf("action 必须以 'tofi/' 开头,例如 'tofi/ai_summarize'")
+		}
+	} else if filePath := ctx.ReplaceParams(n.Config["file"]); filePath != "" {
+		// 2. 否则使用 file 字段 (用户自定义)
+		// 安全检查: 禁止直接访问 action_library 目录
+		if strings.Contains(filePath, "action_library/") {
+			return "", fmt.Errorf("禁止直接访问 action_library 目录,请使用 action: \"tofi/xxx\" 代替")
+		}
+
+		// 加载用户工作流
+		childWf, err = parser.LoadWorkflow(filePath)
+		if err != nil {
+			return "", fmt.Errorf("加载工作流 %s 失败: %v", filePath, err)
+		}
+	} else {
+		return "", fmt.Errorf("必须指定 config.action 或 config.file")
 	}
 
 	// 3. 创建子上下文 (Child Context)
@@ -41,7 +70,7 @@ func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string,
 	for k, v := range n.Input {
 		inputsMap[k] = ctx.ReplaceParamsAny(v)
 	}
-	
+
 	inputsJSON, _ := json.Marshal(inputsMap)
 	childCtx.SetResult("inputs", string(inputsJSON))
 
@@ -50,7 +79,7 @@ func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string,
 		return "", fmt.Errorf("workflowStarter not initialized - call SetWorkflowStarter first")
 	}
 	workflowStarter(childWf, childCtx)
-	
+
 	// 6. 等待完成
 	childCtx.Wg.Wait()
 
@@ -78,8 +107,31 @@ func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string,
 }
 
 func (h *Handoff) Validate(n *models.Node) error {
-	if n.Config["file"] == "" {
-		return fmt.Errorf("config.file is required")
+	action := n.Config["action"]
+	file := n.Config["file"]
+
+	// 至少需要一个
+	if action == "" && file == "" {
+		return fmt.Errorf("必须指定 config.action 或 config.file")
 	}
+
+	// 如果指定了 action,验证格式和存在性
+	if action != "" {
+		if !strings.HasPrefix(action, "tofi/") {
+			return fmt.Errorf("config.action 必须以 'tofi/' 开头,例如 'tofi/ai_summarize'")
+		}
+
+		// 验证 action 是否存在
+		actionName := strings.TrimPrefix(action, "tofi/")
+		if !actionlib.Exists(actionName) {
+			return fmt.Errorf("官方 action 不存在: %s", action)
+		}
+	}
+
+	// 如果指定了 file,检查是否试图访问 action_library
+	if file != "" && strings.Contains(file, "action_library/") {
+		return fmt.Errorf("禁止直接访问 action_library 目录,请使用 action: \"tofi/xxx\" 代替")
+	}
+
 	return nil
 }

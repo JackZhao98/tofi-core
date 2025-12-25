@@ -15,6 +15,18 @@ import (
 	"github.com/Knetic/govaluate"
 )
 
+// getLogPrefix 根据 ExecutionID 返回日志前缀符号
+// 主工作流使用空前缀，子工作流使用 "  └─" 缩进符号
+func getLogPrefix(executionID string) string {
+	if strings.Contains(executionID, "/") {
+		// 计算嵌套层级
+		depth := strings.Count(executionID, "/")
+		indent := strings.Repeat("  ", depth)
+		return indent + "└─ "
+	}
+	return ""
+}
+
 // init 包初始化函数，注入依赖
 func init() {
 	// 为 Loop 注入 GetAction 函数，解决循环依赖
@@ -150,6 +162,9 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 
 	// 3.5 run_if 条件检查
 	if node.RunIf != "" {
+		// 先做模板替换，支持 {{variable}} 语法（保持与其他字段一致）
+		expandedRunIf := ctx.ReplaceParams(node.RunIf)
+
 		// 构造参数集 (尝试将 "true"/"false" 字符串转为 bool 以方便计算)
 		params := make(map[string]interface{})
 		resultsSnap, _ := ctx.Snapshot()
@@ -163,42 +178,69 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 			}
 		}
 
-		expr, err := govaluate.NewEvaluableExpression(node.RunIf)
-		if err == nil {
-			result, err := expr.Evaluate(params)
-			if err == nil {
-				if shouldRun, ok := result.(bool); ok && !shouldRun {
-					// 条件不满足 -> SKIP
-					stat := models.NodeStat{
-						NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
-					}
-					ctx.RecordStat(stat)
-					ctx.SetResult(node.ID, "SKIPPED_BY: run_if")
-					SaveState(ctx)
-					log.Printf("[%s] [SKIP]    [%s] run_if 条件不满足 (%s)", ctx.ExecutionID, node.ID, node.RunIf)
-
-					// 传播 Skip 信号
-					for _, nextID := range node.Next {
-						ctx.Wg.Add(1)
-						go RunNode(wf, nextID, ctx)
-					}
-					return
-				}
-			} else {
-				log.Printf("[%s] [WARN]    [%s] run_if 计算出错: %v", ctx.ExecutionID, node.ID, err)
-				// 出错是否阻断？按照惯例，计算出错视为 false (Skip) 或者 true (Fail Open)?
-				// 这里选择 Fail Closed (Skip) 并报错
-				// 但为了稳健，先打印日志，继续执行？不，条件写错了应该停。
-				// 这里暂时做成：如果错了就当 false 处理
+		expr, err := govaluate.NewEvaluableExpression(expandedRunIf)
+		if err != nil {
+			// 语法错误 -> Fail Closed (SKIP 节点)
+			stat := models.NodeStat{
+				NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
 			}
-		} else {
-			log.Printf("[%s] [WARN]    [%s] run_if 语法错误: %v", ctx.ExecutionID, node.ID, err)
+			ctx.RecordStat(stat)
+			ctx.SetResult(node.ID, fmt.Sprintf("SKIPPED_BY: run_if 语法错误 (%v)", err))
+			SaveState(ctx)
+			log.Printf("[%s] [SKIP]    [%s] run_if 语法错误: %v (原始: %s, 展开: %s)",
+				ctx.ExecutionID, node.ID, err, node.RunIf, expandedRunIf)
+
+			// 传播 Skip 信号
+			for _, nextID := range node.Next {
+				ctx.Wg.Add(1)
+				go RunNode(wf, nextID, ctx)
+			}
+			return
+		}
+
+		result, err := expr.Evaluate(params)
+		if err != nil {
+			// 计算出错 -> Fail Closed (SKIP 节点)
+			stat := models.NodeStat{
+				NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
+			}
+			ctx.RecordStat(stat)
+			ctx.SetResult(node.ID, fmt.Sprintf("SKIPPED_BY: run_if 计算出错 (%v)", err))
+			SaveState(ctx)
+			log.Printf("[%s] [SKIP]    [%s] run_if 计算出错: %v (表达式: %s)",
+				ctx.ExecutionID, node.ID, err, expandedRunIf)
+
+			// 传播 Skip 信号
+			for _, nextID := range node.Next {
+				ctx.Wg.Add(1)
+				go RunNode(wf, nextID, ctx)
+			}
+			return
+		}
+
+		if shouldRun, ok := result.(bool); ok && !shouldRun {
+			// 条件不满足 -> SKIP
+			stat := models.NodeStat{
+				NodeID: node.ID, Type: node.Type, Status: "SKIP", Duration: 0, StartTime: time.Now(),
+			}
+			ctx.RecordStat(stat)
+			ctx.SetResult(node.ID, "SKIPPED_BY: run_if")
+			SaveState(ctx)
+			log.Printf("[%s] [SKIP]    [%s] run_if 条件不满足 (%s)", ctx.ExecutionID, node.ID, expandedRunIf)
+
+			// 传播 Skip 信号
+			for _, nextID := range node.Next {
+				ctx.Wg.Add(1)
+				go RunNode(wf, nextID, ctx)
+			}
+			return
 		}
 	}
 
 	// 4. 执行准备
 	action := GetAction(node.Type)
-	log.Printf("[%s] [START]   [%s] 类型: %s", ctx.ExecutionID, node.ID, node.Type)
+	prefix := getLogPrefix(ctx.ExecutionID)
+	log.Printf("%s[%s] [START]   [%s] 类型: %s", prefix, ctx.ExecutionID, node.ID, node.Type)
 
 	startTime := time.Now()
 	var res string
@@ -207,7 +249,7 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 	// 5. 执行阶段 (包含重试)
 	for i := 0; i <= node.RetryCount; i++ {
 		if i > 0 {
-			log.Printf("[%s] [RETRY]   [%s] 第 %d 次重试...", ctx.ExecutionID, node.ID, i)
+			log.Printf("%s[%s] [RETRY]   [%s] 第 %d 次重试...", prefix, ctx.ExecutionID, node.ID, i)
 		}
 		res, err = action.Execute(node, ctx)
 		if err == nil {
@@ -228,12 +270,12 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 		if err.Error() == "CONDITION_NOT_MET" {
 			stat.Status = "SKIP"
 			ctx.RecordStat(stat)
-			log.Printf("[%s] [SKIP]    [%s] 条件不满足", ctx.ExecutionID, node.ID)
+			log.Printf("%s[%s] [SKIP]    [%s] 条件不满足", prefix, ctx.ExecutionID, node.ID)
 			ctx.SetResult(node.ID, "SKIPPED_BY_LOGIC")
 		} else {
 			stat.Status = "ERROR"
 			ctx.RecordStat(stat)
-			log.Printf("[%s] [ERROR]   [%s] 执行失败: %v", ctx.ExecutionID, node.ID, err)
+			log.Printf("%s[%s] [ERROR]   [%s] 执行失败: %v", prefix, ctx.ExecutionID, node.ID, err)
 			ctx.SetResult(node.ID, fmt.Sprintf("ERR_PROPAGATION: %v", err))
 		}
 
@@ -271,7 +313,8 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 		}
 	}
 
-	log.Printf("[%s] [SUCCESS] [%s] 输出: %s",
+	log.Printf("%s[%s] [SUCCESS] [%s] 输出: %s",
+		prefix,
 		ctx.ExecutionID,
 		node.ID,
 		ctx.MaskLog(displayRes),

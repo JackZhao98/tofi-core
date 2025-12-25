@@ -66,12 +66,43 @@ func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, erro
 		if apiKey != "" {
 			headers["Authorization"] = "Bearer " + apiKey
 		}
-		payload = map[string]interface{}{
-			"model": model,
-			"messages": []map[string]string{
-				{"role": "system", "content": system},
-				{"role": "user", "content": prompt},
-			},
+
+		// 判断是否使用新的 Responses API (GPT-5+ 模型)
+		useResponsesAPI := strings.HasPrefix(model, "gpt-5") || strings.Contains(endpoint, "/v1/responses")
+
+		if useResponsesAPI {
+			// 使用新的 Responses API 格式
+			input := []map[string]string{}
+			if system != "" {
+				input = append(input, map[string]string{"role": "system", "content": system})
+			}
+			input = append(input, map[string]string{"role": "user", "content": prompt})
+
+			// 根据模型确定默认的 reasoning effort
+			// gpt-5.1 支持 none/low/medium/high
+			// gpt-5.1-codex-max 不支持 none, 支持 low/medium/high/xhigh
+			// gpt-5.2 支持 none/minimal/low/medium/high/xhigh
+			defaultEffort := "low" // 安全的默认值,所有模型都支持
+			if strings.Contains(model, "gpt-5.1") && !strings.Contains(model, "codex") {
+				defaultEffort = "none" // gpt-5.1 (非 codex) 可以使用 none
+			}
+
+			payload = map[string]interface{}{
+				"model": model,
+				"input": input,
+				"reasoning": map[string]string{
+					"effort": defaultEffort,
+				},
+			}
+		} else {
+			// 使用旧的 Chat Completions API 格式
+			payload = map[string]interface{}{
+				"model": model,
+				"messages": []map[string]string{
+					{"role": "system", "content": system},
+					{"role": "user", "content": prompt},
+				},
+			}
 		}
 	}
 
@@ -82,8 +113,14 @@ func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, erro
 
 	// 统一结果提取
 	paths := []string{
+		// Responses API 格式 (GPT-5+)
+		"output.#(type==\"message\").content.0.text",
+		"output.1.content.0.text", // 简化路径
+		// Chat Completions API 格式 (GPT-4, GPT-3.5)
 		"choices.0.message.content",
+		// Gemini 格式
 		"candidates.0.content.parts.0.text",
+		// Claude 格式
 		"content.0.text",
 	}
 	for _, path := range paths {

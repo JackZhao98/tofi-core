@@ -12,10 +12,15 @@ import (
 	"tofi-core/internal/parser"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	// 0. 解析命令行参数
+	// 0. 加载环境变量 (开发环境)
+	// 如果 .env 文件不存在(生产环境),会静默失败,使用系统环境变量
+	_ = godotenv.Load()
+
+	// 1. 解析命令行参数
 	workflowPath := flag.String("workflow", "workflows/tofi_test_2.yaml", "工作流 YAML 文件路径")
 	resumeID := flag.String("resume", "", "要恢复的 Execution ID (从 .tofi/states/ 加载)")
 	homeDir := flag.String("home", ".tofi", "Tofi 运行时目录 (存放 logs, states, reports)")
