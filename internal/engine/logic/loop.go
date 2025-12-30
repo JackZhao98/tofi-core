@@ -111,8 +111,15 @@ func (l *Loop) parseListItems(n *models.Node, ctx *models.ExecutionContext) ([]i
 
 // generateRangeItems 生成范围模式的迭代项
 func (l *Loop) generateRangeItems(n *models.Node, ctx *models.ExecutionContext) ([]interface{}, error) {
-	startVal := ctx.ReplaceParams(fmt.Sprint(n.Input["start"]))
-	endVal := ctx.ReplaceParams(fmt.Sprint(n.Input["end"]))
+	startVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["start"]))
+	if err != nil {
+		return nil, fmt.Errorf("input.start 变量替换失败: %v", err)
+	}
+
+	endVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["end"]))
+	if err != nil {
+		return nil, fmt.Errorf("input.end 变量替换失败: %v", err)
+	}
 
 	start, err := strconv.Atoi(startVal)
 	if err != nil {
@@ -126,7 +133,10 @@ func (l *Loop) generateRangeItems(n *models.Node, ctx *models.ExecutionContext) 
 
 	step := 1 // 默认步长
 	if stepRaw, ok := n.Input["step"]; ok && stepRaw != nil {
-		stepVal := ctx.ReplaceParams(fmt.Sprint(stepRaw))
+		stepVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(stepRaw))
+		if err != nil {
+			return nil, fmt.Errorf("input.step 变量替换失败: %v", err)
+		}
 		step, err = strconv.Atoi(stepVal)
 		if err != nil || step == 0 {
 			return nil, fmt.Errorf("input.step 必须是非零整数: %v", err)

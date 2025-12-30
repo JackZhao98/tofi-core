@@ -115,9 +115,17 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 			return
 		}
 
-		// 【传播逻辑】：如果父节点是“失败”或“跳过”
+		// 【传播逻辑】：如果父节点是"失败"或"跳过"
 		if strings.HasPrefix(res, "ERR_PROPAGATION:") || strings.HasPrefix(res, "SKIPPED_BY:") {
-			// 关键修复：检查我是不是父节点的“救生员”（OnFailure分支）
+			// 🆕 关键修复：run_if 导致的 SKIP 不传播
+			// 这允许分支汇聚：F 可以依赖 [C, D]，即使 D 被 run_if 跳过
+			if res == "SKIPPED_BY: run_if" {
+				log.Printf("[%s] [DEBUG]   [%s] 忽略依赖 %s 的 run_if SKIP（条件性跳过不传播）",
+					ctx.ExecutionID, node.ID, depID)
+				continue // 忽略这个依赖的条件性跳过
+			}
+
+			// 关键修复：检查我是不是父节点的"救生员"（OnFailure分支）
 			// 如果是，那么父节点的失败正是我启动的原因，不能跳过！
 			parentNode, ok := wf.Nodes[depID]
 			isRescue := false

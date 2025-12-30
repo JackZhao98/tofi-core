@@ -13,9 +13,21 @@ type AI struct{}
 
 func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
 	// Config: 静态配置
-	endpoint := ctx.ReplaceParams(n.Config["endpoint"])
-	apiKey := ctx.ReplaceParams(n.Config["api_key"])
-	model := ctx.ReplaceParams(n.Config["model"])
+	endpoint, err := ctx.ReplaceParamsStrict(n.Config["endpoint"])
+	if err != nil {
+		return "", fmt.Errorf("config.endpoint 变量替换失败: %v", err)
+	}
+
+	apiKey, err := ctx.ReplaceParamsStrict(n.Config["api_key"])
+	if err != nil {
+		return "", fmt.Errorf("config.api_key 变量替换失败: %v", err)
+	}
+
+	model, err := ctx.ReplaceParamsStrict(n.Config["model"])
+	if err != nil {
+		return "", fmt.Errorf("config.model 变量替换失败: %v", err)
+	}
+
 	provider := strings.ToLower(n.Config["provider"])
 
 	// Input: 动态输入
@@ -26,7 +38,6 @@ func (a *AI) Execute(n *models.Node, ctx *models.ExecutionContext) (string, erro
 	}
 
 	// 使用严格模式进行变量替换
-	var err error
 	if system != "" {
 		system, err = ctx.ReplaceParamsStrict(system)
 		if err != nil {

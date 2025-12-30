@@ -4,6 +4,8 @@ tofi
 # Runtime files
 .tofi/
 
+docs/
+
 # Workflows (user-defined, not tracked)
 workflows/
 

@@ -25,6 +25,8 @@ func (s *Shell) Execute(n *models.Node, ctx *models.ExecutionContext) (string, e
 	script := rawScript
 
 	// 处理 Env 变量替换
+	// 注意: 使用非严格模式，因为 Shell 脚本通常需要处理可选参数
+	// Shell 脚本自己会检查环境变量是否为空 (例如: if [ -n "$VAR" ])
 	finalEnv := make(map[string]string)
 	for k, v := range n.Env {
 		finalEnv[k] = ctx.ReplaceParams(v)

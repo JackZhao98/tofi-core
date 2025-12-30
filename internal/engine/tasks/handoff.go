@@ -25,7 +25,12 @@ func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string,
 	var err error
 
 	// 1. 优先处理 action 字段 (官方库)
-	if action := ctx.ReplaceParams(n.Config["action"]); action != "" {
+	action, err := ctx.ReplaceParamsStrict(n.Config["action"])
+	if err != nil {
+		return "", fmt.Errorf("config.action 变量替换失败: %v", err)
+	}
+
+	if action != "" {
 		if strings.HasPrefix(action, "tofi/") {
 			// 提取 action 名称
 			actionName := strings.TrimPrefix(action, "tofi/")
@@ -44,8 +49,16 @@ func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string,
 		} else {
 			return "", fmt.Errorf("action 必须以 'tofi/' 开头,例如 'tofi/ai_summarize'")
 		}
-	} else if filePath := ctx.ReplaceParams(n.Config["file"]); filePath != "" {
+	} else {
 		// 2. 否则使用 file 字段 (用户自定义)
+		filePath, err := ctx.ReplaceParamsStrict(n.Config["file"])
+		if err != nil {
+			return "", fmt.Errorf("config.file 变量替换失败: %v", err)
+		}
+
+		if filePath == "" {
+			return "", fmt.Errorf("必须指定 config.action 或 config.file")
+		}
 		// 安全检查: 禁止直接访问 action_library 目录
 		if strings.Contains(filePath, "action_library/") {
 			return "", fmt.Errorf("禁止直接访问 action_library 目录,请使用 action: \"tofi/xxx\" 代替")
@@ -56,8 +69,6 @@ func (h *Handoff) Execute(n *models.Node, ctx *models.ExecutionContext) (string,
 		if err != nil {
 			return "", fmt.Errorf("加载工作流 %s 失败: %v", filePath, err)
 		}
-	} else {
-		return "", fmt.Errorf("必须指定 config.action 或 config.file")
 	}
 
 	// 3. 创建子上下文 (Child Context)

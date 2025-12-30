@@ -12,11 +12,20 @@ type API struct{}
 
 func (a *API) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
 	// 1. 解析 Config
-	method := strings.ToUpper(ctx.ReplaceParams(n.Config["method"]))
-	if method == "" {
-		method = "POST"
+	methodRaw := n.Config["method"]
+	if methodRaw == "" {
+		methodRaw = "POST"
 	}
-	url := ctx.ReplaceParams(n.Config["url"])
+	method, err := ctx.ReplaceParamsStrict(methodRaw)
+	if err != nil {
+		return "", fmt.Errorf("config.method 变量替换失败: %v", err)
+	}
+	method = strings.ToUpper(method)
+
+	url, err := ctx.ReplaceParamsStrict(n.Config["url"])
+	if err != nil {
+		return "", fmt.Errorf("config.url 变量替换失败: %v", err)
+	}
 
 	// 2. 解析 Input: Body (支持 String 或 Object)
 	var body string
@@ -41,9 +50,13 @@ func (a *API) Execute(n *models.Node, ctx *models.ExecutionContext) (string, err
 
 	// 3. 解析 Input: Headers (支持 JSON String 或 Map)
 	headers := make(map[string]string)
-	
+
 	// Legacy Config
-	if apiKey := ctx.ReplaceParams(n.Config["api_key"]); apiKey != "" {
+	if apiKeyRaw := n.Config["api_key"]; apiKeyRaw != "" {
+		apiKey, err := ctx.ReplaceParamsStrict(apiKeyRaw)
+		if err != nil {
+			return "", fmt.Errorf("config.api_key 变量替换失败: %v", err)
+		}
 		headers["Authorization"] = "Bearer " + apiKey
 	}
 
