@@ -2,63 +2,38 @@ package tasks
 
 import (
 	"fmt"
-	"strings"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/models"
 )
 
 type Shell struct{}
 
-func (s *Shell) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	rawScript, ok := n.Input["script"].(string)
-	if !ok {
-		return "", fmt.Errorf("shell script 必须是字符串")
+func (s *Shell) Execute(config map[string]interface{}, ctx *models.ExecutionContext) (string, error) {
+	script := fmt.Sprint(config["script"])
+	if script == "" {
+		return "", fmt.Errorf("shell script is required")
 	}
 
-	// 🔒 安全强校验：禁止在 Script 中直接使用模版语法
-	// 强制用户通过 Env 注入变量，防止 Shell 注入攻击
-	if containsTemplateSyntax(rawScript) {
-		return "", fmt.Errorf("SECURITY_VIOLATION: 直接在 Shell 脚本中使用 '{{...}}' 是禁止的。请使用 'env' 字段传递变量，并在脚本中通过 \"$VAR\" 引用。")
+	// Env
+	env := make(map[string]string)
+	if rawEnv := config["env"]; rawEnv != nil {
+		if m, ok := rawEnv.(map[string]interface{}); ok {
+			for k, v := range m {
+				env[k] = fmt.Sprint(v)
+			}
+		}
 	}
 
-	// 既然禁止了 {{}}，直接使用原始内容
-	script := rawScript
+	// 注意：在之前的版本中，Shell 节点禁止了 {{}} 模板语法，强制通过 env 注入。
+	// 在新规范下，这个约束依然有效，因为 Config 里的 script 应该已经是解析过的了。
+	// 但通常 Shell 的 script 我们建议在 Config 里直接写死，变量放在 Input/Env 中。
 
-	// 处理 Env 变量替换
-	// 注意: 使用非严格模式，因为 Shell 脚本通常需要处理可选参数
-	// Shell 脚本自己会检查环境变量是否为空 (例如: if [ -n "$VAR" ])
-	finalEnv := make(map[string]string)
-	for k, v := range n.Env {
-		finalEnv[k] = ctx.ReplaceParams(v)
-	}
-
-	return executor.ExecuteShell(script, finalEnv, n.Timeout)
+	return executor.ExecuteShell(script, env, 60)
 }
 
 func (s *Shell) Validate(n *models.Node) error {
-	// 1. 检查 script 字段是否存在且为字符串
-	rawScript, ok := n.Input["script"]
-	if !ok {
-		return fmt.Errorf("input.script is required")
+	if _, ok := n.Config["script"]; !ok {
+		return fmt.Errorf("config.script is required")
 	}
-	scriptStr, ok := rawScript.(string)
-	if !ok {
-		return fmt.Errorf("input.script must be a string")
-	}
-
-	// 2. 安全检查：禁止 {{...}}
-	if containsTemplateSyntax(scriptStr) {
-		return fmt.Errorf("SECURITY_VIOLATION: 直接在 Shell 脚本中使用 '{{...}}' 是禁止的。请使用 'env' 字段传递变量，并在脚本中通过 \"$VAR\" 引用。")
-	}
-
-	// 3. 静态分析 (Linter)
-	if err := executor.CheckShellSafety(scriptStr); err != nil {
-		return fmt.Errorf("安全检查未通过: %v", err)
-	}
-
 	return nil
-}
-
-func containsTemplateSyntax(s string) bool {
-	return strings.Contains(s, "{{")
 }

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -248,18 +247,57 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 	// 4. 执行准备
 	action := GetAction(node.Type)
 	prefix := getLogPrefix(ctx.ExecutionID)
-	log.Printf("%s[%s] [START]   [%s] 类型: %s", prefix, ctx.ExecutionID, node.ID, node.Type)
+	runtimeID := node.GetRuntimeID()
+	log.Printf("%s[%s] [START]   [%s] 类型: %s", prefix, ctx.ExecutionID, runtimeID, node.Type)
+
+	// --- 🆕 核心规范重构：解析局部作用域 ---
+	var resolvedConfig map[string]interface{}
+	var err error
+
+	if node.Type == "var" || node.Type == "const" {
+		// Var 节点特殊处理：直接对 Config 进行全局变量替换
+		resolvedVal := ctx.ReplaceParamsAny(node.Config)
+		if v, ok := resolvedVal.(map[string]interface{}); ok {
+			resolvedConfig = v
+		} else {
+			resolvedConfig = node.Config
+		}
+	} else {
+		// 第一阶段：Global -> Local Context
+		var localContext map[string]interface{}
+		localContext, err = models.ResolveLocalContext(node, ctx)
+		if err != nil {
+			log.Printf("%s[%s] [ERROR]   [%s] Input 解析失败: %v", prefix, ctx.ExecutionID, runtimeID, err)
+			ctx.SetResult(nodeID, fmt.Sprintf("ERR_PROPAGATION: Input resolution failed: %v", err))
+			ctx.RecordStat(models.NodeStat{NodeID: runtimeID, Type: node.Type, Status: "ERROR", StartTime: time.Now()})
+			SaveState(ctx)
+			// 触发失败逻辑
+			triggerNext(wf, node, ctx)
+			return
+		}
+
+		// 第二阶段：Local Context -> Config
+		resolvedConfig, err = models.ResolveConfig(node.Config, localContext)
+		if err != nil {
+			log.Printf("%s[%s] [ERROR]   [%s] Config 解析失败: %v", prefix, ctx.ExecutionID, runtimeID, err)
+			ctx.SetResult(nodeID, fmt.Sprintf("ERR_PROPAGATION: Config resolution failed: %v", err))
+			ctx.RecordStat(models.NodeStat{NodeID: runtimeID, Type: node.Type, Status: "ERROR", StartTime: time.Now()})
+			SaveState(ctx)
+			triggerNext(wf, node, ctx)
+			return
+		}
+	}
+	// ------------------------------------
 
 	startTime := time.Now()
 	var res string
-	var err error
 
 	// 5. 执行阶段 (包含重试)
 	for i := 0; i <= node.RetryCount; i++ {
 		if i > 0 {
-			log.Printf("%s[%s] [RETRY]   [%s] 第 %d 次重试...", prefix, ctx.ExecutionID, node.ID, i)
+			log.Printf("%s[%s] [RETRY]   [%s] 第 %d 次重试...", prefix, ctx.ExecutionID, runtimeID, i)
 		}
-		res, err = action.Execute(node, ctx)
+		res, err = action.Execute(resolvedConfig, ctx)
 		if err == nil {
 			break
 		}
@@ -268,7 +306,7 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 
 	// 6. 结果处理与统计
 	stat := models.NodeStat{
-		NodeID:    node.ID,
+		NodeID:    runtimeID,
 		Type:      node.Type,
 		StartTime: startTime,
 		Duration:  duration,
@@ -278,56 +316,48 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 		if err.Error() == "CONDITION_NOT_MET" {
 			stat.Status = "SKIP"
 			ctx.RecordStat(stat)
-			log.Printf("%s[%s] [SKIP]    [%s] 条件不满足", prefix, ctx.ExecutionID, node.ID)
-			ctx.SetResult(node.ID, "SKIPPED_BY_LOGIC")
+			log.Printf("%s[%s] [SKIP]    [%s] 条件不满足", prefix, ctx.ExecutionID, runtimeID)
+			ctx.SetResult(nodeID, "SKIPPED_BY_LOGIC")
 		} else {
 			stat.Status = "ERROR"
 			ctx.RecordStat(stat)
-			log.Printf("%s[%s] [ERROR]   [%s] 执行失败: %v", prefix, ctx.ExecutionID, node.ID, err)
-			ctx.SetResult(node.ID, fmt.Sprintf("ERR_PROPAGATION: %v", err))
+			log.Printf("%s[%s] [ERROR]   [%s] 执行失败: %v", prefix, ctx.ExecutionID, runtimeID, err)
+			ctx.SetResult(nodeID, fmt.Sprintf("ERR_PROPAGATION: %v", err))
 		}
 
 		// 状态持久化
 		SaveState(ctx)
-
-		// 触发失败分支或后续跳转
-		nextQueue := node.Next
-		if len(node.OnFailure) > 0 {
-			nextQueue = node.OnFailure
-		}
-		for _, nextID := range nextQueue {
-			ctx.Wg.Add(1)
-			go RunNode(wf, nextID, ctx)
-		}
+		triggerNext(wf, node, ctx)
 		return
 	}
 
 	// 7. 成功逻辑
 	stat.Status = "SUCCESS"
 	ctx.RecordStat(stat)
-	ctx.SetResult(node.ID, res)
+	ctx.SetResult(nodeID, res)
 
 	// 状态持久化
 	SaveState(ctx)
 
-	// 日志脱敏处理
-	displayRes := res
-	if node.Type == "secret" {
-		var secretData map[string]interface{}
-		if err := json.Unmarshal([]byte(res), &secretData); err == nil {
-			for _, v := range secretData {
-				ctx.AddSecretValue(fmt.Sprint(v)) // 👈 存入黑名单
-			}
-		}
-	}
-
 	log.Printf("%s[%s] [SUCCESS] [%s] 输出: %s",
 		prefix,
 		ctx.ExecutionID,
-		node.ID,
-		ctx.MaskLog(displayRes),
+		runtimeID,
+		ctx.MaskLog(res),
 	)
 	for _, nextID := range node.Next {
+		ctx.Wg.Add(1)
+		go RunNode(wf, nextID, ctx)
+	}
+}
+
+// 辅助函数：触发后续节点
+func triggerNext(wf *models.Workflow, node *models.Node, ctx *models.ExecutionContext) {
+	nextQueue := node.Next
+	if len(node.OnFailure) > 0 {
+		nextQueue = node.OnFailure
+	}
+	for _, nextID := range nextQueue {
 		ctx.Wg.Add(1)
 		go RunNode(wf, nextID, ctx)
 	}

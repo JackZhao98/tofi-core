@@ -3,65 +3,41 @@ package data
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"regexp"
 	"tofi-core/internal/models"
 )
 
 type Var struct{}
 
-// expandEnvVars 展开环境变量 ${VAR_NAME}
-func expandEnvVars(s string) string {
-	re := regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
-	return re.ReplaceAllStringFunc(s, func(match string) string {
-		// 提取变量名 (去掉 ${ 和 })
-		varName := match[2 : len(match)-1]
-		if val := os.Getenv(varName); val != "" {
-			return val
+func (v *Var) Execute(config map[string]interface{}, ctx *models.ExecutionContext) (string, error) {
+	// 在新规范下，Var 节点的逻辑变得极其简单：
+	// ResolveConfig 已经把 value 字段解析好了（包括全局引用和环境展开）
+	val := config["value"]
+	if val == nil {
+		// 如果没有单值 value，尝试返回整个 config (适配多变量模式)
+		if len(config) > 0 {
+			res, _ := json.Marshal(config)
+			return string(res), nil
 		}
-		return match // 如果环境变量不存在,保留原样
-	})
-}
-
-func (v *Var) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	// 规范：数据存储在 Data 字段
-
-	// 1. 单值模式优化：如果只有一个 "value" 且是字符串
-	if len(n.Data) == 1 {
-		if val, ok := n.Data["value"]; ok {
-			if strVal, isStr := val.(string); isStr {
-				// 先展开环境变量,再替换 Tofi 变量
-				expanded := expandEnvVars(strVal)
-				return ctx.ReplaceParams(expanded), nil
-			}
-		}
+		return "", nil
 	}
 
-	// 2. 字典模式：对顶层字符串值进行变量替换
-	// 注意：嵌套结构（Map/List）内部的字符串暂时不支持变量替换，以保持逻辑简单
-	finalData := make(map[string]interface{})
-	for k, v := range n.Data {
-		if strVal, ok := v.(string); ok {
-			// 先展开环境变量,再替换 Tofi 变量
-			expanded := expandEnvVars(strVal)
-			finalData[k] = ctx.ReplaceParams(expanded)
-		} else {
-			finalData[k] = v // 保持原样 (int, bool, map, list)
-		}
+	// 如果是字符串，直接返回
+	if s, ok := val.(string); ok {
+		return s, nil
 	}
 
-	// 3. 序列化
-	jsonData, err := json.Marshal(finalData)
+	// 否则返回 JSON 序列化结果
+	res, err := json.Marshal(val)
 	if err != nil {
-		return "", fmt.Errorf("变量节点序列化失败: %v", err)
+		return "", fmt.Errorf("var serialization failed: %v", err)
 	}
-
-	return string(jsonData), nil
+	return string(res), nil
 }
 
 func (v *Var) Validate(n *models.Node) error {
-	if len(n.Data) == 0 {
-		return fmt.Errorf("data field is required")
+	// 如果既没有 value 也没有其他声明，报错
+	if len(n.Config) == 0 && len(n.Input) == 0 {
+		return fmt.Errorf("var node requires either config.value or input declarations")
 	}
 	return nil
 }

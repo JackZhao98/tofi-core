@@ -12,7 +12,7 @@ import (
 func CheckShellSafety(script string) error {
 	in := strings.NewReader(script)
 	parser := syntax.NewParser()
-	
+
 	// 解析脚本为 AST
 	f, err := parser.Parse(in, "")
 	if err != nil {
@@ -63,12 +63,12 @@ func (c *safetyChecker) visit(node syntax.Node, inDoubleQuote bool) {
 		if !inDoubleQuote {
 			name := x.Param.Value
 			if name == "" { // 处理 $1, $2 等
-				name = "?" 
+				name = "?"
 			}
 			msg := fmt.Sprintf("  - Line %d: 变量 $%s 未加双引号 (建议改为 \"$%s\")", x.Pos().Line(), name, name)
 			c.errors = append(c.errors, msg)
 		}
-	
+
 	case *syntax.CmdSubst:
 		for _, stmt := range x.Stmts {
 			c.visit(stmt, false) // 命令替换 $(...) 内部重置为非引用状态
@@ -87,7 +87,7 @@ func (c *safetyChecker) visit(node syntax.Node, inDoubleQuote bool) {
 		if x.Else != nil {
 			c.visit(x.Else, inDoubleQuote)
 		}
-	
+
 	case *syntax.BinaryCmd:
 		c.visit(x.X, inDoubleQuote)
 		c.visit(x.Y, inDoubleQuote)

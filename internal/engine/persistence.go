@@ -52,7 +52,7 @@ func SaveState(ctx *models.ExecutionContext) error {
 // LoadState 加载指定 ExecutionID 的状态
 func LoadState(execID, homeDir string) (*models.ExecutionContext, error) {
 	filePath := filepath.Join(homeDir, "states", fmt.Sprintf("state-%s.json", execID))
-	
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("读取状态文件失败: %v", err)
@@ -65,7 +65,7 @@ func LoadState(execID, homeDir string) (*models.ExecutionContext, error) {
 
 	// 重建 Context
 	ctx := models.NewExecutionContext(execID, homeDir)
-	
+
 	// 恢复 Results
 	// 关键策略：只恢复“成功”的结果。
 	// 如果是 ERR_PROPAGATION 或 SKIPPED_BY，则清除它们，让引擎重新跑这些节点

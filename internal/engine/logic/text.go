@@ -9,65 +9,46 @@ import (
 
 type Text struct{}
 
-func (t *Text) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	// 使用严格模式进行变量替换，字段不存在时会直接报错
-	target, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["target"]))
-	if err != nil {
-		return "", fmt.Errorf("input.target 变量替换失败: %v", err)
-	}
-
-	pattern, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["value"]))
-	if err != nil {
-		return "", fmt.Errorf("input.value 变量替换失败: %v", err)
-	}
-
-	mode := n.Config["mode"] // "contains", "starts_with", "matches"
+func (t *Text) Execute(config map[string]interface{}, ctx *models.ExecutionContext) (string, error) {
+	target := fmt.Sprint(config["text"])
+	pattern := fmt.Sprint(config["pattern"])
+	mode := fmt.Sprint(config["mode"])
 
 	var result bool
 	switch mode {
 	case "contains":
 		result = strings.Contains(target, pattern)
+	case "not_contains":
+		result = !strings.Contains(target, pattern)
 	case "starts_with":
 		result = strings.HasPrefix(target, pattern)
-	case "matches": // 正则匹配
+	case "ends_with":
+		result = strings.HasSuffix(target, pattern)
+	case "matches":
 		re, err := regexp.Compile(pattern)
 		if err != nil {
-			return "", fmt.Errorf("正则语法错误: %v", err)
+			return "", fmt.Errorf("invalid regex: %v", err)
 		}
 		result = re.MatchString(target)
 	default:
-		return "", fmt.Errorf("不支持的文本判定: %s", mode)
+		return "", fmt.Errorf("unsupported text mode: %s", mode)
 	}
 
 	if !result {
-		if strings.ToLower(n.Config["output_bool"]) == "true" {
+		if strings.ToLower(fmt.Sprint(config["output_bool"])) == "true" {
 			return "false", nil
 		}
-		return "TEXT_NOT_MATCH", fmt.Errorf("CONDITION_NOT_MET")
+		return "", fmt.Errorf("CONDITION_NOT_MET")
 	}
-	if strings.ToLower(n.Config["output_bool"]) == "true" {
+	if strings.ToLower(fmt.Sprint(config["output_bool"])) == "true" {
 		return "true", nil
 	}
 	return "TEXT_MATCHED", nil
 }
 
 func (t *Text) Validate(n *models.Node) error {
-	if _, ok := n.Input["target"]; !ok {
-		return fmt.Errorf("input.target is required")
-	}
-	if _, ok := n.Input["value"]; !ok {
-		return fmt.Errorf("input.value is required")
-	}
-	mode := n.Config["mode"]
-	if mode != "contains" && mode != "starts_with" && mode != "matches" {
-		return fmt.Errorf("invalid config.mode: %s", mode)
-	}
-	if mode == "matches" {
-		if val, ok := n.Input["value"].(string); ok {
-			if _, err := regexp.Compile(val); err != nil {
-				return fmt.Errorf("invalid regex pattern: %v", err)
-			}
-		}
+	if _, ok := n.Config["mode"]; !ok {
+		return fmt.Errorf("config.mode is required")
 	}
 	return nil
 }

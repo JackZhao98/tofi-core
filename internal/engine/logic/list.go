@@ -10,76 +10,70 @@ import (
 
 type List struct{}
 
-func (l *List) Execute(n *models.Node, ctx *models.ExecutionContext) (string, error) {
-	rawList := n.Input["list"]
-	mode := n.Config["mode"] // "length_is", "contains"
+func (l *List) Execute(config map[string]interface{}, ctx *models.ExecutionContext) (string, error) {
+	rawList := config["list"]
+	mode := fmt.Sprint(config["mode"])
+	targetVal := fmt.Sprint(config["value"])
 
 	var list []interface{}
-
-	// Case 1: List Object (YAML array)
-	if listObj, ok := rawList.([]interface{}); ok {
-		// 递归替换变量
-		replaced := ctx.ReplaceParamsAny(listObj)
-		list = replaced.([]interface{})
-	} else if listStr, ok := rawList.(string); ok {
-		// Case 2: JSON String - 使用严格模式
-		replacedStr, err := ctx.ReplaceParamsStrict(listStr)
-		if err != nil {
-			return "", fmt.Errorf("input.list 变量替换失败: %v", err)
+	switch v := rawList.(type) {
+	case []interface{}:
+		list = v
+	case string:
+		if err := json.Unmarshal([]byte(v), &list); err != nil {
+			return "", fmt.Errorf("failed to parse list string: %v", err)
 		}
-		if err := json.Unmarshal([]byte(replacedStr), &list); err != nil {
-			return "", fmt.Errorf("列表解析失败，请确保输入是 JSON 格式: %v", err)
-		}
-	} else {
-		return "", fmt.Errorf("list 输入无效，必须是 JSON 字符串或数组")
+	default:
+		return "", fmt.Errorf("list input must be an array or JSON string")
 	}
 
-	// 使用严格模式进行变量替换
-	targetVal, err := ctx.ReplaceParamsStrict(fmt.Sprint(n.Input["value"]))
-	if err != nil {
-		return "", fmt.Errorf("input.value 变量替换失败: %v", err)
-	}
-
+	var result bool
 	switch mode {
-	case "length_is":
+	case "length_equals":
 		expectedLen, _ := strconv.Atoi(targetVal)
-		if len(list) != expectedLen {
-			if strings.ToLower(n.Config["output_bool"]) == "true" {
-				return "false", nil
-			}
-			return "", fmt.Errorf("CONDITION_NOT_MET")
-		}
+		result = len(list) == expectedLen
+	case "length_gt":
+		expectedLen, _ := strconv.Atoi(targetVal)
+		result = len(list) > expectedLen
+	case "length_lt":
+		expectedLen, _ := strconv.Atoi(targetVal)
+		result = len(list) < expectedLen
 	case "contains":
+		for _, item := range list {
+			if fmt.Sprint(item) == targetVal {
+				result = true
+				break
+			}
+		}
+	case "not_contains":
 		found := false
-		for _, v := range list {
-			// 将元素转为字符串比较，确保类型兼容性
-			if fmt.Sprint(v) == targetVal {
+		for _, item := range list {
+			if fmt.Sprint(item) == targetVal {
 				found = true
 				break
 			}
 		}
-		if !found {
-			if strings.ToLower(n.Config["output_bool"]) == "true" {
-				return "false", nil
-			}
-			return "", fmt.Errorf("CONDITION_NOT_MET")
-		}
+		result = !found
+	default:
+		return "", fmt.Errorf("unsupported list mode: %s", mode)
 	}
 
-	if strings.ToLower(n.Config["output_bool"]) == "true" {
+	if !result {
+		if strings.ToLower(fmt.Sprint(config["output_bool"])) == "true" {
+			return "false", nil
+		}
+		return "", fmt.Errorf("CONDITION_NOT_MET")
+	}
+
+	if strings.ToLower(fmt.Sprint(config["output_bool"])) == "true" {
 		return "true", nil
 	}
 	return "LIST_OK", nil
 }
 
 func (l *List) Validate(n *models.Node) error {
-	if _, ok := n.Input["list"]; !ok {
-		return fmt.Errorf("input.list is required")
-	}
-	// input.value 根据 mode 可能是必需的，这里暂不强求，因为 mode 决定
-	mode := n.Config["mode"]
-	if mode != "length_is" && mode != "contains" {
-		return fmt.Errorf("invalid config.mode: %s", mode)
+	if _, ok := n.Config["mode"]; !ok {
+		return fmt.Errorf("config.mode is required")
 	}
 	return nil
 }
