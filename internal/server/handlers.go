@@ -186,6 +186,13 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	execID := time.Now().Format("102150405") + "-" + uuidStr
 	ctx := models.NewExecutionContext(execID, s.config.HomeDir)
 	ctx.WorkflowName = wf.Name
+	
+	// 从 Context 中提取认证用户
+	if user, ok := r.Context().Value(UserContextKey).(string); ok {
+		ctx.User = user
+	} else {
+		ctx.User = "anonymous" // 理论上不会发生，因为 Middleware 拦截了
+	}
 
 	dirs := []string{ctx.Paths.Logs, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
 	for _, d := range dirs {

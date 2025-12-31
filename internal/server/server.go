@@ -20,6 +20,9 @@ type Server struct {
 }
 
 func NewServer(config Config) (*Server, error) {
+	// 初始化 JWT Auth
+	InitAuth()
+
 	db, err := storage.InitDB(config.HomeDir)
 	if err != nil {
 		return nil, err
@@ -36,13 +39,15 @@ func (s *Server) Start() error {
 	defer s.db.Close()
 	mux := http.NewServeMux()
 
-	// 注册路由
+	// 公开路由
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("POST /api/v1/run", s.handleRunWorkflow)
-	mux.HandleFunc("GET /api/v1/executions/{id}", s.handleGetExecution)
-	mux.HandleFunc("GET /api/v1/executions/{id}/logs", s.handleGetExecutionLogs)
-	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts", s.handleListArtifacts)
-	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.handleDownloadArtifact)
+
+	// 受保护的 API 路由 (包裹 AuthMiddleware)
+	mux.HandleFunc("POST /api/v1/run", s.AuthMiddleware(s.handleRunWorkflow))
+	mux.HandleFunc("GET /api/v1/executions/{id}", s.AuthMiddleware(s.handleGetExecution))
+	mux.HandleFunc("GET /api/v1/executions/{id}/logs", s.AuthMiddleware(s.handleGetExecutionLogs))
+	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts", s.AuthMiddleware(s.handleListArtifacts))
+	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.AuthMiddleware(s.handleDownloadArtifact))
 
 	// 配置 Server
 	srv := &http.Server{

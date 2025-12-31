@@ -113,6 +113,7 @@ type ExecutionPaths struct {
 type ExecutionContext struct {
 	ExecutionID  string
 	WorkflowName string // 工作流名称
+	User         string // 执行用户 (租户)
 	Paths        ExecutionPaths
 	Results      map[string]string
 	startedNodes map[string]bool
@@ -331,6 +332,7 @@ func (ctx *ExecutionContext) Clone() *ExecutionContext {
 	cloned := &ExecutionContext{
 		ExecutionID:  ctx.ExecutionID,
 		WorkflowName: ctx.WorkflowName,
+		User:         ctx.User,
 		Paths:        ctx.Paths,
 		Results:      make(map[string]string),
 		startedNodes: make(map[string]bool),
@@ -365,6 +367,7 @@ func (ctx *ExecutionContext) Derive(subID string) *ExecutionContext {
 	derived := &ExecutionContext{
 		ExecutionID:  newID,
 		WorkflowName: ctx.WorkflowName,
+		User:         ctx.User,
 		Paths:        newPaths,
 		Results:      make(map[string]string),
 		startedNodes: make(map[string]bool),

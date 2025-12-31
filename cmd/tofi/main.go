@@ -31,6 +31,8 @@ func main() {
 		runCommand(os.Args[2:])
 	case "server":
 		serverCommand(os.Args[2:])
+	case "token":
+		tokenCommand(os.Args[2:])
 	case "help", "-h", "--help":
 		printHelp()
 	default:
@@ -49,8 +51,31 @@ func printHelp() {
 	fmt.Println("Commands:")
 	fmt.Println("  run     Execute a workflow file immediately (CLI mode)")
 	fmt.Println("  server  Start the workflow engine server (HTTP API)")
+	fmt.Println("  token   Generate a test JWT token for a user")
 	fmt.Println()
 	fmt.Println("Use 'tofi <command> -h' for more information about a command.")
+}
+
+func tokenCommand(args []string) {
+	tokenCmd := flag.NewFlagSet("token", flag.ExitOnError)
+	user := tokenCmd.String("user", "jack", "Username to encode in token")
+	secret := tokenCmd.String("secret", "", "JWT secret (defaults to TOFI_JWT_SECRET env)")
+	
+	tokenCmd.Parse(args)
+
+	if *secret != "" {
+		os.Setenv("TOFI_JWT_SECRET", *secret)
+	}
+
+	server.InitAuth()
+	token, err := server.GenerateToken(*user)
+	if err != nil {
+		log.Fatalf("Failed to generate token: %v", err)
+	}
+
+	fmt.Printf("JWT Token for user '%s':\n\n%s\n\n", *user, token)
+	fmt.Println("Usage:")
+	fmt.Printf("curl -H \"Authorization: Bearer %s\" ...\n", token)
 }
 
 func runCommand(args []string) {
@@ -83,6 +108,7 @@ func runCommand(args []string) {
 		uuidStr := uuid.New().String()[:4]
 		execID = time.Now().Format("102150405") + "-" + uuidStr
 		ctx = models.NewExecutionContext(execID, *homeDir)
+		ctx.User = "cli-admin" // CLI 模式默认为 admin
 	}
 
 	// 2. 环境准备
@@ -131,7 +157,7 @@ func serverCommand(args []string) {
 	serverCmd := flag.NewFlagSet("server", flag.ExitOnError)
 	port := serverCmd.Int("port", 8080, "HTTP server port")
 	homeDir := serverCmd.String("home", ".tofi", "Tofi runtime directory")
-	
+
 	serverCmd.Parse(args)
 
 	cfg := server.Config{
