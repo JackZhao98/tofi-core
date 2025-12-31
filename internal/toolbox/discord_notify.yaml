@@ -1,18 +1,14 @@
-name: Discord Notification
-description: Send notifications to Discord channels via webhook
+name: Discord Notify
+description: 向 Discord Webhook 发送消息
 
 nodes:
-  send:
+  send_discord:
     type: api
     config:
       method: "POST"
-      url: "{{inputs.webhook_url}}"
-    input:
+      url: "inputs.webhook_url"
       headers:
         Content-Type: "application/json"
-      body: |
-        {
-          "content": "{{inputs.message}}",
-          "username": "{{inputs.bot_name}}",
-          "avatar_url": "{{inputs.avatar_url}}"
-        }
+      body:
+        content: "inputs.message"
+        username: "Tofi Bot"
