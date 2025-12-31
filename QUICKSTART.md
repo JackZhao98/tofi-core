@@ -233,7 +233,7 @@ nodes:
 
 - [AI Workflows 详细指南](docs/AI_WORKFLOWS_GUIDE.md)
 - [所有示例工作流](workflows/README.md)
-- [Action Library 完整文档](action_library/README.md)
+- [Toolbox 完整文档](internal/toolbox/README.md)
 
 ---
 

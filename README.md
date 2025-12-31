@@ -8,7 +8,7 @@
 
 - 🤖 **AI 集成**: 内置 GPT-5.1 支持,开箱即用
 - 🔄 **工作流编排**: DAG (有向无环图) 任务调度
-- 📦 **Action Library**: 官方内置常用功能
+- 📦 **Toolbox**: 官方内置常用功能
 - 🔌 **多服务集成**: Telegram, Slack, Discord, Email, GitHub 等
 - 🎯 **类型丰富**: API, Shell, AI, 条件判断, 循环, 数学运算等
 - 🔐 **安全管理**: 环境变量和 Secret 节点支持
@@ -96,9 +96,9 @@ TOFI_TELEGRAM_BOT_TOKEN=your_bot_token_here
 - 创建 TODO 清单
 - 团队 Telegram 通知
 
-## 🧩 Action Library
+## 🧩 Toolbox
 
-Tofi 内置了丰富的 Action Library,开箱即用:
+Tofi 内置了丰富的 Toolbox,开箱即用:
 
 ### AI Actions
 - `tofi/ai_response` - AI 响应生成 (支持 GPT-5.1)
@@ -117,7 +117,7 @@ Tofi 内置了丰富的 Action Library,开箱即用:
 - `tofi/webhook_notify` - Webhook 通知
 - `tofi/github_create_issue` - 创建 GitHub Issue
 
-查看完整文档: [Action Library 文档](action_library/README.md)
+查看完整文档: [Toolbox 文档](internal/toolbox/README.md)
 
 ## 📝 Workflow 语法
 
@@ -229,7 +229,7 @@ nodes:
 ## 📚 文档
 
 - [AI Workflows 使用指南](docs/AI_WORKFLOWS_GUIDE.md)
-- [Action Library 文档](action_library/README.md)
+- [Toolbox 文档](internal/toolbox/README.md)
 - [Telegram 设置指南](docs/TELEGRAM_SETUP.md)
 - [Workflow 示例集合](workflows/README.md)
 
@@ -249,7 +249,7 @@ go test ./...
 
 ### 添加新的 Action
 
-1. 在 `action_library/` 创建 `.yaml` 文件
+1. 在 `internal/toolbox/` 创建 `.yaml` 文件
 2. 使用 `{{inputs.xxx}}` 引用参数
 3. 重新编译 (embed 会自动包含)
 4. 更新文档

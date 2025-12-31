@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"tofi-core/internal/actionlib"
 	"tofi-core/internal/models"
 	"tofi-core/internal/parser"
+	"tofi-core/internal/toolbox"
 )
 
 type Handoff struct{}
@@ -21,20 +21,13 @@ func (h *Handoff) Execute(config map[string]interface{}, ctx *models.ExecutionCo
 	var childWf *models.Workflow
 	var err error
 
-	var actionName string
-	if v, ok := config["action"]; ok && v != nil {
-		actionName = fmt.Sprint(v)
-	}
-
-	var filePath string
-	if v, ok := config["file"]; ok && v != nil {
-		filePath = fmt.Sprint(v)
-	}
+	actionName := fmt.Sprint(config["action"])
+	filePath := fmt.Sprint(config["file"])
 
 	if actionName != "" {
 		if strings.HasPrefix(actionName, "tofi/") {
 			name := strings.TrimPrefix(actionName, "tofi/")
-			data, err := actionlib.ReadAction(name)
+			data, err := toolbox.ReadAction(name)
 			if err != nil {
 				return "", err
 			}
