@@ -2,6 +2,8 @@ package models
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -110,6 +112,7 @@ type ExecutionPaths struct {
 
 type ExecutionContext struct {
 	ExecutionID  string
+	WorkflowName string // 工作流名称
 	Paths        ExecutionPaths
 	Results      map[string]string
 	startedNodes map[string]bool
@@ -117,22 +120,48 @@ type ExecutionContext struct {
 	mu           sync.RWMutex
 	Wg           sync.WaitGroup
 	SecretValues []string
+	Logger       *log.Logger // 每个执行专属的 Logger
+	logFile      *os.File    // 用于后续关闭文件句柄
 }
 
 func NewExecutionContext(execID, homeDir string) *ExecutionContext {
+	paths := ExecutionPaths{
+		Home:      homeDir,
+		Logs:      filepath.Join(homeDir, "logs"),
+		States:    filepath.Join(homeDir, "states"),
+		Reports:   filepath.Join(homeDir, "reports"),
+		Artifacts: filepath.Join(homeDir, "artifacts", execID),
+		Uploads:   filepath.Join(homeDir, "uploads", execID),
+	}
 	return &ExecutionContext{
-		ExecutionID: execID,
-		Paths: ExecutionPaths{
-			Home:      homeDir,
-			Logs:      filepath.Join(homeDir, "logs"),
-			States:    filepath.Join(homeDir, "states"),
-			Reports:   filepath.Join(homeDir, "reports"),
-			Artifacts: filepath.Join(homeDir, "artifacts"),
-			Uploads:   filepath.Join(homeDir, "uploads"),
-		},
+		ExecutionID:  execID,
+		Paths:        paths,
 		Results:      make(map[string]string),
 		startedNodes: make(map[string]bool),
 		Stats:        []NodeStat{},
+		Logger:       log.Default(), // 默认使用标准日志
+	}
+}
+
+// SetLogger 设置专属日志输出文件
+func (ctx *ExecutionContext) SetLogger(f *os.File) {
+	ctx.logFile = f
+	ctx.Logger = log.New(f, "", log.Ldate|log.Ltime)
+}
+
+// Log 封装日志调用
+func (ctx *ExecutionContext) Log(format string, v ...interface{}) {
+	if ctx.Logger != nil {
+		ctx.Logger.Printf(format, v...)
+	}
+	// 同时打印到控制台方便调试
+	log.Printf("[%s] "+format, append([]interface{}{ctx.ExecutionID}, v...)...)
+}
+
+// Close 释放资源
+func (ctx *ExecutionContext) Close() {
+	if ctx.logFile != nil {
+		ctx.logFile.Close()
 	}
 }
 

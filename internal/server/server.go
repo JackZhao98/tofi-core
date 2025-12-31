@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"tofi-core/internal/storage"
 )
 
 type Config struct {
@@ -13,21 +14,35 @@ type Config struct {
 }
 
 type Server struct {
-	config Config
+	config   Config
+	registry *ExecutionRegistry
+	db       *storage.DB
 }
 
-func NewServer(config Config) *Server {
-	return &Server{
-		config: config,
+func NewServer(config Config) (*Server, error) {
+	db, err := storage.InitDB(config.HomeDir)
+	if err != nil {
+		return nil, err
 	}
+
+	return &Server{
+		config:   config,
+		registry: NewExecutionRegistry(),
+		db:       db,
+	}, nil
 }
 
 func (s *Server) Start() error {
+	defer s.db.Close()
 	mux := http.NewServeMux()
 
 	// 注册路由
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/api/v1/run", s.handleRunWorkflow)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /api/v1/run", s.handleRunWorkflow)
+	mux.HandleFunc("GET /api/v1/executions/{id}", s.handleGetExecution)
+	mux.HandleFunc("GET /api/v1/executions/{id}/logs", s.handleGetExecutionLogs)
+	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts", s.handleListArtifacts)
+	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.handleDownloadArtifact)
 
 	// 配置 Server
 	srv := &http.Server{
