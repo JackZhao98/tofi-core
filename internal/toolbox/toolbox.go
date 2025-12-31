@@ -13,7 +13,7 @@ func ReadAction(actionName string) ([]byte, error) {
 	embedPath := actionName + ".yaml"
 	data, err := ToolboxFS.ReadFile(embedPath)
 	if err != nil {
-		return nil, fmt.Errorf("官方 toolbox 组件不存在: %s", actionName)
+		return nil, fmt.Errorf("Toolbox component not found: %s", actionName)
 	}
 	return data, nil
 }
