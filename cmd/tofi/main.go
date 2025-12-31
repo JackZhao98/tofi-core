@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"tofi-core/internal/models"
 	"tofi-core/internal/parser"
 	"tofi-core/internal/server"
+	"tofi-core/internal/storage"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -54,77 +54,77 @@ func printHelp() {
 }
 
 func runCommand(args []string) {
-	// 定义 run 子命令的 FlagSet
 	runCmd := flag.NewFlagSet("run", flag.ExitOnError)
 	workflowPath := runCmd.String("workflow", "workflows/tofi_test_2.yaml", "Path to workflow YAML file")
 	resumeID := runCmd.String("resume", "", "Execution ID to resume from (.tofi/states/)")
-	homeDir := runCmd.String("home", ".tofi", "Tofi runtime directory (logs, states, reports)")
+	homeDir := runCmd.String("home", ".tofi", "Tofi runtime directory")
 
-	// 解析参数
 	runCmd.Parse(args)
 
+	// 0. 初始化数据库
+	db, err := storage.InitDB(*homeDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer db.Close()
+
 	var ctx *models.ExecutionContext
-	var err error
 	var execID string
 
 	// 1. 初始化 Context (新建或恢复)
 	if *resumeID != "" {
 		execID = *resumeID
-		log.Printf("Attempting to resume execution: %s", execID)
 		ctx, err = engine.LoadState(execID, *homeDir)
 		if err != nil {
 			log.Fatalf("Resume failed: %v", err)
 		}
+		ctx.Log("Attempting to resume execution: %s", execID)
 	} else {
 		uuidStr := uuid.New().String()[:4]
 		execID = time.Now().Format("102150405") + "-" + uuidStr
 		ctx = models.NewExecutionContext(execID, *homeDir)
 	}
 
-	// 2. 环境准备 (Logs, Artifacts, etc.)
-	dirs := []string{ctx.Paths.Logs, ctx.Paths.Reports, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
+	// 2. 环境准备
+	dirs := []string{ctx.Paths.Logs, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
 	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			log.Fatalf("Failed to create directory %s: %v", d, err)
-		}
+		os.MkdirAll(d, 0755)
 	}
 
-	logFileName := time.Now().Format("20060102") + ".log"
-	f, _ := os.OpenFile(filepath.Join(ctx.Paths.Logs, logFileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFilePath := filepath.Join(ctx.Paths.Logs, execID+".log")
+	if f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		defer f.Close()
+		ctx.SetLogger(f)
+	}
 
-	log.SetFlags(log.Ldate | log.Ltime)
-	log.SetOutput(io.MultiWriter(os.Stdout, f))
-
-	// 3. 加载 YAML 工作流
+	// 3. 加载 YAML
 	wf, err := parser.LoadWorkflow(*workflowPath)
 	if err != nil {
-		log.Fatalf("Failed to load workflow %s: %v", *workflowPath, err)
+		ctx.Log("Failed to load workflow %s: %v", *workflowPath, err)
+		os.Exit(1)
 	}
+	ctx.WorkflowName = wf.Name
 
-	// 4. 预先验证工作流 Schema
+	// 4. 验证
 	if err := engine.ValidateAll(wf); err != nil {
-		log.Fatalf("Configuration validation failed:\n%v", err)
+		ctx.Log("Configuration validation failed:\n%v", err)
+		os.Exit(1)
 	}
 
-	log.Printf("[%s] 🐱 Tofi Engine Started (Home: %s)...", execID, *homeDir)
-
-	// 5. 智能寻找入口并启动
+	ctx.Log("🐱 Tofi Engine Started (Home: %s)...", *homeDir)
 	engine.Start(wf, ctx)
-
-	// 6. 等待所有节点运行结束
 	ctx.Wg.Wait()
 
-	// 7. 打印精美的 ASCII 总结表格
 	engine.PrintSummary(ctx)
 
-	// 8. 保存最终报告 (Reports)
-	if err := engine.SaveReport(wf, ctx); err != nil {
-		log.Printf("Failed to save report: %v", err)
+	// 8. 保存最终报告 (DB)
+	if err := engine.SaveReport(wf, ctx, db); err != nil {
+		ctx.Log("Failed to save report to DB: %v", err)
 	} else {
-		log.Printf("Report saved to: %s", ctx.Paths.Reports)
+		ctx.Log("Execution record saved to database.")
 	}
 
-	log.Println("🏁 Done.")
+	ctx.Log("🏁 Done.")
 }
 
 func serverCommand(args []string) {
@@ -139,7 +139,10 @@ func serverCommand(args []string) {
 		HomeDir: *homeDir,
 	}
 
-	srv := server.NewServer(cfg)
+	srv, err := server.NewServer(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize server: %v", err)
+	}
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}

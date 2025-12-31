@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 	"tofi-core/internal/models"
+	"tofi-core/internal/storage"
 )
 
 var stateLock sync.Mutex
@@ -66,11 +67,9 @@ func LoadState(execID, homeDir string) (*models.ExecutionContext, error) {
 	}
 
 	// 恢复 Results
-	// 关键策略：只恢复“成功”的结果。
-	// 如果是 ERR_PROPAGATION 或 SKIPPED_BY，则清除它们，让引擎重新跑这些节点
 	for k, v := range state.Results {
 		if strings.HasPrefix(v, "ERR_PROPAGATION:") || strings.HasPrefix(v, "SKIPPED_BY:") {
-			continue // 丢弃错误记录，实现“重试”
+			continue 
 		}
 		ctx.Results[k] = v
 	}
@@ -78,13 +77,13 @@ func LoadState(execID, homeDir string) (*models.ExecutionContext, error) {
 	return ctx, nil
 }
 
-// SaveReport 生成最终报告写入 reports/ 目录
-func SaveReport(wf *models.Workflow, ctx *models.ExecutionContext) error {
+// SaveReport 将最终执行结果存入数据库
+func SaveReport(wf *models.Workflow, ctx *models.ExecutionContext, db *storage.DB) error {
 	results, stats := ctx.Snapshot()
 
 	// 1. 计算整体状态
 	overallStatus := "SUCCESS"
-	startTime := time.Now() // 默认值
+	startTime := time.Now() 
 	if len(stats) > 0 {
 		startTime = stats[0].StartTime
 		for _, stat := range stats {
@@ -95,37 +94,40 @@ func SaveReport(wf *models.Workflow, ctx *models.ExecutionContext) error {
 		}
 	}
 
-	// 2. 构造 ExecutionResult 对象
-	result := models.ExecutionResult{
+	// 2. 构造数据
+	duration := time.Since(startTime).String()
+	
+	fullResult := models.ExecutionResult{
 		ExecutionID:  ctx.ExecutionID,
 		WorkflowName: wf.Name,
 		Status:       overallStatus,
 		StartTime:    startTime,
 		EndTime:      time.Now(),
-		Duration:     time.Since(startTime).String(),
+		Duration:     duration,
 		Stats:        stats,
 		Outputs:      results,
 	}
+	jb, _ := json.Marshal(fullResult)
 
-	// 3. 写入文件
-	if err := os.MkdirAll(ctx.Paths.Reports, 0755); err != nil {
-		return err
+	record := &storage.ExecutionRecord{
+		ID:           ctx.ExecutionID,
+		WorkflowName: wf.Name,
+		Status:       overallStatus,
+		StartTime:    startTime,
+		EndTime:      time.Now(),
+		Duration:     duration,
+		ResultJSON:   string(jb),
 	}
 
-	filePath := filepath.Join(ctx.Paths.Reports, fmt.Sprintf("report-%s.json", ctx.ExecutionID))
-	fileData, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return err
+	// 3. 写入 DB
+	if err := db.SaveExecution(record); err != nil {
+		return fmt.Errorf("failed to save execution to db: %v", err)
 	}
 
-	if err := os.WriteFile(filePath, fileData, 0644); err != nil {
-		return err
-	}
-
-	// 4. 清理逻辑：如果整体成功，则删除中间状态文件 (Snapshot)
+	// 4. 清理逻辑：如果整体成功，则删除中间状态文件
 	if overallStatus == "SUCCESS" {
 		statePath := filepath.Join(ctx.Paths.States, fmt.Sprintf("state-%s.json", ctx.ExecutionID))
-		_ = os.Remove(statePath) // 忽略删除失败的情况
+		_ = os.Remove(statePath)
 	}
 
 	return nil

@@ -1,0 +1,18 @@
+name: Main Package Test
+nodes:
+  call_research:
+    name: Call Research Package
+    type: workflow
+    config:
+      # 像 GitHub/NPM 一样寻址
+      workflow: "research/analyzer"
+      topic: "Quantum Computing"
+    next: ["call_toolbox"]
+
+  call_toolbox:
+    name: Call Official Toolbox
+    type: workflow
+    config:
+      # 引用官方组件
+      workflow: "tofi/ai_response"
+      prompt: "Say hello from toolbox"

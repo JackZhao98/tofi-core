@@ -1,0 +1,11 @@
+name: Artifacts Test
+nodes:
+  generate_file:
+    name: Generate Artifact
+    type: shell
+    config:
+      script: |
+        echo "This is a test artifact for Tofi" > $TOFI_ARTIFACTS_DIR/hello.txt
+        echo "Creating a second file..."
+        echo "JSON metadata" > $TOFI_ARTIFACTS_DIR/meta.json
+        echo "Done."
