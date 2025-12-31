@@ -100,10 +100,12 @@ type Workflow struct {
 }
 
 type ExecutionPaths struct {
-	Home    string
-	Logs    string
-	States  string
-	Reports string
+	Home      string
+	Logs      string
+	States    string
+	Reports   string
+	Artifacts string // 存放产物 (Output)
+	Uploads   string // 存放用户上传 (Input)
 }
 
 type ExecutionContext struct {
@@ -121,10 +123,12 @@ func NewExecutionContext(execID, homeDir string) *ExecutionContext {
 	return &ExecutionContext{
 		ExecutionID: execID,
 		Paths: ExecutionPaths{
-			Home:    homeDir,
-			Logs:    filepath.Join(homeDir, "logs"),
-			States:  filepath.Join(homeDir, "states"),
-			Reports: filepath.Join(homeDir, "reports"),
+			Home:      homeDir,
+			Logs:      filepath.Join(homeDir, "logs"),
+			States:    filepath.Join(homeDir, "states"),
+			Reports:   filepath.Join(homeDir, "reports"),
+			Artifacts: filepath.Join(homeDir, "artifacts"),
+			Uploads:   filepath.Join(homeDir, "uploads"),
 		},
 		Results:      make(map[string]string),
 		startedNodes: make(map[string]bool),

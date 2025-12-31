@@ -51,7 +51,9 @@ func SaveState(ctx *models.ExecutionContext) error {
 
 // LoadState 加载指定 ExecutionID 的状态
 func LoadState(execID, homeDir string) (*models.ExecutionContext, error) {
-	filePath := filepath.Join(homeDir, "states", fmt.Sprintf("state-%s.json", execID))
+	// 先创建 Context 以获取正确的路径配置
+	ctx := models.NewExecutionContext(execID, homeDir)
+	filePath := filepath.Join(ctx.Paths.States, fmt.Sprintf("state-%s.json", execID))
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -62,9 +64,6 @@ func LoadState(execID, homeDir string) (*models.ExecutionContext, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("解析状态文件失败: %v", err)
 	}
-
-	// 重建 Context
-	ctx := models.NewExecutionContext(execID, homeDir)
 
 	// 恢复 Results
 	// 关键策略：只恢复“成功”的结果。

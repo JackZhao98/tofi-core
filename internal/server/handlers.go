@@ -67,10 +67,13 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	ctx := models.NewExecutionContext(execID, s.config.HomeDir)
 
 	// 5. 准备环境 (Logs 等)
-	// Server 模式下，日志可能需要更精细的管理。这里暂时复用 CLI 的文件日志逻辑。
-	if err := os.MkdirAll(ctx.Paths.Logs, 0755); err != nil {
-		log.Printf("Failed to create log dir for %s: %v", execID, err)
+	dirs := []string{ctx.Paths.Logs, ctx.Paths.Reports, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			log.Printf("Failed to create dir %s for %s: %v", d, execID, err)
+		}
 	}
+	
 	// 注意：这里我们不重定向 Server 的 stdout，只记录到文件
 	// 实际生产中建议使用结构化日志库 (Zap/Logrus)
 

@@ -81,10 +81,14 @@ func runCommand(args []string) {
 		ctx = models.NewExecutionContext(execID, *homeDir)
 	}
 
-	// 2. 环境准备 (Logs)
-	if err := os.MkdirAll(ctx.Paths.Logs, 0755); err != nil {
-		log.Fatalf("Failed to create log directory: %v", err)
+	// 2. 环境准备 (Logs, Artifacts, etc.)
+	dirs := []string{ctx.Paths.Logs, ctx.Paths.Reports, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			log.Fatalf("Failed to create directory %s: %v", d, err)
+		}
 	}
+
 	logFileName := time.Now().Format("20060102") + ".log"
 	f, _ := os.OpenFile(filepath.Join(ctx.Paths.Logs, logFileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 

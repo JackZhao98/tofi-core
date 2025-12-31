@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	actionlib "tofi-core/action_library"
+	"tofi-core/internal/actionlib"
 	"tofi-core/internal/models"
 	"tofi-core/internal/parser"
 )
