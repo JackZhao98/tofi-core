@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -17,14 +18,49 @@ import (
 
 func main() {
 	// 0. 加载环境变量 (开发环境)
-	// 如果 .env 文件不存在(生产环境),会静默失败,使用系统环境变量
 	_ = godotenv.Load()
 
-	// 1. 解析命令行参数
-	workflowPath := flag.String("workflow", "workflows/tofi_test_2.yaml", "工作流 YAML 文件路径")
-	resumeID := flag.String("resume", "", "要恢复的 Execution ID (从 .tofi/states/ 加载)")
-	homeDir := flag.String("home", ".tofi", "Tofi 运行时目录 (存放 logs, states, reports)")
-	flag.Parse()
+	if len(os.Args) < 2 {
+		printHelp()
+		os.Exit(1)
+	}
+
+	switch os.Args[1] {
+	case "run":
+		runCommand(os.Args[2:])
+	case "server":
+		serverCommand(os.Args[2:])
+	case "help", "-h", "--help":
+		printHelp()
+	default:
+		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		printHelp()
+		os.Exit(1)
+	}
+}
+
+func printHelp() {
+	fmt.Println("Tofi Workflow Engine CLI")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  tofi <command> [arguments]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  run     Execute a workflow file immediately (CLI mode)")
+	fmt.Println("  server  Start the workflow engine server (HTTP API)")
+	fmt.Println()
+	fmt.Println("Use 'tofi <command> -h' for more information about a command.")
+}
+
+func runCommand(args []string) {
+	// 定义 run 子命令的 FlagSet
+	runCmd := flag.NewFlagSet("run", flag.ExitOnError)
+	workflowPath := runCmd.String("workflow", "workflows/tofi_test_2.yaml", "Path to workflow YAML file")
+	resumeID := runCmd.String("resume", "", "Execution ID to resume from (.tofi/states/)")
+	homeDir := runCmd.String("home", ".tofi", "Tofi runtime directory (logs, states, reports)")
+
+	// 解析参数
+	runCmd.Parse(args)
 
 	var ctx *models.ExecutionContext
 	var err error
@@ -33,20 +69,20 @@ func main() {
 	// 1. 初始化 Context (新建或恢复)
 	if *resumeID != "" {
 		execID = *resumeID
-		log.Printf("尝试恢复执行: %s", execID)
+		log.Printf("Attempting to resume execution: %s", execID)
 		ctx, err = engine.LoadState(execID, *homeDir)
 		if err != nil {
-			log.Fatalf("恢复失败: %v", err)
+			log.Fatalf("Resume failed: %v", err)
 		}
 	} else {
-		uuid := uuid.New().String()[:4]
-		execID = time.Now().Format("102150405") + "-" + uuid
+		uuidStr := uuid.New().String()[:4]
+		execID = time.Now().Format("102150405") + "-" + uuidStr
 		ctx = models.NewExecutionContext(execID, *homeDir)
 	}
 
 	// 2. 环境准备 (Logs)
 	if err := os.MkdirAll(ctx.Paths.Logs, 0755); err != nil {
-		log.Fatalf("无法创建日志目录: %v", err)
+		log.Fatalf("Failed to create log directory: %v", err)
 	}
 	logFileName := time.Now().Format("20060102") + ".log"
 	f, _ := os.OpenFile(filepath.Join(ctx.Paths.Logs, logFileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -55,19 +91,17 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, f))
 
 	// 3. 加载 YAML 工作流
-	// 注意：Resume 模式下，理想情况应该从 State 里恢复 Workflow 内容（防止 YAML 被改了）。
-	// 但为了简单，我们还是重新加载 YAML。用户需确保 YAML 没变。
 	wf, err := parser.LoadWorkflow(*workflowPath)
 	if err != nil {
-		log.Fatalf("无法加载工作流 %s: %v", *workflowPath, err)
+		log.Fatalf("Failed to load workflow %s: %v", *workflowPath, err)
 	}
 
 	// 4. 预先验证工作流 Schema
 	if err := engine.ValidateAll(wf); err != nil {
-		log.Fatalf("配置校验失败，请检查 YAML:\n%v", err)
+		log.Fatalf("Configuration validation failed:\n%v", err)
 	}
 
-	log.Printf("[%s] 🐱 Tofi Engine 启动 (Home: %s)...", execID, *homeDir)
+	log.Printf("[%s] 🐱 Tofi Engine Started (Home: %s)...", execID, *homeDir)
 
 	// 5. 智能寻找入口并启动
 	engine.Start(wf, ctx)
@@ -80,13 +114,25 @@ func main() {
 
 	// 8. 保存最终报告 (Reports)
 	if err := engine.SaveReport(wf, ctx); err != nil {
-		log.Printf("保存执行结果失败: %v", err)
+		log.Printf("Failed to save report: %v", err)
 	} else {
-		log.Printf("报告已保存至: %s", ctx.Paths.Reports)
+		log.Printf("Report saved to: %s", ctx.Paths.Reports)
 	}
 
-	// 9. 清理中间状态 (可选)
-	// engine.CleanupState(ctx)
-
 	log.Println("🏁 Done.")
+}
+
+func serverCommand(args []string) {
+	serverCmd := flag.NewFlagSet("server", flag.ExitOnError)
+	port := serverCmd.Int("port", 8080, "HTTP server port")
+	homeDir := serverCmd.String("home", ".tofi", "Tofi runtime directory")
+	
+	serverCmd.Parse(args)
+
+	fmt.Printf("🚀 Starting Tofi Server on port %d...\n", *port)
+	fmt.Printf("📂 Runtime Home: %s\n", *homeDir)
+	fmt.Println("Server implementation coming soon...")
+	
+	// Block forever for now to simulate server
+	select {}
 }
