@@ -27,14 +27,23 @@ func (h *Handoff) Execute(config map[string]interface{}, ctx *models.ExecutionCo
 		return "", fmt.Errorf("exceeded maximum workflow recursion depth (%d)", MaxDepth)
 	}
 
-	// 2. 安全提取参数 (避免 fmt.Sprint 产生 "<nil>")
-	actionName, _ := config["action"].(string)
-	filePath, _ := config["file"].(string)
+	// 2. 安全提取参数
+	workflowID, _ := config["workflow"].(string)
+	actionName, _ := config["action"].(string) // 兼容旧逻辑
+	filePath, _ := config["file"].(string)     // 兼容旧逻辑
 
-	// 3. 决定从哪加载子工作流
-	if actionName != "" {
+	// 3. 智能解析 (优先使用新的 workflow ID 模式)
+	if workflowID != "" {
+		// 假设 workflows 目录就在 Home 的同级 (通常是项目根目录)
+		// 如果在 Server 模式下，这个目录可以以后通过配置动态注入
+		workflowsRoot := "workflows"
+		childWf, err = parser.ResolveWorkflow(workflowID, workflowsRoot)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve workflow '%s': %v", workflowID, err)
+		}
+	} else if actionName != "" {
+		// 兼容旧的 action 逻辑
 		if strings.HasPrefix(actionName, "tofi/") {
-			// 官方内置组件
 			name := strings.TrimPrefix(actionName, "tofi/")
 			data, err := toolbox.ReadAction(name)
 			if err != nil {
@@ -45,17 +54,16 @@ func (h *Handoff) Execute(config map[string]interface{}, ctx *models.ExecutionCo
 				return "", err
 			}
 		} else {
-			// 暂不支持其他类型的 Action，但不再强制报错前缀
-			return "", fmt.Errorf("unsupported action type: %s (only tofi/... is supported currently)", actionName)
+			return "", fmt.Errorf("unsupported action type: %s (only tofi/... is supported)", actionName)
 		}
 	} else if filePath != "" {
-		// 从本地文件加载
+		// 兼容旧的 file 逻辑
 		childWf, err = parser.LoadWorkflow(filePath)
 		if err != nil {
 			return "", err
 		}
 	} else {
-		return "", fmt.Errorf("either 'action' or 'file' must be specified in workflow/handoff task")
+		return "", fmt.Errorf("missing 'workflow' ID in handoff task")
 	}
 
 	// 4. 创建隔离的子上下文

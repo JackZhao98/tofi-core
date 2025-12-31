@@ -5,10 +5,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"tofi-core/internal/models"
+	"tofi-core/internal/toolbox"
 
 	"gopkg.in/yaml.v3"
 )
+
+// ResolveWorkflow 根据 Workflow ID 智能解析工作流
+// 支持：
+// 1. tofi/xxx (Toolbox 内置)
+// 2. namespace/name (本地 workflows/namespace/name.yaml)
+// 3. name (本地 workflows/name.yaml)
+func ResolveWorkflow(id string, workflowsDir string) (*models.Workflow, error) {
+	if strings.HasPrefix(id, "tofi/") {
+		// 1. 从 Toolbox 加载
+		name := strings.TrimPrefix(id, "tofi/")
+		data, err := toolbox.ReadAction(name)
+		if err != nil {
+			return nil, err
+		}
+		return ParseWorkflowFromBytes(data, "yaml")
+	}
+
+	// 2. 从本地目录加载
+	// 确保 ID 结尾没有 .yaml，我们自动补全
+	cleanID := strings.TrimSuffix(id, ".yaml")
+	path := filepath.Join(workflowsDir, cleanID+".yaml")
+
+	return LoadWorkflow(path)
+}
 
 // LoadWorkflow 会根据文件后缀名自动选择解析方式
 func LoadWorkflow(path string) (*models.Workflow, error) {
