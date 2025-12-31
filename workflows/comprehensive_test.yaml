@@ -4,7 +4,7 @@ nodes:
     name: Load Secrets
     type: secret
     config:
-      openai_key: "OPENAI_API_KEY"
+      openai_key: "env.OPENAI_API_KEY"
     next: ["topic"]
 
   topic:
