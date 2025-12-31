@@ -99,7 +99,7 @@ func runCommand(args []string) {
 	// 1. 初始化 Context (新建或恢复)
 	if *resumeID != "" {
 		execID = *resumeID
-		ctx, err = engine.LoadState(execID, *homeDir)
+		ctx, err = engine.LoadState(execID, db, *homeDir)
 		if err != nil {
 			log.Fatalf("Resume failed: %v", err)
 		}
@@ -107,15 +107,12 @@ func runCommand(args []string) {
 	} else {
 		uuidStr := uuid.New().String()[:4]
 		execID = time.Now().Format("102150405") + "-" + uuidStr
-		ctx = models.NewExecutionContext(execID, *homeDir)
-		ctx.User = "cli-admin" // CLI 模式默认为 admin
+		ctx = models.NewExecutionContext(execID, "cli-admin", *homeDir)
+		ctx.DB = db
 	}
 
-	// 2. 环境准备
-	dirs := []string{ctx.Paths.Logs, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
-	for _, d := range dirs {
-		os.MkdirAll(d, 0755)
-	}
+	// 2. 环境准备 (仅创建日志目录，其他按需创建)
+	os.MkdirAll(ctx.Paths.Logs, 0755)
 
 	logFilePath := filepath.Join(ctx.Paths.Logs, execID+".log")
 	if f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {

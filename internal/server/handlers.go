@@ -64,14 +64,6 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. 尝试从状态文件中获取
-	statePath := filepath.Join(s.config.HomeDir, "states", fmt.Sprintf("state-%s.json", id))
-	if data, err := os.ReadFile(statePath); err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
-		return
-	}
-
 	http.Error(w, "Execution not found", http.StatusNotFound)
 }
 
@@ -82,7 +74,12 @@ func (s *Server) handleGetExecutionLogs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	logPath := filepath.Join(s.config.HomeDir, "logs", id+".log")
+	user := "anonymous"
+	if u, ok := r.Context().Value(UserContextKey).(string); ok {
+		user = u
+	}
+
+	logPath := filepath.Join(s.config.HomeDir, user, "logs", id+".log")
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		http.Error(w, "Log file not found", http.StatusNotFound)
 		return
@@ -99,7 +96,12 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artDir := filepath.Join(s.config.HomeDir, "artifacts", id)
+	user := "anonymous"
+	if u, ok := r.Context().Value(UserContextKey).(string); ok {
+		user = u
+	}
+
+	artDir := filepath.Join(s.config.HomeDir, user, "artifacts", id)
 	if _, err := os.Stat(artDir); os.IsNotExist(err) {
 		json.NewEncoder(w).Encode([]string{})
 		return
@@ -130,8 +132,13 @@ func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	user := "anonymous"
+	if u, ok := r.Context().Value(UserContextKey).(string); ok {
+		user = u
+	}
+
 	safeFilename := filepath.Base(filename)
-	filePath := filepath.Join(s.config.HomeDir, "artifacts", id, safeFilename)
+	filePath := filepath.Join(s.config.HomeDir, user, "artifacts", id, safeFilename)
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		http.Error(w, "Artifact not found", http.StatusNotFound)
@@ -140,6 +147,53 @@ func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", safeFilename))
 	http.ServeFile(w, r, filePath)
+}
+
+func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Execution ID is required", http.StatusBadRequest)
+		return
+	}
+
+	var user string
+	if u, ok := r.Context().Value(UserContextKey).(string); ok {
+		user = u
+	} else {
+		user = "anonymous"
+	}
+
+	r.ParseMultipartForm(32 << 20)
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get file: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	uploadDir := filepath.Join(s.config.HomeDir, user, "uploads", id)
+	os.MkdirAll(uploadDir, 0755)
+
+	destPath := filepath.Join(uploadDir, filepath.Base(handler.Filename))
+	dest, err := os.Create(destPath)
+	if err != nil {
+		http.Error(w, "Failed to create destination file", http.StatusInternalServerError)
+		return
+	}
+	defer dest.Close()
+
+	if _, err := io.Copy(dest, file); err != nil {
+		http.Error(w, "Failed to save file", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Successfully uploaded %s", handler.Filename)
 }
 
 func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -156,19 +210,21 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var wf *models.Workflow
-	var initialInputs map[string]interface{}
+	var initialInputs map[string]interface{ } 
 
-	// 尝试作为 JSON 解析 (RunRequest 结构)
 	var runReq RunRequest
 	if err := json.Unmarshal(body, &runReq); err == nil && (runReq.Workflow != "" || len(runReq.Inputs) > 0) {
 		if strings.HasPrefix(runReq.Workflow, "name:") || strings.HasPrefix(runReq.Workflow, "{") {
 			wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Workflow), "yaml")
 		} else if runReq.Workflow != "" {
 			wf, err = parser.ResolveWorkflow(runReq.Workflow, "workflows")
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to resolve workflow '%s': %v", runReq.Workflow, err), http.StatusBadRequest)
+				return
+			}
 		}
 		initialInputs = runReq.Inputs
 	} else {
-		// 回退到原始 YAML Body 模式
 		wf, err = parser.ParseWorkflowFromBytes(body, "yaml")
 	}
 
@@ -184,20 +240,19 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	uuidStr := uuid.New().String()[:4]
 	execID := time.Now().Format("102150405") + "-" + uuidStr
-	ctx := models.NewExecutionContext(execID, s.config.HomeDir)
-	ctx.WorkflowName = wf.Name
 	
-	// 从 Context 中提取认证用户
-	if user, ok := r.Context().Value(UserContextKey).(string); ok {
-		ctx.User = user
+	var user string
+	if u, ok := r.Context().Value(UserContextKey).(string); ok {
+		user = u
 	} else {
-		ctx.User = "anonymous" // 理论上不会发生，因为 Middleware 拦截了
+		user = "anonymous"
 	}
 
-	dirs := []string{ctx.Paths.Logs, ctx.Paths.Artifacts, ctx.Paths.Uploads, ctx.Paths.States}
-	for _, d := range dirs {
-		os.MkdirAll(d, 0755)
-	}
+	ctx := models.NewExecutionContext(execID, user, s.config.HomeDir)
+	ctx.WorkflowName = wf.Name
+	ctx.DB = s.db
+
+	os.MkdirAll(ctx.Paths.Logs, 0755)
 	
 	logFilePath := filepath.Join(ctx.Paths.Logs, execID+".log")
 	if f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {

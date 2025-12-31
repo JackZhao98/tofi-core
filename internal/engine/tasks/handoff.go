@@ -49,9 +49,10 @@ func (h *Handoff) Execute(config map[string]interface{}, ctx *models.ExecutionCo
 	}
 
 	// 4. 创建隔离的子上下文
-	childCtx := models.NewExecutionContext(ctx.ExecutionID+"/handoff", ctx.Paths.Home)
+	childCtx := models.NewExecutionContext(ctx.ExecutionID+"/handoff", ctx.User, ctx.Paths.Home)
 	childCtx.Depth = ctx.Depth + 1 
 	childCtx.WorkflowName = childWf.Name
+	childCtx.DB = ctx.DB
 
 	// 5. 准备输入载荷 (Payload) - 结构化传递
 	payload := make(map[string]interface{})

@@ -31,7 +31,13 @@ func ResolveWorkflow(id string, workflowsDir string) (*models.Workflow, error) {
 	// 2. 从本地目录加载
 	// 确保 ID 结尾没有 .yaml，我们自动补全
 	cleanID := strings.TrimSuffix(id, ".yaml")
-	path := filepath.Join(workflowsDir, cleanID+".yaml")
+	
+	var path string
+	if strings.HasPrefix(cleanID, workflowsDir+"/") {
+		path = cleanID + ".yaml"
+	} else {
+		path = filepath.Join(workflowsDir, cleanID+".yaml")
+	}
 
 	return LoadWorkflow(path)
 }

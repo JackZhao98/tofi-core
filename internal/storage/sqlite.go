@@ -2,9 +2,7 @@ package storage
 
 import (
 	"database/sql"
-	"fmt"
 	"path/filepath"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -12,11 +10,11 @@ import (
 type ExecutionRecord struct {
 	ID           string
 	WorkflowName string
+	User         string
 	Status       string
-	StartTime    time.Time
-	EndTime      time.Time
-	Duration     string
-	ResultJSON   string
+	StateJSON    string // 中间状态
+	ResultJSON   string // 最终报告
+	CreatedAt    string
 }
 
 type DB struct {
@@ -25,84 +23,50 @@ type DB struct {
 
 func InitDB(homeDir string) (*DB, error) {
 	dbPath := filepath.Join(homeDir, "tofi.db")
-	db, err := sql.Open("sqlite", dbPath)
+	conn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %v", err)
+		return nil, err
 	}
 
-	// 创建表结构
+	// 增加 state_json 列
 	query := `
 	CREATE TABLE IF NOT EXISTS executions (
 		id TEXT PRIMARY KEY,
 		workflow_name TEXT,
+		user TEXT,
 		status TEXT,
-		start_time DATETIME,
-		end_time DATETIME,
-		duration TEXT,
-		result_json TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_status ON executions(status);
-	`
-	if _, err := db.Exec(query); err != nil {
-		return nil, fmt.Errorf("failed to create tables: %v", err)
+		state_json TEXT,
+		result_json TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := conn.Exec(query); err != nil {
+		return nil, err
 	}
 
-	return &DB{conn: db}, nil
+	return &DB{conn: conn}, nil
 }
 
 func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
-// SaveExecution 插入或更新执行记录
-func (db *DB) SaveExecution(record *ExecutionRecord) error {
+// SaveExecution 既可以保存中间状态，也可以保存最终结果 (使用 REPLACE INTO)
+func (db *DB) SaveExecution(id, name, user, status, stateJSON, resultJSON string) error {
 	query := `
-	INSERT INTO executions (id, workflow_name, status, start_time, end_time, duration, result_json)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(id) DO UPDATE SET
-		status = excluded.status,
-		end_time = excluded.end_time,
-		duration = excluded.duration,
-		result_json = excluded.result_json;
-	`
-	_, err := db.conn.Exec(query,
-		record.ID,
-		record.WorkflowName,
-		record.Status,
-		record.StartTime,
-		record.EndTime,
-		record.Duration,
-		record.ResultJSON,
-	)
+	INSERT OR REPLACE INTO executions (id, workflow_name, user, status, state_json, result_json, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, (SELECT created_at FROM executions WHERE id = ? OR CURRENT_TIMESTAMP));`
+	
+	// 注意：SQLite 的 REPLACE 会导致 created_at 丢失，所以我们用一个小技巧保留它
+	_, err := db.conn.Exec(query, id, name, user, status, stateJSON, resultJSON, id)
 	return err
 }
 
-// GetExecution 获取单条记录
 func (db *DB) GetExecution(id string) (*ExecutionRecord, error) {
-	row := db.conn.QueryRow("SELECT id, workflow_name, status, start_time, end_time, duration, result_json FROM executions WHERE id = ?", id)
+	row := db.conn.QueryRow("SELECT id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE id = ?", id)
 	var r ExecutionRecord
-	err := row.Scan(&r.ID, &r.WorkflowName, &r.Status, &r.StartTime, &r.EndTime, &r.Duration, &r.ResultJSON)
+	err := row.Scan(&r.ID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &r, nil
-}
-
-// ListExecutions 获取历史列表
-func (db *DB) ListExecutions(limit int) ([]ExecutionRecord, error) {
-	rows, err := db.conn.Query("SELECT id, workflow_name, status, start_time, end_time, duration FROM executions ORDER BY start_time DESC LIMIT ?", limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []ExecutionRecord
-	for rows.Next() {
-		var r ExecutionRecord
-		if err := rows.Scan(&r.ID, &r.WorkflowName, &r.Status, &r.StartTime, &r.EndTime, &r.Duration); err != nil {
-			return nil, err
-		}
-		results = append(results, r)
-	}
-	return results, nil
 }

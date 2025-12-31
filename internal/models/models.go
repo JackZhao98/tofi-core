@@ -124,25 +124,33 @@ type ExecutionContext struct {
 	Logger       *log.Logger // 每个执行专属的 Logger
 	logFile      *os.File    // 用于后续关闭文件句柄
 	Depth        int         // 递归深度 (防止死循环)
+	DB           interface{} // 存储对象 (storage.DB), 使用 interface 避免循环引用
 }
 
-func NewExecutionContext(execID, homeDir string) *ExecutionContext {
+func NewExecutionContext(execID, user, homeDir string) *ExecutionContext {
+	if user == "" {
+		user = "anonymous"
+	}
+	
+	// 路径空间：.tofi/{user}/...
+	userBase := filepath.Join(homeDir, user)
+	
 	paths := ExecutionPaths{
 		Home:      homeDir,
-		Logs:      filepath.Join(homeDir, "logs"),
-		States:    filepath.Join(homeDir, "states"),
-		Reports:   filepath.Join(homeDir, "reports"),
-		Artifacts: filepath.Join(homeDir, "artifacts", execID),
-		Uploads:   filepath.Join(homeDir, "uploads", execID),
+		Logs:      filepath.Join(userBase, "logs"),
+		Reports:   filepath.Join(userBase, "reports"),
+		Artifacts: filepath.Join(userBase, "artifacts", execID),
+		Uploads:   filepath.Join(userBase, "uploads", execID),
 	}
 	return &ExecutionContext{
 		ExecutionID:  execID,
+		User:         user,
 		Paths:        paths,
 		Results:      make(map[string]string),
 		startedNodes: make(map[string]bool),
 		Stats:        []NodeStat{},
-		Logger:       log.Default(), // 默认使用标准日志
-		Depth:        0,             // 默认初始深度为 0
+		Logger:       log.Default(),
+		Depth:        0,
 	}
 }
 
@@ -226,8 +234,8 @@ func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (
 			result := gjson.Get(output, jsonPath)
 
 			if strict && !result.Exists() {
-				return "", fmt.Errorf("字段不存在: {{%s}}\n"+
-					"  节点 '%s' 的输出中没有字段 '%s'\n"+
+				return "", fmt.Errorf("字段不存在: {{%s}}\n" +
+					"  节点 '%s' 的输出中没有字段 '%s'\n" +
 					"  实际输出: %s",
 					fullPath, nodeID, jsonPath, truncateString(output, 200))
 			}
@@ -246,8 +254,8 @@ func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (
 			if dotIdx := strings.Index(unresolvedVar, "."); dotIdx > 0 {
 				nodeID = unresolvedVar[:dotIdx]
 			}
-			return "", fmt.Errorf("节点不存在: {{%s}}\n"+
-				"  引用的节点 '%s' 不存在或尚未执行\n"+
+			return "", fmt.Errorf("节点不存在: {{%s}}\n" +
+				"  引用的节点 '%s' 不存在或尚未执行\n" +
 				"  提示: 请检查节点ID拼写和依赖关系",
 				unresolvedVar, nodeID)
 		}
@@ -340,6 +348,7 @@ func (ctx *ExecutionContext) Clone() *ExecutionContext {
 		SecretValues: make([]string, len(ctx.SecretValues)),
 		Logger:       ctx.Logger,
 		Depth:        ctx.Depth,
+		DB:           ctx.DB,
 	}
 
 	for k, v := range ctx.Results {
@@ -375,6 +384,7 @@ func (ctx *ExecutionContext) Derive(subID string) *ExecutionContext {
 		SecretValues: make([]string, len(ctx.SecretValues)),
 		Logger:       ctx.Logger, // 默认继承
 		Depth:        ctx.Depth,  // 深度不变，因为 Loop 同级
+		DB:           ctx.DB,
 	}
 
 	// 继承结果
