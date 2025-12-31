@@ -389,52 +389,68 @@ func isFailureBranch(wf *models.Workflow, targetID string) bool {
 }
 
 // InitializeGlobals 解析顶层的 variables 和 secrets 并注入 Context
-func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext) {
-	// 1. 处理 Variables (扁平化注入)
-	for k, v := range wf.Variables {
+// 它会根据 wf 的声明，从 inputs 中提取值并覆盖默认配置
+func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext, inputs map[string]interface{}) {
+	// 1. 处理 Variables
+	// 策略：以 wf.Variables 声明为准
+	for k, defaultVal := range wf.Variables {
+		var finalVal interface{} = defaultVal
+		
+		// 如果 inputs 中有同名参数，执行覆盖
+		if override, ok := inputs[k]; ok {
+			finalVal = override
+		}
+
 		var valStr string
-		switch val := v.(type) {
+		switch v := finalVal.(type) {
 		case string:
-			valStr = val
+			valStr = v
 		case int, int64, float64, bool:
-			valStr = fmt.Sprint(val)
+			valStr = fmt.Sprint(v)
 		default:
-			// 列表或字典，转为 JSON 字符串
-			jb, _ := json.Marshal(val)
+			jb, _ := json.Marshal(v)
 			valStr = string(jb)
 		}
 		ctx.SetResult(k, valStr)
 	}
 
-	// 2. 处理 Secrets (聚合到 secrets 命名空间)
-	if len(wf.Secrets) > 0 {
-		secretsMap := make(map[string]string)
-		for k, v := range wf.Secrets {
-			var realValue string
-			// 复用 secret 节点的解析逻辑
-			if len(v) > 4 && v[:4] == "env." {
-				realValue = os.Getenv(v[4:])
-			} else if len(v) > 7 && v[:6] == "{{env." && v[len(v)-2:] == "}}" {
-				realValue = os.Getenv(v[6 : len(v)-2])
-			} else {
-				realValue = v
-			}
+	// 2. 处理 Secrets
+	// 策略：所有密钥必须在顶层声明，如果 inputs 传了则用 inputs，否则按声明加载
+	secretsMap := make(map[string]string)
+	for k, source := range wf.Secrets {
+		var realValue string
 
-			secretsMap[k] = realValue
-			if realValue != "" {
-				ctx.AddSecretValue(realValue)
+		// 2.1 优先检查外部注入 (Handoff 传进来的密钥)
+		if override, ok := inputs[k].(string); ok && override != "" {
+			realValue = override
+		} else {
+			// 2.2 按照声明的 source 加载 (env.XXX 或字面量)
+			if len(source) > 4 && source[:4] == "env." {
+				realValue = os.Getenv(source[4:])
+			} else if len(source) > 7 && source[:6] == "{{env." && source[len(source)-2:] == "}}" {
+				realValue = os.Getenv(source[6 : len(source)-2])
+			} else {
+				realValue = source
 			}
 		}
-		// 序列化并存入名为 "secrets" 的虚拟节点结果中
+
+		secretsMap[k] = realValue
+		if realValue != "" {
+			ctx.AddSecretValue(realValue)
+		}
+	}
+	
+	// 如果有定义 secrets，则注入命名空间
+	if len(wf.Secrets) > 0 {
 		jb, _ := json.Marshal(secretsMap)
 		ctx.SetResult("secrets", string(jb))
 	}
 }
 
 // Start 封装了工作流的合法起点启动逻辑
-func Start(wf *models.Workflow, ctx *models.ExecutionContext) {
-	// 0. 预加载全局数据
-	InitializeGlobals(wf, ctx)
+func Start(wf *models.Workflow, ctx *models.ExecutionContext, inputs map[string]interface{}) {
+	// 0. 预加载全局数据 (强契约模式)
+	InitializeGlobals(wf, ctx, inputs)
 
 	for id, node := range wf.Nodes {
 		// 只有 0 依赖，且不是任何节点的“失败分支”，才是合法的起点
