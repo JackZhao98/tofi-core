@@ -125,6 +125,8 @@ func GetAction(nodeType string) Action {
 		return &data.Var{}
 	case "secret":
 		return &data.Secret{}
+	case "mcp":
+		return &tasks.MCP{}
 	default:
 		return &base.Virtual{}
 	}
@@ -529,7 +531,7 @@ func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext, inputs
 	if d, ok := inputs["data"].(map[string]interface{}); ok {
 		inputData = d
 	}
-	
+
 	inputSecrets := make(map[string]interface{})
 	if s, ok := inputs["secrets"].(map[string]interface{}); ok {
 		inputSecrets = s
@@ -540,14 +542,14 @@ func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext, inputs
 		dataMap := make(map[string]interface{})
 		for k, defaultVal := range wf.Data {
 			var finalVal interface{} = defaultVal
-			
+
 			// 覆盖逻辑
 			if override, ok := inputData[k]; ok {
 				finalVal = override
 			}
 			dataMap[k] = finalVal
 		}
-		
+
 		// 序列化并存入名为 "data" 的虚拟节点结果中
 		jb, _ := json.Marshal(dataMap)
 		ctx.SetResult("data", string(jb))
@@ -578,7 +580,7 @@ func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext, inputs
 				ctx.AddSecretValue(realValue)
 			}
 		}
-		
+
 		jb, _ := json.Marshal(secretsMap)
 		ctx.SetResult("secrets", string(jb))
 	}

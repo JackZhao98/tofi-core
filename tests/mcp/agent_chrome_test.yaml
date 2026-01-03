@@ -1,0 +1,24 @@
+name: Agentic Chrome Verification
+data:
+  mcp_servers:
+    chrome:
+      command: "npx"
+      args: ["-y", "chrome-devtools-mcp@latest", "--autoConnect=true", "--browser-url=http://127.0.0.1:9222"]
+
+nodes:
+  secrets:
+    type: secret
+    config:
+      openai_key: "env.TOFI_OPENAI_API_KEY"
+
+  agent_search:
+    type: ai
+    dependencies: [secrets]
+    config:
+      provider: "openai"
+      endpoint: "https://api.openai.com/v1/chat/completions"
+      api_key: "{{secrets.openai_key}}" 
+      model: "gpt-4o"
+      mcp_servers: ["chrome"]
+      prompt: |
+         Please navigate to duckduckgo.com. Then search for Model Context Protocol. Return the result and link, summarize title in chinese

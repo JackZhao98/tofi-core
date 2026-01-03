@@ -94,6 +94,28 @@ func ParseWorkflowFromBytes(data []byte, format string) (*models.Workflow, error
 		node.ID = id
 	}
 
+	// 1.5 自动计算 Next (根据 Dependencies 反向填充 Next)
+	for currentID, node := range wf.Nodes {
+		for _, depID := range node.Dependencies {
+			parentNode, ok := wf.Nodes[depID]
+			if !ok {
+				return nil, fmt.Errorf("node '%s' depends on non-existent node '%s'", currentID, depID)
+			}
+
+			// 检查是否已存在
+			exists := false
+			for _, next := range parentNode.Next {
+				if next == currentID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				parentNode.Next = append(parentNode.Next, currentID)
+			}
+		}
+	}
+
 	// 2. 自动计算依赖 (根据 Next 反向填充 Dependencies)
 	for currentID, node := range wf.Nodes {
 		for _, nextID := range node.Next {
