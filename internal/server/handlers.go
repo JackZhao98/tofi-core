@@ -214,7 +214,21 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(runReq.Workflow, "name:") || strings.HasPrefix(runReq.Workflow, "{") {
 			wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Workflow), "yaml")
 		} else if runReq.Workflow != "" {
-			wf, err = parser.ResolveWorkflow(runReq.Workflow, "workflows")
+			// 1. 尝试从用户私有目录加载
+			userWorkflowDir := filepath.Join(s.config.HomeDir, user, "workflows")
+			wf, err = parser.ResolveWorkflow(runReq.Workflow, userWorkflowDir)
+			
+			// 2. 如果失败，尝试从系统公共目录加载
+			if err != nil {
+				// Fallback to system workflows
+				wfSys, errSys := parser.ResolveWorkflow(runReq.Workflow, "workflows")
+				if errSys == nil {
+					wf = wfSys
+					err = nil
+				}
+				// 如果系统也没找到，保留 err 为用户的错误（或者更具体的错误）
+			}
+
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to resolve workflow '%s': %v", runReq.Workflow, err), http.StatusBadRequest)
 				return
