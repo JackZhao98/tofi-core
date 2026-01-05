@@ -1,13 +1,13 @@
 package server
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"tofi-core/internal/crypto"
@@ -16,11 +16,14 @@ import (
 	"tofi-core/internal/parser"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
+// --- Request/Response Structs ---
+
 type RunRequest struct {
-	Workflow string                 `json:"workflow"` // 可以是 YAML 内容，也可以是 ID
-	Inputs   map[string]interface{} `json:"inputs"`   // 初始参数
+	Workflow string                 `json:"workflow"` // YAML content or Workflow ID
+	Inputs   map[string]interface{} `json:"inputs"`
 }
 
 type RunResponse struct {
@@ -29,169 +32,246 @@ type RunResponse struct {
 	Message     string `json:"message"`
 }
 
-func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "Execution ID is required", http.StatusBadRequest)
-		return
-	}
-
-	// 1. 优先尝试从内存中获取 (Active)
-	if ctx, ok := s.registry.Get(id); ok {
-		results, stats := ctx.Snapshot()
-		resp := models.ExecutionResult{
-			ExecutionID:  ctx.ExecutionID,
-			WorkflowName: ctx.WorkflowName,
-			Status:       "RUNNING",
-			StartTime:    time.Now(),
-			Duration:     "Running...",
-			Stats:        stats,
-			Outputs:      results,
-		}
-		if len(stats) > 0 {
-			resp.StartTime = stats[0].StartTime
-			resp.Duration = time.Since(stats[0].StartTime).String()
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	// 2. 尝试从数据库中获取 (Completed)
-	record, err := s.db.GetExecution(id)
-	if err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(record.ResultJSON))
-		return
-	}
-
-	http.Error(w, "Execution not found", http.StatusNotFound)
+type SetupRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
-func (s *Server) handleGetExecutionLogs(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "Execution ID is required", http.StatusBadRequest)
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type SaveWorkflowRequest struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+type WorkflowListItem struct {
+	Name      string    `json:"name"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type CreateSecretRequest struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type SecretResponse struct {
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+	Value     string `json:"value,omitempty"`
+}
+
+type SecretListResponse struct {
+	Secrets []SecretResponse `json:"secrets"`
+}
+
+// --- Auth Handlers ---
+
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	count, err := s.db.CountUsers()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"initialized": count > 0})
+}
+
+func (s *Server) handleSetupAdmin(w http.ResponseWriter, r *http.Request) {
+	count, _ := s.db.CountUsers()
+	if count > 0 {
+		http.Error(w, "System already initialized", http.StatusForbidden)
 		return
 	}
 
-	logs, err := s.db.GetLogs(id)
+	var req SetupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to fetch logs: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	id := uuid.New().String()
+	if err := s.db.SaveUser(id, req.Username, string(hash), "admin"); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprint(w, "Admin created successfully")
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	user, err := s.db.GetUser(req.Username)
+	if err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	token, err := GenerateToken(user.Username)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logs)
+	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
-func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "Execution ID is required", http.StatusBadRequest)
-		return
-	}
-
-	user := "anonymous"
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
-	}
-
-	artDir := filepath.Join(s.config.HomeDir, user, "artifacts", id)
-	if _, err := os.Stat(artDir); os.IsNotExist(err) {
-		json.NewEncoder(w).Encode([]string{})
-		return
-	}
-
-	files, err := os.ReadDir(artDir)
+func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	u, err := s.db.GetUser(user)
 	if err != nil {
-		http.Error(w, "Failed to read artifacts", http.StatusInternalServerError)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"username": u.Username,
+		"role":     u.Role,
+	})
+}
+
+// --- Workflow Handlers ---
+
+func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	dir := filepath.Join(s.config.HomeDir, user, "workflows")
+	
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]WorkflowListItem{})
 		return
 	}
 
-	var artifactNames []string
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		http.Error(w, "Failed to read workflows", http.StatusInternalServerError)
+		return
+	}
+
+	items := []WorkflowListItem{}
 	for _, f := range files {
-		if !f.IsDir() {
-			artifactNames = append(artifactNames, f.Name())
+		if !f.IsDir() && (strings.HasSuffix(f.Name(), ".yaml") || strings.HasSuffix(f.Name(), ".yml")) {
+			info, _ := f.Info()
+			items = append(items, WorkflowListItem{
+				Name:      strings.TrimSuffix(f.Name(), filepath.Ext(f.Name())),
+				UpdatedAt: info.ModTime(),
+			})
 		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	name := r.PathValue("name")
+	
+	path := filepath.Join(s.config.HomeDir, user, "workflows", name+".yaml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "Workflow not found", http.StatusNotFound)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(artifactNames)
+	json.NewEncoder(w).Encode(map[string]string{
+		"name":    name,
+		"content": string(content),
+	})
 }
 
-func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	filename := r.PathValue("filename")
-	if id == "" || filename == "" {
-		http.Error(w, "Execution ID and filename are required", http.StatusBadRequest)
+func (s *Server) handleSaveWorkflow(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	var req SaveWorkflowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	user := "anonymous"
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
-	}
-
-	safeFilename := filepath.Base(filename)
-	filePath := filepath.Join(s.config.HomeDir, user, "artifacts", id, safeFilename)
-
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		http.Error(w, "Artifact not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", safeFilename))
-	http.ServeFile(w, r, filePath)
-}
-
-func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "Execution ID is required", http.StatusBadRequest)
-		return
-	}
-
-	var user string
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
-	} else {
-		user = "anonymous"
-	}
-
-	r.ParseMultipartForm(32 << 20)
-	file, handler, err := r.FormFile("file")
+	wf, err := parser.ParseWorkflowFromBytes([]byte(req.Content), "yaml")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get file: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid YAML: %v", err), http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
 
-	uploadDir := filepath.Join(s.config.HomeDir, user, "uploads", id)
-	os.MkdirAll(uploadDir, 0755)
-
-	destPath := filepath.Join(uploadDir, filepath.Base(handler.Filename))
-	dest, err := os.Create(destPath)
-	if err != nil {
-		http.Error(w, "Failed to create destination file", http.StatusInternalServerError)
+	if err := engine.ValidateAll(wf); err != nil {
+		http.Error(w, fmt.Sprintf("Workflow validation failed: %v", err), http.StatusBadRequest)
 		return
 	}
-	defer dest.Close()
 
-	if _, err := io.Copy(dest, file); err != nil {
+	dir := filepath.Join(s.config.HomeDir, user, "workflows")
+	os.MkdirAll(dir, 0755)
+
+	path := filepath.Join(dir, req.Name+".yaml")
+	if err := os.WriteFile(path, []byte(req.Content), 0644); err != nil {
 		http.Error(w, "Failed to save file", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Workflow saved successfully")
+}
+
+func (s *Server) handleValidateWorkflow(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	wf, err := parser.ParseWorkflowFromBytes([]byte(req.Content), "yaml")
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Invalid YAML: %v", err)})
+		return
+	}
+
+	if err := engine.ValidateAll(wf); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Validation failed: %v", err)})
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Successfully uploaded %s", handler.Filename)
+	fmt.Fprint(w, "Valid")
 }
+
+func (s *Server) handleDeleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	name := r.PathValue("name")
+	path := filepath.Join(s.config.HomeDir, user, "workflows", name+".yaml")
+	if err := os.Remove(path); err != nil {
+		http.Error(w, "Failed to delete workflow", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Execution Handlers ---
 
 func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -199,7 +279,6 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 0. 获取当前用户
 	var user string
 	if u, ok := r.Context().Value(UserContextKey).(string); ok {
 		user = u
@@ -222,21 +301,15 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(runReq.Workflow, "name:") || strings.HasPrefix(runReq.Workflow, "{") {
 			wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Workflow), "yaml")
 		} else if runReq.Workflow != "" {
-			// 1. 尝试从用户私有目录加载
 			userWorkflowDir := filepath.Join(s.config.HomeDir, user, "workflows")
 			wf, err = parser.ResolveWorkflow(runReq.Workflow, userWorkflowDir)
-			
-			// 2. 如果失败，尝试从系统公共目录加载
 			if err != nil {
-				// Fallback to system workflows
 				wfSys, errSys := parser.ResolveWorkflow(runReq.Workflow, "workflows")
 				if errSys == nil {
 					wf = wfSys
 					err = nil
 				}
-				// 如果系统也没找到，保留 err 为用户的错误（或者更具体的错误）
 			}
-
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to resolve workflow '%s': %v", runReq.Workflow, err), http.StatusBadRequest)
 				return
@@ -264,9 +337,6 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	ctx.SetWorkflowName(wf.Name)
 	ctx.DB = s.db
 
-	// [REMOVED] Per-execution log file is no longer needed as logs go to DB and system rotating log.
-
-	// 提交到工作池
 	job := &WorkflowJob{
 		ExecutionID:   execID,
 		Workflow:      wf,
@@ -280,194 +350,204 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := RunResponse{
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(RunResponse{
 		ExecutionID: execID,
 		Status:      "queued",
 		Message:     "Workflow execution queued successfully",
+	})
+}
+
+func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
 	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 
+	records, err := s.db.ListExecutions(user, limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(records)
 }
 
-// Secret 管理相关的请求/响应结构
-
-type CreateSecretRequest struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-type SecretResponse struct {
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at,omitempty"`
-	UpdatedAt string `json:"updated_at,omitempty"`
-	Value     string `json:"value,omitempty"` // 仅在 Get 时返回
-}
-
-type SecretListResponse struct {
-	Secrets []SecretResponse `json:"secrets"`
-}
-
-// handleCreateSecret 创建或更新一个 Secret
-func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Execution ID is required", http.StatusBadRequest)
 		return
 	}
 
-	// 获取用户
-	user := "anonymous"
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
+	if ctx, ok := s.registry.Get(id); ok {
+		results, stats := ctx.Snapshot()
+		resp := models.ExecutionResult{
+			ExecutionID:  ctx.ExecutionID,
+			WorkflowName: ctx.WorkflowName,
+			Status:       "RUNNING",
+			Outputs:      results,
+			Stats:        stats,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
 	}
 
-	// 解析请求
+	record, err := s.db.GetExecution(id)
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(record.ResultJSON))
+		return
+	}
+	http.Error(w, "Execution not found", http.StatusNotFound)
+}
+
+func (s *Server) handleGetExecutionLogs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Execution ID is required", http.StatusBadRequest)
+		return
+	}
+	logs, err := s.db.GetLogs(id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to fetch logs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(logs)
+}
+
+// --- Artifact Handlers ---
+
+func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	user := r.Context().Value(UserContextKey).(string)
+	
+	// We need to know the workflow name to find the artifact dir
+	record, err := s.db.GetExecution(id)
+	if err != nil {
+		http.Error(w, "Execution not found", http.StatusNotFound)
+		return
+	}
+
+	artDir := filepath.Join(s.config.HomeDir, user, "artifacts", models.NormalizeID(record.WorkflowName))
+	if _, err := os.Stat(artDir); os.IsNotExist(err) {
+		json.NewEncoder(w).Encode([]string{})
+		return
+	}
+
+	files, err := os.ReadDir(artDir)
+	if err != nil {
+		http.Error(w, "Failed to read artifacts", http.StatusInternalServerError)
+		return
+	}
+
+	names := []string{}
+	for _, f := range files {
+		if !f.IsDir() {
+			names = append(names, f.Name())
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(names)
+}
+
+func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	filename := r.PathValue("filename")
+	user := r.Context().Value(UserContextKey).(string)
+
+	record, err := s.db.GetExecution(id)
+	if err != nil {
+		http.Error(w, "Execution not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(s.config.HomeDir, user, "artifacts", models.NormalizeID(record.WorkflowName), filepath.Base(filename))
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "Artifact not found", http.StatusNotFound)
+		return
+	}
+	http.ServeFile(w, r, filePath)
+}
+
+func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	user := r.Context().Value(UserContextKey).(string)
+
+	r.ParseMultipartForm(32 << 20)
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Failed to get file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	uploadDir := filepath.Join(s.config.HomeDir, user, "uploads", id)
+	os.MkdirAll(uploadDir, 0755)
+
+	dest, err := os.Create(filepath.Join(uploadDir, filepath.Base(handler.Filename)))
+	if err != nil {
+		http.Error(w, "Failed to create file", http.StatusInternalServerError)
+		return
+	}
+	defer dest.Close()
+	io.Copy(dest, file)
+	w.WriteHeader(http.StatusOK)
+}
+
+// --- Secret Handlers ---
+
+func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
 	var req CreateSecretRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to parse request: %v", err), http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	// 验证参数
-	if req.Name == "" || req.Value == "" {
-		http.Error(w, "Name and value are required", http.StatusBadRequest)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	// 加密 Secret
-	encryptedValue, err := crypto.Encrypt(req.Value)
+	val, err := crypto.Encrypt(req.Value)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to encrypt secret: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Encryption failed", http.StatusInternalServerError)
 		return
 	}
 
-	// 生成 ID
-	id := uuid.New().String()
-
-	// 保存到数据库
-	if err := s.db.SaveSecret(id, user, req.Name, encryptedValue); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save secret: %v", err), http.StatusInternalServerError)
+	if err := s.db.SaveSecret(uuid.New().String(), user, req.Name, val); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// 返回成功响应
-	resp := SecretResponse{
-		Name: req.Name,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
 }
 
-// handleGetSecret 获取指定的 Secret（解密后）
 func (s *Server) handleGetSecret(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
 	name := r.PathValue("name")
-	if name == "" {
-		http.Error(w, "Secret name is required", http.StatusBadRequest)
-		return
-	}
-
-	// 获取用户
-	user := "anonymous"
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
-	}
-
-	// 从数据库获取
 	record, err := s.db.GetSecret(user, name)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Secret not found", http.StatusNotFound)
-		} else {
-			http.Error(w, fmt.Sprintf("Failed to get secret: %v", err), http.StatusInternalServerError)
-		}
+		http.Error(w, "Secret not found", http.StatusNotFound)
 		return
 	}
-
-	// 解密
-	decryptedValue, err := crypto.Decrypt(record.EncryptedValue)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to decrypt secret: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// 返回响应
-	resp := SecretResponse{
-		Name:      record.Name,
-		Value:     decryptedValue,
-		CreatedAt: record.CreatedAt.String,
-		UpdatedAt: record.UpdatedAt.String,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	val, _ := crypto.Decrypt(record.EncryptedValue)
+	json.NewEncoder(w).Encode(SecretResponse{Name: record.Name, Value: val})
 }
 
-// handleListSecrets 列出用户的所有 Secrets（不包含值）
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
-	// 获取用户
-	user := "anonymous"
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
+	user := r.Context().Value(UserContextKey).(string)
+	records, _ := s.db.ListSecrets(user)
+	resp := []SecretResponse{}
+	for _, r := range records {
+		resp = append(resp, SecretResponse{Name: r.Name, CreatedAt: r.CreatedAt.String})
 	}
-
-	// 从数据库获取列表
-	records, err := s.db.ListSecrets(user)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to list secrets: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// 构建响应
-	secrets := make([]SecretResponse, 0, len(records))
-	for _, record := range records {
-		secrets = append(secrets, SecretResponse{
-			Name:      record.Name,
-			CreatedAt: record.CreatedAt.String,
-			UpdatedAt: record.UpdatedAt.String,
-		})
-	}
-
-	resp := SecretListResponse{
-		Secrets: secrets,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(SecretListResponse{Secrets: resp})
 }
 
-// handleDeleteSecret 删除指定的 Secret
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+	user := r.Context().Value(UserContextKey).(string)
 	name := r.PathValue("name")
-	if name == "" {
-		http.Error(w, "Secret name is required", http.StatusBadRequest)
-		return
-	}
-
-	// 获取用户
-	user := "anonymous"
-	if u, ok := r.Context().Value(UserContextKey).(string); ok {
-		user = u
-	}
-
-	// 从数据库删除
-	if err := s.db.DeleteSecret(user, name); err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Secret not found", http.StatusNotFound)
-		} else {
-			http.Error(w, fmt.Sprintf("Failed to delete secret: %v", err), http.StatusInternalServerError)
-		}
-		return
-	}
-
-	// 返回成功响应
+	s.db.DeleteSecret(user, name)
 	w.WriteHeader(http.StatusNoContent)
 }

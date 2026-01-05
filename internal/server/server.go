@@ -77,14 +77,26 @@ func (s *Server) Start() error {
 	// 公开路由
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats) // 工作池统计
+	mux.HandleFunc("GET /api/v1/auth/setup_status", s.handleSetupStatus)
+	mux.HandleFunc("POST /api/v1/auth/setup", s.handleSetupAdmin)
+	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 
 	// 受保护的 API 路由 (包裹 AuthMiddleware)
+	mux.HandleFunc("GET /api/v1/auth/me", s.AuthMiddleware(s.handleGetMe))
 	mux.HandleFunc("POST /api/v1/run", s.AuthMiddleware(s.handleRunWorkflow))
+	mux.HandleFunc("GET /api/v1/executions", s.AuthMiddleware(s.handleListExecutions))
 	mux.HandleFunc("GET /api/v1/executions/{id}", s.AuthMiddleware(s.handleGetExecution))
 	mux.HandleFunc("GET /api/v1/executions/{id}/logs", s.AuthMiddleware(s.handleGetExecutionLogs))
 	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts", s.AuthMiddleware(s.handleListArtifacts))
 	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.AuthMiddleware(s.handleDownloadArtifact))
 	mux.HandleFunc("POST /api/v1/executions/{id}/uploads", s.AuthMiddleware(s.handleUploadFile))
+
+	// Workflow 管理路由
+	mux.HandleFunc("GET /api/v1/workflows", s.AuthMiddleware(s.handleListWorkflows))
+	mux.HandleFunc("GET /api/v1/workflows/{name}", s.AuthMiddleware(s.handleGetWorkflow))
+	mux.HandleFunc("POST /api/v1/workflows", s.AuthMiddleware(s.handleSaveWorkflow))
+	mux.HandleFunc("POST /api/v1/workflows/validate", s.AuthMiddleware(s.handleValidateWorkflow))
+	mux.HandleFunc("DELETE /api/v1/workflows/{name}", s.AuthMiddleware(s.handleDeleteWorkflow))
 
 	// Secret 管理路由
 	mux.HandleFunc("POST /api/v1/secrets", s.AuthMiddleware(s.handleCreateSecret))

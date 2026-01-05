@@ -18,6 +18,14 @@ type ExecutionRecord struct {
 	CreatedAt    sql.NullString
 }
 
+type UserRecord struct {
+	ID           string
+	Username     string
+	PasswordHash string
+	Role         string // admin, user
+	CreatedAt    sql.NullString
+}
+
 type SecretRecord struct {
 	ID             string
 	User           string
@@ -35,6 +43,19 @@ func InitDB(homeDir string) (*DB, error) {
 	dbPath := filepath.Join(homeDir, "tofi.db")
 	conn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
+		return nil, err
+	}
+
+	// 创建 users 表
+	userQuery := `
+	CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		username TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		role TEXT DEFAULT 'user',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := conn.Exec(userQuery); err != nil {
 		return nil, err
 	}
 
@@ -86,7 +107,30 @@ func InitDB(homeDir string) (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
-// ... (existing code) ...
+// User Management
+
+func (db *DB) SaveUser(id, username, passwordHash, role string) error {
+	query := `INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, username, passwordHash, role)
+	return err
+}
+
+func (db *DB) GetUser(username string) (*UserRecord, error) {
+	query := `SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?`
+	row := db.conn.QueryRow(query, username)
+	var u UserRecord
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (db *DB) CountUsers() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	return count, err
+}
 
 // AddLog 插入一条结构化日志
 func (db *DB) AddLog(execID, nodeID, logType, content string) error {
@@ -143,6 +187,25 @@ func (db *DB) GetExecution(id string) (*ExecutionRecord, error) {
 		return nil, err
 	}
 	return &r, nil
+}
+
+func (db *DB) ListExecutions(user string, limit, offset int) ([]*ExecutionRecord, error) {
+	query := `SELECT id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE user = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	rows, err := db.conn.Query(query, user, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*ExecutionRecord
+	for rows.Next() {
+		var r ExecutionRecord
+		if err := rows.Scan(&r.ID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
+			continue
+		}
+		records = append(records, &r)
+	}
+	return records, nil
 }
 
 func (db *DB) ListRunningExecutions() ([]*ExecutionRecord, error) {
