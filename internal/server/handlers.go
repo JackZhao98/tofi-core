@@ -43,13 +43,19 @@ type LoginRequest struct {
 }
 
 type SaveWorkflowRequest struct {
-	Name    string `json:"name"`
-	Content string `json:"content"`
+	Name     string `json:"name"`
+	Content  string `json:"content"`
+	Metadata struct {
+		Description string `json:"description"`
+		Icon        string `json:"icon"`
+	} `json:"metadata"`
 }
 
 type WorkflowListItem struct {
-	Name      string    `json:"name"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Icon        string    `json:"icon"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type CreateSecretRequest struct {
@@ -173,9 +179,24 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	for _, f := range files {
 		if !f.IsDir() && (strings.HasSuffix(f.Name(), ".yaml") || strings.HasSuffix(f.Name(), ".yml")) {
 			info, _ := f.Info()
+			name := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
+			
+			// Try to read sidecar metadata from {name}.json
+			metaPath := filepath.Join(dir, name+".json")
+			var meta struct {
+				Description string `json:"description"`
+				Icon        string `json:"icon"`
+			}
+			
+			if mData, err := os.ReadFile(metaPath); err == nil {
+				_ = json.Unmarshal(mData, &meta)
+			}
+
 			items = append(items, WorkflowListItem{
-				Name:      strings.TrimSuffix(f.Name(), filepath.Ext(f.Name())),
-				UpdatedAt: info.ModTime(),
+				Name:        name,
+				Description: meta.Description,
+				Icon:        meta.Icon,
+				UpdatedAt:   info.ModTime(),
 			})
 		}
 	}
@@ -209,9 +230,15 @@ func (s *Server) handleSaveWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wf, err := parser.ParseWorkflowFromBytes([]byte(req.Content), "yaml")
+	// Detect format
+	format := "yaml"
+	if strings.HasPrefix(strings.TrimSpace(req.Content), "{") {
+		format = "json"
+	}
+
+	wf, err := parser.ParseWorkflowFromBytes([]byte(req.Content), format)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid YAML: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid workflow content (%s): %v", format, err), http.StatusBadRequest)
 		return
 	}
 
@@ -225,9 +252,15 @@ func (s *Server) handleSaveWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	path := filepath.Join(dir, req.Name+".yaml")
 	if err := os.WriteFile(path, []byte(req.Content), 0644); err != nil {
-		http.Error(w, "Failed to save file", http.StatusInternalServerError)
+		http.Error(w, "Failed to save workflow file", http.StatusInternalServerError)
 		return
 	}
+
+	// Save Sidecar Metadata
+	metaPath := filepath.Join(dir, req.Name+".json")
+	metaData, _ := json.MarshalIndent(req.Metadata, "", "  ")
+	_ = os.WriteFile(metaPath, metaData, 0644)
+
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "Workflow saved successfully")
 }
@@ -299,7 +332,12 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	var runReq RunRequest
 	if err := json.Unmarshal(body, &runReq); err == nil && (runReq.Workflow != "" || len(runReq.Inputs) > 0) {
 		if strings.HasPrefix(runReq.Workflow, "name:") || strings.HasPrefix(runReq.Workflow, "{") {
-			wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Workflow), "yaml")
+			// Detect format
+			format := "yaml"
+			if strings.HasPrefix(strings.TrimSpace(runReq.Workflow), "{") {
+				format = "json"
+			}
+			wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Workflow), format)
 		} else if runReq.Workflow != "" {
 			userWorkflowDir := filepath.Join(s.config.HomeDir, user, "workflows")
 			wf, err = parser.ResolveWorkflow(runReq.Workflow, userWorkflowDir)

@@ -92,11 +92,13 @@ func NormalizeID(name string) string {
 }
 
 type Workflow struct {
-	Name    string                 `json:"name" yaml:"name"`
-	Data    map[string]interface{} `json:"data" yaml:"data"`
-	Secrets map[string]string      `json:"secrets" yaml:"secrets"`
-	Nodes   map[string]*Node       `json:"nodes" yaml:"nodes"`
-	Timeout int                    `json:"timeout" yaml:"timeout"` // 全局工作流超时（秒）
+	Name        string                 `json:"name" yaml:"name"`
+	Description string                 `json:"description" yaml:"description"`
+	Icon        string                 `json:"icon" yaml:"icon"`
+	Data        map[string]interface{} `json:"data" yaml:"data"`
+	Secrets     map[string]string      `json:"secrets" yaml:"secrets"`
+	Nodes       map[string]*Node       `json:"nodes" yaml:"nodes"`
+	Timeout     int                    `json:"timeout" yaml:"timeout"` // 全局工作流超时（秒）
 }
 
 type ExecutionPaths struct {
