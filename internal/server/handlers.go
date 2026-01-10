@@ -43,6 +43,8 @@ type LoginRequest struct {
 }
 
 type SaveWorkflowRequest struct {
+	ID       string `json:"id,omitempty"`       // Optional custom ID, if empty will be generated from Name
+	OldID    string `json:"old_id,omitempty"`   // If renaming, provide old ID to delete old files
 	Name     string `json:"name"`
 	Content  string `json:"content"`
 	Metadata struct {
@@ -84,10 +86,10 @@ func generateWorkflowID(displayName string) string {
 	id := strings.ToLower(displayName)
 	// Replace spaces with underscores
 	id = strings.ReplaceAll(id, " ", "_")
-	// Remove special characters (keep only alphanumeric and underscores)
+	// Remove special characters (keep only alphanumeric, underscores, and hyphens)
 	var result strings.Builder
 	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
 			result.WriteRune(r)
 		}
 	}
@@ -168,7 +170,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := GenerateToken(user.Username)
+	token, err := GenerateToken(user.Username, user.Role)
 	if err != nil {
 		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
 		return
@@ -301,15 +303,36 @@ func (s *Server) handleSaveWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate ID from Name (display name)
-	id := generateWorkflowID(req.Name)
-	if id == "" {
-		http.Error(w, "Workflow name cannot be empty", http.StatusBadRequest)
-		return
+	// Use custom ID if provided, otherwise generate from Name
+	var id string
+	if req.ID != "" {
+		// Validate and sanitize custom ID
+		id = generateWorkflowID(req.ID) // Sanitize the custom ID
+		if id == "" {
+			http.Error(w, "Workflow ID cannot be empty", http.StatusBadRequest)
+			return
+		}
+	} else {
+		id = generateWorkflowID(req.Name)
+		if id == "" {
+			http.Error(w, "Workflow name cannot be empty", http.StatusBadRequest)
+			return
+		}
 	}
 
 	dir := filepath.Join(s.config.HomeDir, user, "workflows")
 	os.MkdirAll(dir, 0755)
+
+	// If renaming (old_id provided and different from new id), delete old files
+	if req.OldID != "" && req.OldID != id {
+		oldId := generateWorkflowID(req.OldID)
+		if oldId != "" && oldId != id {
+			oldYamlPath := filepath.Join(dir, oldId+".yaml")
+			oldMetaPath := filepath.Join(dir, oldId+".json")
+			os.Remove(oldYamlPath)
+			os.Remove(oldMetaPath)
+		}
+	}
 
 	yamlPath := filepath.Join(dir, id+".yaml")
 	metaPath := filepath.Join(dir, id+".json")
