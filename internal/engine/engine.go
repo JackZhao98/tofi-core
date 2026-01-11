@@ -124,6 +124,8 @@ func GetAction(nodeType string) Action {
 		return &logic.Loop{}
 	case "var", "const":
 		return &data.Var{}
+	case "dict":
+		return &data.Dict{}
 	case "secret":
 		return &data.Secret{}
 	default:
@@ -387,6 +389,13 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 		}
 
 		// 第三阶段：Local Context -> Config
+		// Dict 节点的 fields 字段需要跳过模板替换，由 Dict.Execute 自己处理
+		var rawFields interface{}
+		if node.Type == "dict" {
+			rawFields = preprocessedConfig["fields"]
+			delete(preprocessedConfig, "fields")
+		}
+
 		resolvedConfig, err = models.ResolveConfig(preprocessedConfig, localContext, ctx)
 		if err != nil {
 			logger.Printf("%s[%s] [ERROR]   [%s] Config 解析失败: %v", prefix, ctx.ExecutionID, runtimeID, err)
@@ -395,6 +404,11 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 			SaveState(ctx)
 			triggerNext(wf, node, ctx)
 			return
+		}
+
+		// 恢复 Dict 的 fields 字段
+		if node.Type == "dict" && rawFields != nil {
+			resolvedConfig["fields"] = rawFields
 		}
 	}
 	// ------------------------------------
