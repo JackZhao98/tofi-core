@@ -1,6 +1,7 @@
 package server
 
 import (
+	"path/filepath"
 	"tofi-core/internal/engine"
 	"tofi-core/internal/parser"
 	"tofi-core/internal/pkg/logger"
@@ -35,11 +36,18 @@ func (s *Server) recoverZombiesWithPool() error {
 		}
 
 		// 2. 重新加载工作流定义
-		wf, err := parser.ResolveWorkflow(record.WorkflowName, "workflows")
+		workflowRef := record.WorkflowID
+		if workflowRef == "" {
+			workflowRef = record.WorkflowName
+		}
+		
+		userWorkflowDir := filepath.Join(s.config.HomeDir, record.User, "workflows")
+		wf, err := parser.ResolveWorkflow(workflowRef, userWorkflowDir)
 		if err != nil {
+			// 尝试回退到系统目录? (可选，暂时不用)
 			s.db.UpdateStatus(execID, "FAILED")
 			ctx.Log("恢复失败: 无法加载工作流定义 (%v)", err)
-			logger.Printf("❌ 任务 %s 恢复失败: %v", execID, err)
+			logger.Printf("❌ 任务 %s 恢复失败: %v (dir: %s)", execID, err, userWorkflowDir)
 			continue
 		}
 
