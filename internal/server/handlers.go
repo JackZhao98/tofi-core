@@ -23,8 +23,10 @@ import (
 // --- Request/Response Structs ---
 
 type RunRequest struct {
-	Workflow string                 `json:"workflow"` // YAML content or Workflow ID
-	Inputs   map[string]interface{} `json:"inputs"`
+	Workflow   string                 `json:"workflow"`              // Deprecated: use workflow_id or content
+	WorkflowID string                 `json:"workflow_id,omitempty"` // ID of saved workflow to run
+	Content    string                 `json:"content,omitempty"`     // YAML/JSON content for ephemeral run
+	Inputs     map[string]interface{} `json:"inputs"`
 }
 
 type RunResponse struct {
@@ -501,51 +503,74 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	var initialInputs map[string]interface{}
 
 	var runReq RunRequest
-	if err := json.Unmarshal(body, &runReq); err == nil && (runReq.Workflow != "" || len(runReq.Inputs) > 0) {
-		if strings.HasPrefix(runReq.Workflow, "name:") || strings.HasPrefix(runReq.Workflow, "id:") || strings.HasPrefix(runReq.Workflow, "{") {
-			// Detect format
-			format := "yaml"
-			if strings.HasPrefix(strings.TrimSpace(runReq.Workflow), "{") {
-				format = "json"
-			}
-			wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Workflow), format)
-		} else if runReq.Workflow != "" {
-			userWorkflowDir := filepath.Join(s.config.HomeDir, user, "workflows")
-			wf, err = parser.ResolveWorkflow(runReq.Workflow, userWorkflowDir)
-			if err != nil {
-				wfSys, errSys := parser.ResolveWorkflow(runReq.Workflow, "workflows")
-				if errSys == nil {
-					wf = wfSys
-					err = nil
-				}
-			}
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to resolve workflow '%s': %v", runReq.Workflow, err), http.StatusBadRequest)
-				return
-			}
-		}
-		initialInputs = runReq.Inputs
-	} else {
-		wf, err = parser.ParseWorkflowFromBytes(body, "yaml")
+	if err := json.Unmarshal(body, &runReq); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
 	}
 
-	if err != nil || wf == nil {
-		http.Error(w, fmt.Sprintf("Failed to parse workflow: %v", err), http.StatusBadRequest)
+	initialInputs = runReq.Inputs
+
+	// 兼容性逻辑：将旧的 Workflow 字段映射到新的 WorkflowID 或 Content
+	if runReq.Workflow != "" && runReq.WorkflowID == "" && runReq.Content == "" {
+		// 如果看起来像 YAML/JSON 内容，则是 Content
+		if strings.HasPrefix(runReq.Workflow, "name:") || strings.HasPrefix(runReq.Workflow, "id:") || strings.HasPrefix(runReq.Workflow, "{") {
+			runReq.Content = runReq.Workflow
+		} else {
+			// 否则假定为 ID
+			runReq.WorkflowID = runReq.Workflow
+		}
+	}
+
+	if runReq.WorkflowID != "" {
+		// Case 1: 按 ID 运行已保存的工作流
+		userWorkflowDir := filepath.Join(s.config.HomeDir, user, "workflows")
+		wf, err = parser.ResolveWorkflow(runReq.WorkflowID, userWorkflowDir)
+		if err != nil {
+			// 尝试从系统目录加载 (Fallback)
+			wfSys, errSys := parser.ResolveWorkflow(runReq.WorkflowID, "workflows")
+			if errSys == nil {
+				wf = wfSys
+				err = nil
+			}
+		}
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to resolve workflow ID '%s': %v", runReq.WorkflowID, err), http.StatusBadRequest)
+			return
+		}
+		// 确保 ID 一致
+		if wf.ID == "" {
+			wf.ID = runReq.WorkflowID
+		}
+
+	} else if runReq.Content != "" {
+		// Case 2: 运行临时内容 (Test Run)
+		format := "yaml"
+		if strings.HasPrefix(strings.TrimSpace(runReq.Content), "{") {
+			format = "json"
+		}
+		wf, err = parser.ParseWorkflowFromBytes([]byte(runReq.Content), format)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to parse workflow content: %v", err), http.StatusBadRequest)
+			return
+		}
+		// 临时任务如果没有 ID，生成一个临时的
+		if wf.ID == "" {
+			wf.ID = models.NormalizeID(wf.Name) + "_ephemeral"
+		}
+
+	} else if len(runReq.Inputs) == 0 { // Allow inputs-only run if we supported that context, but here we need a workflow
+		http.Error(w, "Request must provide workflow_id or content", http.StatusBadRequest)
+		return
+	}
+
+	if wf == nil {
+		http.Error(w, "Failed to load workflow definition", http.StatusInternalServerError)
 		return
 	}
 
 	if err := engine.ValidateAll(wf); err != nil {
 		http.Error(w, fmt.Sprintf("Workflow validation failed: %v", err), http.StatusBadRequest)
 		return
-	}
-
-	// Ensure Workflow ID is set for recovery
-	if wf.ID == "" {
-		if !strings.Contains(runReq.Workflow, "\n") && !strings.HasPrefix(runReq.Workflow, "{") {
-			wf.ID = runReq.Workflow
-		} else {
-			wf.ID = models.NormalizeID(wf.Name)
-		}
 	}
 
 	// CLEANUP: Cancel any existing running instances of this workflow
