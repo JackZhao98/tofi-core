@@ -124,6 +124,8 @@ func GetAction(nodeType string) Action {
 		return &logic.Loop{}
 	case "var", "const":
 		return &data.Var{}
+	case "dict":
+		return &data.Dict{}
 	case "secret":
 		return &data.Secret{}
 	default:
@@ -387,6 +389,13 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 		}
 
 		// 第三阶段：Local Context -> Config
+		// Dict 节点的 fields 字段需要跳过模板替换，由 Dict.Execute 自己处理
+		var rawFields interface{}
+		if node.Type == "dict" {
+			rawFields = preprocessedConfig["fields"]
+			delete(preprocessedConfig, "fields")
+		}
+
 		resolvedConfig, err = models.ResolveConfig(preprocessedConfig, localContext, ctx)
 		if err != nil {
 			logger.Printf("%s[%s] [ERROR]   [%s] Config 解析失败: %v", prefix, ctx.ExecutionID, runtimeID, err)
@@ -395,6 +404,11 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 			SaveState(ctx)
 			triggerNext(wf, node, ctx)
 			return
+		}
+
+		// 恢复 Dict 的 fields 字段
+		if node.Type == "dict" && rawFields != nil {
+			resolvedConfig["fields"] = rawFields
 		}
 	}
 	// ------------------------------------
@@ -569,6 +583,41 @@ func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext, inputs
 					realValue = os.Getenv(source[4:])
 				} else if len(source) > 7 && source[:6] == "{{env." && source[len(source)-2:] == "}}" {
 					realValue = os.Getenv(source[6 : len(source)-2])
+				} else if len(source) > 4 && source[:4] == "ref:" {
+					// 2.3 从数据库加载 Secret (ref:SECRET_NAME 语法)
+					secretName := source[4:]
+					if ctx.DB != nil {
+						if db, ok := ctx.DB.(*storage.DB); ok {
+							record, err := db.GetSecret(ctx.User, secretName)
+							if err != nil {
+								if err == sql.ErrNoRows {
+									logger.Printf("[%s] [WARN] Secret '%s' not found for user '%s', using empty value",
+										ctx.ExecutionID, secretName, ctx.User)
+									realValue = ""
+								} else {
+									logger.Printf("[%s] [ERROR] Failed to get secret '%s': %v",
+										ctx.ExecutionID, secretName, err)
+									realValue = ""
+								}
+							} else {
+								// 解密 Secret
+								decrypted, err := crypto.Decrypt(record.EncryptedValue)
+								if err != nil {
+									logger.Printf("[%s] [ERROR] Failed to decrypt secret '%s': %v",
+										ctx.ExecutionID, secretName, err)
+									realValue = ""
+								} else {
+									realValue = decrypted
+								}
+							}
+						} else {
+							logger.Printf("[%s] [WARN] DB not available for secret resolution", ctx.ExecutionID)
+							realValue = source
+						}
+					} else {
+						logger.Printf("[%s] [WARN] DB not available for secret resolution", ctx.ExecutionID)
+						realValue = source
+					}
 				} else {
 					realValue = source
 				}

@@ -2,15 +2,85 @@ package tasks
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/mcp"
 	"tofi-core/internal/models"
+	"tofi-core/internal/pkg/logger"
 
 	"github.com/tidwall/gjson"
 )
 
+// resolveAPIKey 解析 API Key，支持系统 key 模式
+// 当 use_system_key 为 true 时，根据 provider 从环境变量加载对应的 API key
+func resolveAPIKey(config map[string]interface{}, provider string, ctx *models.ExecutionContext) (string, error) {
+	// 检查是否使用系统 key
+	useSystemKey, _ := config["use_system_key"].(bool)
+
+	if useSystemKey {
+		// TODO: 检查用户是否是 paid 用户
+		// 目前测试阶段，所有用户都视为 paid
+		isPaidUser := true
+
+		if !isPaidUser {
+			return "", fmt.Errorf("system API key is only available for paid users")
+		}
+
+		// 根据 provider 加载对应的环境变量
+		var envKey string
+		switch provider {
+		case "openai":
+			envKey = "TOFI_OPENAI_API_KEY"
+		case "anthropic", "claude":
+			envKey = "TOFI_ANTHROPIC_API_KEY"
+		case "gemini":
+			envKey = "TOFI_GEMINI_API_KEY"
+		default:
+			envKey = "TOFI_OPENAI_API_KEY" // 默认使用 OpenAI
+		}
+
+		apiKey := os.Getenv(envKey)
+		if apiKey == "" {
+			return "", fmt.Errorf("system API key not configured (env: %s)", envKey)
+		}
+
+		logger.Printf("[%s] Using system API key for provider '%s'", ctx.ExecutionID, provider)
+		return apiKey, nil
+	}
+
+	// 使用用户自己的 key
+	return fmt.Sprint(config["api_key"]), nil
+}
+
 type AI struct{}
+
+// detectProviderFromModel infers the AI provider from the model name
+func detectProviderFromModel(model string) string {
+	modelLower := strings.ToLower(model)
+
+	// Claude models
+	if strings.HasPrefix(modelLower, "claude") {
+		return "claude"
+	}
+
+	// Gemini models
+	if strings.HasPrefix(modelLower, "gemini") {
+		return "gemini"
+	}
+
+	// OpenAI models (gpt-*, o1-*, o3-*, etc.)
+	if strings.HasPrefix(modelLower, "gpt-") ||
+	   strings.HasPrefix(modelLower, "o1-") ||
+	   strings.HasPrefix(modelLower, "o3-") ||
+	   strings.HasPrefix(modelLower, "text-") ||
+	   strings.HasPrefix(modelLower, "davinci") {
+		return "openai"
+	}
+
+	// Default to OpenAI for unknown models
+	return "openai"
+}
 
 func (a *AI) Execute(config map[string]interface{}, ctx *models.ExecutionContext) (string, error) {
 	// 1. Check for Agent Mode (MCP Servers)
@@ -20,32 +90,38 @@ func (a *AI) Execute(config map[string]interface{}, ctx *models.ExecutionContext
 
 	// 2. Standard Generation Mode
 
+	model := fmt.Sprint(config["model"])
+
+	// Auto-detect provider from model name if not explicitly set
 	provider := strings.ToLower(fmt.Sprint(config["provider"]))
+	if provider == "" || provider == "<nil>" {
+		provider = detectProviderFromModel(model)
+	}
 
 	var endpoint string
-
 	if ep, ok := config["endpoint"].(string); ok {
-
 		endpoint = ep
-
 	}
 
 	// Apply default endpoints if not specified
-
 	if endpoint == "" {
-
 		switch provider {
-		case "openai", "":
+		case "openai":
 			endpoint = "https://api.openai.com/v1"
-		case "anthropic":
+		case "anthropic", "claude":
 			endpoint = "https://api.anthropic.com/v1"
 		case "gemini":
 			endpoint = "https://generativelanguage.googleapis.com/v1beta"
+		default:
+			endpoint = "https://api.openai.com/v1" // Default to OpenAI
 		}
 	}
 
-	apiKey := fmt.Sprint(config["api_key"])
-	model := fmt.Sprint(config["model"])
+	// 解析 API Key（支持系统 key 模式）
+	apiKey, err := resolveAPIKey(config, provider, ctx)
+	if err != nil {
+		return "", err
+	}
 
 	system := fmt.Sprint(config["system"])
 	prompt := fmt.Sprint(config["prompt"])
@@ -210,13 +286,24 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 	}
 
-	agentCfg.AI.Provider = strings.ToLower(fmt.Sprint(config["provider"]))
+	model := fmt.Sprint(config["model"])
+	agentCfg.AI.Model = model
 
-	agentCfg.AI.Model = fmt.Sprint(config["model"])
+	// Auto-detect provider from model if not explicitly set
+	provider := strings.ToLower(fmt.Sprint(config["provider"]))
+	if provider == "" || provider == "<nil>" {
+		provider = detectProviderFromModel(model)
+	}
+	agentCfg.AI.Provider = provider
 
-	agentCfg.AI.APIKey = fmt.Sprint(config["api_key"])
+	// 解析 API Key（支持系统 key 模式）
+	apiKey, err := resolveAPIKey(config, provider, ctx)
+	if err != nil {
+		return "", err
+	}
+	agentCfg.AI.APIKey = apiKey
 
-	
+
 
 	// Handle BaseURL/Endpoint
 
@@ -227,10 +314,6 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 		endpoint = ep
 
 	}
-
-	provider := agentCfg.AI.Provider
-
-	model := agentCfg.AI.Model
 
 
 
@@ -301,19 +384,9 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 
 func (a *AI) Validate(n *models.Node) error {
-	provider, _ := n.Config["provider"].(string)
-	endpoint, hasEndpoint := n.Config["endpoint"]
-
-	// If endpoint is missing, check if provider is known
-	if !hasEndpoint || fmt.Sprint(endpoint) == "" {
-		knownProviders := map[string]bool{"openai": true, "anthropic": true, "gemini": true}
-		if !knownProviders[strings.ToLower(provider)] {
-			// If provider is also missing or unknown, then endpoint is required
-			return fmt.Errorf("config.endpoint is required for custom provider '%s'", provider)
-		}
-	}
-
-	if _, ok := n.Config["model"]; !ok {
+	// Only model is required - provider and endpoint are auto-detected
+	model, ok := n.Config["model"]
+	if !ok || fmt.Sprint(model) == "" {
 		return fmt.Errorf("config.model is required")
 	}
 	return nil
