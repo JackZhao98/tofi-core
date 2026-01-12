@@ -9,13 +9,14 @@ import (
 )
 
 type ExecutionRecord struct {
-	ID           string
-	WorkflowName string
-	User         string
-	Status       string
-	StateJSON    string // 中间状态
-	ResultJSON   string // 最终报告
-	CreatedAt    sql.NullString
+	ID           string         `json:"id"`
+	WorkflowID   string         `json:"workflow_id"`
+	WorkflowName string         `json:"workflow_name"`
+	User         string         `json:"user"`
+	Status       string         `json:"status"`
+	StateJSON    string         `json:"state_json"`
+	ResultJSON   string         `json:"result_json"`
+	CreatedAt    sql.NullString `json:"created_at"`
 }
 
 type UserRecord struct {
@@ -63,6 +64,7 @@ func InitDB(homeDir string) (*DB, error) {
 	query := `
 	CREATE TABLE IF NOT EXISTS executions (
 		id TEXT PRIMARY KEY,
+		workflow_id TEXT,
 		workflow_name TEXT,
 		user TEXT,
 		status TEXT,
@@ -73,6 +75,10 @@ func InitDB(homeDir string) (*DB, error) {
 	if _, err := conn.Exec(query); err != nil {
 		return nil, err
 	}
+	
+	// Migration: Ensure workflow_id exists
+	// We ignore error "duplicate column name"
+	conn.Exec("ALTER TABLE executions ADD COLUMN workflow_id TEXT")
 
 	// 创建 secrets 表
 	secretsQuery := `
@@ -171,7 +177,7 @@ func (db *DB) DeleteUser(id string) error {
 
 // Admin: ListAllExecutions 返回所有用户的执行记录
 func (db *DB) ListAllExecutions(limit, offset int) ([]*ExecutionRecord, error) {
-	query := `SELECT id, workflow_name, user, status, state_json, result_json, created_at FROM executions ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT id, workflow_id, workflow_name, user, status, state_json, result_json, created_at FROM executions ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	rows, err := db.conn.Query(query, limit, offset)
 	if err != nil {
 		return nil, err
@@ -181,7 +187,7 @@ func (db *DB) ListAllExecutions(limit, offset int) ([]*ExecutionRecord, error) {
 	var records []*ExecutionRecord
 	for rows.Next() {
 		var r ExecutionRecord
-		if err := rows.Scan(&r.ID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.WorkflowID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
 			continue
 		}
 		records = append(records, &r)
@@ -248,20 +254,20 @@ func (db *DB) Close() error {
 }
 
 // SaveExecution 既可以保存中间状态，也可以保存最终结果 (使用 REPLACE INTO)
-func (db *DB) SaveExecution(id, name, user, status, stateJSON, resultJSON string) error {
+func (db *DB) SaveExecution(id, workflowID, name, user, status, stateJSON, resultJSON string) error {
 	query := `
-	INSERT OR REPLACE INTO executions (id, workflow_name, user, status, state_json, result_json, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, (SELECT created_at FROM executions WHERE id = ? OR CURRENT_TIMESTAMP));`
+	INSERT OR REPLACE INTO executions (id, workflow_id, workflow_name, user, status, state_json, result_json, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT created_at FROM executions WHERE id = ? OR CURRENT_TIMESTAMP));`
 	
 	// 注意：SQLite 的 REPLACE 会导致 created_at 丢失，所以我们用一个小技巧保留它
-	_, err := db.conn.Exec(query, id, name, user, status, stateJSON, resultJSON, id)
+	_, err := db.conn.Exec(query, id, workflowID, name, user, status, stateJSON, resultJSON, id)
 	return err
 }
 
 func (db *DB) GetExecution(id string) (*ExecutionRecord, error) {
-	row := db.conn.QueryRow("SELECT id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE id = ?", id)
+	row := db.conn.QueryRow("SELECT id, workflow_id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE id = ?", id)
 	var r ExecutionRecord
-	err := row.Scan(&r.ID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt)
+	err := row.Scan(&r.ID, &r.WorkflowID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +275,7 @@ func (db *DB) GetExecution(id string) (*ExecutionRecord, error) {
 }
 
 func (db *DB) ListExecutions(user string, limit, offset int) ([]*ExecutionRecord, error) {
-	query := `SELECT id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE user = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT id, workflow_id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE user = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	rows, err := db.conn.Query(query, user, limit, offset)
 	if err != nil {
 		return nil, err
@@ -279,7 +285,7 @@ func (db *DB) ListExecutions(user string, limit, offset int) ([]*ExecutionRecord
 	var records []*ExecutionRecord
 	for rows.Next() {
 		var r ExecutionRecord
-		if err := rows.Scan(&r.ID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.WorkflowID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
 			continue
 		}
 		records = append(records, &r)
@@ -287,8 +293,14 @@ func (db *DB) ListExecutions(user string, limit, offset int) ([]*ExecutionRecord
 	return records, nil
 }
 
-func (db *DB) ListRunningExecutions() ([]*ExecutionRecord, error) {
-	rows, err := db.conn.Query("SELECT id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE status = 'RUNNING'")
+func (db *DB) ListExecutionsByWorkflow(user, workflowID string, limit int) ([]*ExecutionRecord, error) {
+	// Try matching by ID first, then Name (for backward compatibility or if ID is name)
+	query := `SELECT id, workflow_id, workflow_name, user, status, state_json, result_json, created_at 
+	          FROM executions 
+	          WHERE user = ? AND (workflow_id = ? OR workflow_name = ?) 
+	          ORDER BY created_at DESC LIMIT ?`
+	
+	rows, err := db.conn.Query(query, user, workflowID, workflowID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +309,33 @@ func (db *DB) ListRunningExecutions() ([]*ExecutionRecord, error) {
 	var records []*ExecutionRecord
 	for rows.Next() {
 		var r ExecutionRecord
-		if err := rows.Scan(&r.ID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.WorkflowID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
+			continue
+		}
+		records = append(records, &r)
+	}
+	return records, nil
+}
+
+// CancelRunningExecutions 将指定工作流的所有正在运行的任务标记为 CANCELLED
+func (db *DB) CancelRunningExecutions(user, workflowID string) error {
+	// Match by ID or Name to catch all variants
+	query := `UPDATE executions SET status = 'CANCELLED' WHERE user = ? AND (workflow_id = ? OR workflow_name = ?) AND status = 'RUNNING'`
+	_, err := db.conn.Exec(query, user, workflowID, workflowID)
+	return err
+}
+
+func (db *DB) ListRunningExecutions() ([]*ExecutionRecord, error) {
+	rows, err := db.conn.Query("SELECT id, workflow_id, workflow_name, user, status, state_json, result_json, created_at FROM executions WHERE status = 'RUNNING'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*ExecutionRecord
+	for rows.Next() {
+		var r ExecutionRecord
+		if err := rows.Scan(&r.ID, &r.WorkflowID, &r.WorkflowName, &r.User, &r.Status, &r.StateJSON, &r.ResultJSON, &r.CreatedAt); err != nil {
 			// 添加调试日志
 			log.Printf("⚠️  扫描执行记录失败: %v", err)
 			continue
