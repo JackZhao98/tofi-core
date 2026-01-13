@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -358,7 +359,7 @@ type ExecutionResult struct {
 	EndTime      time.Time         `json:"end_time"`
 	Duration     string            `json:"duration"`
 	Stats        []NodeStat        `json:"stats"`
-	Outputs      map[string]string `json:"outputs"`
+	Outputs      map[string]interface{} `json:"outputs"`
 }
 
 func (ctx *ExecutionContext) AddSecretValue(val string) {
@@ -391,15 +392,28 @@ func (ctx *ExecutionContext) Snapshot() (map[string]string, []NodeStat) {
 }
 
 // MaskedSnapshot 返回脱敏后的快照，用于 API 返回和数据库存储
-// 所有包含 secrets 的输出都会被替换为 ********
-func (ctx *ExecutionContext) MaskedSnapshot() (map[string]string, []NodeStat) {
+// 所有包含 secrets 的输出都会被替换为 ********，且尝试解析 JSON 字符串
+func (ctx *ExecutionContext) MaskedSnapshot() (map[string]interface{}, []NodeStat) {
 	ctx.mu.RLock()
 	defer ctx.mu.RUnlock()
 
-	results := make(map[string]string, len(ctx.Results))
+	results := make(map[string]interface{}, len(ctx.Results))
 	for k, v := range ctx.Results {
 		// 对每个输出进行脱敏
-		results[k] = ctx.maskString(v)
+		masked := ctx.maskString(v)
+		// 尝试智能解析 JSON
+		var obj interface{}
+		// 只有看起来像 JSON 对象或数组的才尝试解析，避免数字/布尔值的误判
+		if (strings.HasPrefix(masked, "{") && strings.HasSuffix(masked, "}")) || 
+		   (strings.HasPrefix(masked, "[") && strings.HasSuffix(masked, "]")) {
+			if err := json.Unmarshal([]byte(masked), &obj); err == nil {
+				results[k] = obj
+			} else {
+				results[k] = masked
+			}
+		} else {
+			results[k] = masked
+		}
 	}
 
 	stats := make([]NodeStat, len(ctx.Stats))

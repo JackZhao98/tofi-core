@@ -50,7 +50,13 @@ func LoadState(execID string, db *storage.DB, homeDir string) (*models.Execution
 	ctx.DB = db
 	
 	for k, v := range state.Outputs {
-		ctx.SetResult(k, v)
+		if s, ok := v.(string); ok {
+			ctx.SetResult(k, s)
+		} else {
+			// Marshal back to string for internal storage
+			jb, _ := json.Marshal(v)
+			ctx.SetResult(k, string(jb))
+		}
 	}
 	ctx.Stats = state.Stats
 	
