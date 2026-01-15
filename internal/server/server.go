@@ -110,6 +110,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.AuthMiddleware(s.handleDownloadArtifact))
 	mux.HandleFunc("POST /api/v1/executions/{id}/uploads", s.AuthMiddleware(s.handleUploadFile))
 	mux.HandleFunc("POST /api/v1/executions/{id}/nodes/{node_id}/approve", s.AuthMiddleware(s.handleApproveExecution))
+	mux.HandleFunc("POST /api/v1/executions/{id}/cancel", s.AuthMiddleware(s.handleCancelExecution))
 
 	// Workflow 管理路由
 	mux.HandleFunc("GET /api/v1/workflows", s.AuthMiddleware(s.handleListWorkflows))

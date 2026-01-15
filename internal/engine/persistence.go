@@ -73,12 +73,20 @@ func SaveReport(wf *models.Workflow, ctx *models.ExecutionContext, db *storage.D
 	// 使用脱敏后的快照
 	results, stats := ctx.MaskedSnapshot()
 
-	// 检测是否有节点失败
-	status := "COMPLETED"
-	for _, stat := range stats {
-		if stat.Status == "ERROR" {
-			status = "FAILED"
-			break
+	// 先检查当前数据库中的状态，如果已经是 CANCELLED，保持该状态
+	currentRecord, err := db.GetExecution(ctx.ExecutionID)
+	var status string
+	if err == nil && currentRecord.Status == "CANCELLED" {
+		// 已被用户取消，保持 CANCELLED 状态
+		status = "CANCELLED"
+	} else {
+		// 检测是否有节点失败
+		status = "COMPLETED"
+		for _, stat := range stats {
+			if stat.Status == "ERROR" {
+				status = "FAILED"
+				break
+			}
 		}
 	}
 

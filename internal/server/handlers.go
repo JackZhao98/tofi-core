@@ -711,6 +711,20 @@ func (s *Server) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 	http.Error(w, "Execution not found or not running", http.StatusNotFound)
 }
 
+func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if ctx, ok := s.registry.Get(id); ok {
+		ctx.Cancel() // 触发 Context 取消信号
+		s.db.UpdateStatus(id, "CANCELLED")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "Cancelled")
+		return
+	}
+
+	http.Error(w, "Execution not found or not running", http.StatusNotFound)
+}
+
 // --- Artifact Handlers ---
 
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {

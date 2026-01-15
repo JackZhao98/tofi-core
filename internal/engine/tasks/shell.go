@@ -34,7 +34,8 @@ func (s *Shell) Execute(config map[string]interface{}, ctx *models.ExecutionCont
 	// 在新规范下，这个约束依然有效，因为 Config 里的 script 应该已经是解析过的了。
 	// 但通常 Shell 的 script 我们建议在 Config 里直接写死，变量放在 Input/Env 中。
 
-	return executor.ExecuteShell(script, env, 60)
+	// 传递 ExecutionContext 的 context，以支持取消操作
+	return executor.ExecuteShell(ctx.Ctx, script, env, 60)
 }
 
 func (s *Shell) Validate(n *models.Node) error {
