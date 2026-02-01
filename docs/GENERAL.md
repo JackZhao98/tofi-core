@@ -370,8 +370,14 @@ build:
 Configurable concurrent execution limit:
 
 ```bash
-./tofi server -workers 10  # Max 10 concurrent workflows
+./tofi server -workers 10  # Max 10 concurrent workflows (default)
 ```
+
+**Defaults:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-workers` | 10 | Maximum concurrent workflows |
+| Queue buffer | 100 | Pending workflow capacity |
 
 Monitor via stats endpoint:
 ```bash

@@ -36,14 +36,19 @@ Every node follows this structure:
 Execute shell commands with environment variable injection.
 
 **Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `script` | string | Yes | Shell script to execute |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `script` | string | Yes | - | Shell script to execute |
 
 **Env:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `<KEY>` | string | No | Custom environment variables |
+
+**Node-level Options:**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout` | number | 30 | Execution timeout in seconds |
 
 **Magic Variables (auto-injected):**
 | Variable | Description |
@@ -51,7 +56,7 @@ Execute shell commands with environment variable injection.
 | `TOFI_ARTIFACTS_DIR` | Path to write output files |
 | `TOFI_EXECUTION_ID` | Current execution ID |
 
-**Output:** stdout of the script
+**Output:** stdout of the script (trimmed)
 
 **Example:**
 ```yaml
@@ -65,7 +70,7 @@ build_project:
       npm install
       npm run build
       echo "Build complete" > $TOFI_ARTIFACTS_DIR/build.log
-  timeout: 300
+  timeout: 300  # Override default 30s
   next: ["deploy"]
 ```
 
@@ -198,41 +203,56 @@ Call another workflow as a sub-process (handoff).
 **Config:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `file` | string | No | Path to workflow YAML file |
-| `uses` | string | No | Component reference (e.g., "tofi/ai_response@v2") |
+| `uses` | string | No* | Component reference (e.g., "tofi/ai_response@v2") |
+| `file` | string | No* | Path to workflow YAML file |
+| `workflow` | string | No* | Workflow ID (legacy) |
+| `action` | string | No* | Action name (legacy) |
+| `data` | object | No | Data payload to pass to sub-workflow |
+| `secrets` | object | No | Secrets payload to pass to sub-workflow |
 
-**Input:** Parameters passed to sub-workflow (accessible via `{{inputs.key}}`)
+*One of `uses`, `file`, `workflow`, or `action` is required.
 
-**Output:** Sub-workflow's final output
+**Constraints:**
+- Maximum recursion depth: **10** (prevents infinite loops)
 
-**Example:**
+**Output:** JSON object containing all sub-workflow node outputs
+
+**Example (File Path):**
 ```yaml
 call_processor:
   type: "workflow"
   config:
     file: "./processors/data_cleaner.yaml"
-  input:
-    - var:
-        id: "raw_data"
-        from: "{{fetch_data}}"
-    - var:
-        id: "output_format"
-        from: "json"
+    data:
+      raw_data: "{{fetch_data}}"
+      output_format: "json"
 ```
 
-**Example (Toolbox Component):**
+**Example (Toolbox Component with Versioning):**
 ```yaml
 send_telegram:
   type: "workflow"
   config:
-    uses: "tofi/telegram_notify"
+    uses: "tofi/telegram_notify@v2"
+    data:
+      message: "{{summary}}"
+    secrets:
+      bot_token: "{{secrets.telegram_token}}"
+```
+
+**Example (Using Input Syntax):**
+```yaml
+call_with_inputs:
+  type: "workflow"
+  config:
+    uses: "tofi/ai_response"
   input:
     - var:
-        id: "message"
-        from: "{{summary}}"
+        id: "prompt"
+        from: "{{user_question}}"
     - secret:
-        id: "bot_token"
-        from: "{{secrets.telegram_token}}"
+        id: "api_key"
+        from: "{{secrets.openai_key}}"
 ```
 
 ---
@@ -394,18 +414,23 @@ process_results:
 Simple value checking for boolean conditions.
 
 **Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mode` | string | Yes | Check mode |
-| `value` | string | Yes | Value to check |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | Yes | - | Check mode |
+| `value` | string | Yes | - | Value to check |
+| `output_bool` | string | No | - | If "true", output "true"/"false" instead of error |
 
 **Modes:**
 | Mode | Description |
 |------|-------------|
-| `is_true` | Value equals "true" (case-insensitive) |
-| `is_false` | Value equals "false" (case-insensitive) |
-| `is_empty` | Value is empty string or null |
+| `is_true` | Value equals "true" (case-insensitive) or "1" |
+| `is_false` | Value equals "false" (case-insensitive) or "0" |
+| `is_empty` | Value is empty or whitespace only |
 | `exists` | Value is not empty |
+
+**Output:**
+- On match: "CHECK_PASSED" (or "true" if output_bool="true")
+- On no match: Error "CONDITION_NOT_MET" (or "false" if output_bool="true")
 
 **Example:**
 ```yaml
@@ -416,6 +441,14 @@ check_enabled:
     value: "{{feature_flag}}"
   next: ["feature_enabled"]
   on_failure: ["feature_disabled"]
+
+check_with_bool_output:
+  type: "check"
+  config:
+    mode: "exists"
+    value: "{{optional_data}}"
+    output_bool: "true"
+  # Output will be "true" or "false", no error thrown
 ```
 
 ---
@@ -425,19 +458,25 @@ check_enabled:
 String pattern matching and validation.
 
 **Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mode` | string | Yes | Match mode |
-| `target` | string | Yes | String to check |
-| `value` | string | Yes | Pattern or substring |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | Yes | - | Match mode |
+| `text` | string | Yes | - | String to check |
+| `pattern` | string | Yes | - | Pattern or substring to match |
+| `output_bool` | string | No | - | If "true", output "true"/"false" instead of error |
 
 **Modes:**
 | Mode | Description |
 |------|-------------|
-| `contains` | Target contains value |
-| `starts_with` | Target starts with value |
-| `ends_with` | Target ends with value |
-| `matches` | Target matches regex pattern |
+| `contains` | Text contains pattern |
+| `not_contains` | Text does not contain pattern |
+| `starts_with` | Text starts with pattern |
+| `ends_with` | Text ends with pattern |
+| `matches` | Text matches regex pattern |
+
+**Output:**
+- On match: "TEXT_MATCHED" (or "true" if output_bool="true")
+- On no match: Error "CONDITION_NOT_MET" (or "false" if output_bool="true")
 
 **Example:**
 ```yaml
@@ -445,10 +484,18 @@ validate_email:
   type: "text"
   config:
     mode: "matches"
-    target: "{{user.email}}"
-    value: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+    text: "{{user.email}}"
+    pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
   next: ["valid_email"]
   on_failure: ["invalid_email"]
+
+check_not_error:
+  type: "text"
+  config:
+    mode: "not_contains"
+    text: "{{response}}"
+    pattern: "error"
+    output_bool: "true"
 ```
 
 ---
@@ -458,13 +505,18 @@ validate_email:
 Numeric comparison operations.
 
 **Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `operator` | string | Yes | Comparison operator |
-| `left` | string | Yes | Left operand |
-| `right` | string | Yes | Right operand |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `operator` | string | Yes | - | Comparison operator |
+| `left` | string | Yes | - | Left operand (must be numeric) |
+| `right` | string | Yes | - | Right operand (must be numeric) |
+| `output_bool` | string | No | - | If "true", output "true"/"false" instead of error |
 
 **Operators:** `>`, `<`, `==`, `>=`, `<=`, `!=`
+
+**Output:**
+- On match: "MATH_PASSED" (or "true" if output_bool="true")
+- On no match: Error "CONDITION_NOT_MET" (or "false" if output_bool="true")
 
 **Example:**
 ```yaml
@@ -475,6 +527,14 @@ check_cpu:
     left: "{{metrics.cpu_usage}}"
     right: "80"
   next: ["alert_high_cpu"]
+
+compare_scores:
+  type: "math"
+  config:
+    operator: ">="
+    left: "{{score}}"
+    right: "60"
+    output_bool: "true"
 ```
 
 ---
@@ -484,18 +544,25 @@ check_cpu:
 JSON array operations.
 
 **Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mode` | string | Yes | Operation mode |
-| `list` | string | Yes | JSON array string |
-| `value` | string | If mode=contains | Value to check |
-| `length` | number | If mode=length_is | Expected length |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | Yes | - | Operation mode |
+| `list` | string/array | Yes | - | JSON array string or array |
+| `value` | string | If mode needs it | - | Value to check (length or item) |
+| `output_bool` | string | No | - | If "true", output "true"/"false" instead of error |
 
 **Modes:**
 | Mode | Description |
 |------|-------------|
-| `length_is` | Check if array length equals value |
-| `contains` | Check if array contains value |
+| `length_equals` | Array length equals value |
+| `length_gt` | Array length greater than value |
+| `length_lt` | Array length less than value |
+| `contains` | Array contains value |
+| `not_contains` | Array does not contain value |
+
+**Output:**
+- On match: "LIST_OK" (or "true" if output_bool="true")
+- On no match: Error "CONDITION_NOT_MET" (or "false" if output_bool="true")
 
 **Example:**
 ```yaml
@@ -506,6 +573,14 @@ check_results:
     list: "{{fetch_tags}}"
     value: "urgent"
   next: ["handle_urgent"]
+
+check_has_items:
+  type: "list"
+  config:
+    mode: "length_gt"
+    list: "{{data_array}}"
+    value: "0"
+    output_bool: "true"
 ```
 
 ---
@@ -564,18 +639,25 @@ Define sensitive values with automatic log masking.
 **Config:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `value` | string | No | Single secret |
-| `<key>` | string | No | Multiple secrets |
+| `<key>` | string | Yes | Secret key-value pairs |
 
-**Output:** Secret value (masked as `********` in logs)
+**Value Formats:**
+| Format | Description |
+|--------|-------------|
+| `"literal_value"` | Direct string value |
+| `"env.VAR_NAME"` | Read from environment variable |
+| `"{{env.VAR_NAME}}"` | Read from environment variable (template syntax) |
+
+**Output:** JSON object with secret values (masked as `********` in logs)
 
 **Example:**
 ```yaml
 api_secrets:
   type: "secret"
   config:
-    openai_key: "sk-xxx"
-    db_password: "super_secret"
+    openai_key: "env.OPENAI_API_KEY"     # From env var
+    db_password: "{{env.DB_PASSWORD}}"   # Template syntax
+    static_token: "sk-xxx-literal"       # Direct value
 
 call_ai:
   type: "ai"
@@ -632,16 +714,16 @@ parse_response:
 
 ### virtual
 
-Logical grouping or synchronization point with no execution.
+Logical grouping or synchronization point with no execution logic.
 
 **Config:** None
 
-**Output:** Empty string
+**Output:** "VIRTUAL_OK"
 
 **Use Cases:**
-- Wait for multiple parallel branches
+- Wait for multiple parallel branches to complete (fan-in)
 - Logical workflow organization
-- Fan-in synchronization
+- Placeholder for future expansion
 
 **Example:**
 ```yaml
@@ -658,7 +740,7 @@ task_b:
     script: "echo B"
   next: ["sync_point"]
 
-# Synchronization
+# Synchronization (waits for both task_a and task_b)
 sync_point:
   type: "virtual"
   dependencies: ["task_a", "task_b"]
@@ -768,6 +850,33 @@ nodes:
 
 ---
 
+## Global Defaults
+
+### System Defaults
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Server port | 8080 | HTTP API port |
+| Max workers | 10 | Concurrent workflow limit |
+| Worker queue | 100 | Pending workflow buffer |
+| Shell timeout | 30s | Default shell execution timeout |
+| Handoff max depth | 10 | Maximum workflow recursion |
+
+### Node Defaults
+
+| Node | Parameter | Default |
+|------|-----------|---------|
+| `shell` | timeout | 30 seconds |
+| `loop` | iterator | "item" |
+| `loop` | max_concurrency | 1 |
+| `loop` | step | 1 |
+| `loop` | fail_fast | false |
+| `api` | method | "POST" |
+| `ai` | provider | Auto-detected from model |
+| `ai` | use_system_key | false |
+
+---
+
 ## Quick Reference Table
 
 | Type | Category | Purpose | Key Config |
@@ -776,15 +885,15 @@ nodes:
 | `ai` | Task | LLM text generation | `model`, `prompt` |
 | `api` | Task | HTTP requests | `url`, `method` |
 | `file` | Task | Load file from library | `file_id` |
-| `workflow` | Task | Call sub-workflow | `file` or `uses` |
+| `workflow` | Task | Call sub-workflow | `uses` or `file` |
 | `hold` | Task | Wait for approval | (input data) |
 | `if` | Logic | Expression branching | `if` |
 | `loop` | Logic | Iterate items | `mode`, `items`, `task` |
 | `check` | Logic | Simple value check | `mode`, `value` |
-| `text` | Logic | String matching | `mode`, `target`, `value` |
+| `text` | Logic | String matching | `mode`, `text`, `pattern` |
 | `math` | Logic | Numeric comparison | `operator`, `left`, `right` |
 | `list` | Logic | Array operations | `mode`, `list` |
 | `var` | Data | Define values | `value` or key-values |
-| `secret` | Data | Sensitive values | `value` or key-values |
+| `secret` | Data | Sensitive values | key-values (supports env) |
 | `dict` | Data | JSON extraction | `input`, `fields` |
 | `virtual` | Base | Sync point | (none) |
