@@ -46,20 +46,20 @@ type LoginRequest struct {
 }
 
 type SaveWorkflowRequest struct {
-	ID       string `json:"id,omitempty"`       // Optional custom ID, if empty will be generated from Name
-	OldID    string `json:"old_id,omitempty"`   // If renaming, provide old ID to delete old files
+	ID       string `json:"id,omitempty"`     // Optional custom ID, if empty will be generated from Name
+	OldID    string `json:"old_id,omitempty"` // If renaming, provide old ID to delete old files
 	Name     string `json:"name"`
 	Content  string `json:"content"`
 	Metadata struct {
-		Description string                       `json:"description"`
-		Icon        string                       `json:"icon"`
+		Description string                        `json:"description"`
+		Icon        string                        `json:"icon"`
 		Positions   map[string]map[string]float64 `json:"positions,omitempty"` // Node positions: { nodeId: { x, y } }
 	} `json:"metadata"`
 }
 
 type WorkflowListItem struct {
-	ID          string    `json:"id"`          // Unique identifier (filename without extension)
-	Name        string    `json:"name"`        // Display name
+	ID          string    `json:"id"`   // Unique identifier (filename without extension)
+	Name        string    `json:"name"` // Display name
 	Description string    `json:"description"`
 	Icon        string    `json:"icon"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -119,7 +119,23 @@ func idToDisplayName(id string) string {
 	return strings.Join(words, " ")
 }
 
-// --- Auth Handlers ---
+func (s *Server) handleListAllArtifacts(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	limit := 100 // Default limit for dashboard
+	offset := 0
+
+	artifacts, err := s.db.ListAllArtifacts(user, limit, offset)
+	if err != nil {
+		http.Error(w, "Failed to list artifacts", http.StatusInternalServerError)
+		return
+	}
+	if artifacts == nil {
+		artifacts = make([]*models.ArtifactRecord, 0)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(artifacts)
+}
 
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	count, err := s.db.CountUsers()
@@ -207,7 +223,7 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(UserContextKey).(string)
 	dir := filepath.Join(s.config.HomeDir, user, "workflows")
-	
+
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]WorkflowListItem{})
@@ -283,8 +299,8 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Read metadata
 	metaPath := filepath.Join(dir, id+".json")
 	var meta struct {
-		Name      string                          `json:"name"`
-		Positions map[string]map[string]float64   `json:"positions,omitempty"`
+		Name      string                        `json:"name"`
+		Positions map[string]map[string]float64 `json:"positions,omitempty"`
 	}
 	if mData, err := os.ReadFile(metaPath); err == nil {
 		_ = json.Unmarshal(mData, &meta)
@@ -585,7 +601,7 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	uuidStr := uuid.New().String()[:4]
 	execID := time.Now().Format("102150405") + "-" + uuidStr
-	
+
 	ctx := models.NewExecutionContext(execID, user, s.config.HomeDir)
 	ctx.SetWorkflowName(wf.Name)
 	ctx.WorkflowID = wf.ID
@@ -730,7 +746,7 @@ func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	user := r.Context().Value(UserContextKey).(string)
-	
+
 	// We need to know the workflow name to find the artifact dir
 	record, err := s.db.GetExecution(id)
 	if err != nil {
@@ -776,14 +792,60 @@ func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Artifact not found", http.StatusNotFound)
 		return
 	}
+	// Determine Content-Type
+	// Try to get from metadata if possible, otherwise guess
+	// Note: In a real implementation we might want to store mime type in DB for artifacts too
+	// For now, we detect on the fly
+	file, err := os.Open(filePath)
+	if err == nil {
+		defer file.Close()
+		// Only read first 512 bytes for detection
+		buffer := make([]byte, 512)
+		_, _ = file.Read(buffer)
+		contentType := http.DetectContentType(buffer)
+		w.Header().Set("Content-Type", contentType)
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(filename)+"\"")
 	http.ServeFile(w, r, filePath)
 }
 
-func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	user := r.Context().Value(UserContextKey).(string)
+// --- Global File Library Handlers ---
 
-	r.ParseMultipartForm(32 << 20)
+func (s *Server) handleUploadFileGlobal(w http.ResponseWriter, r *http.Request) {
+	// Parse max 100MB
+	r.ParseMultipartForm(100 << 20)
+
+	user := r.Context().Value(UserContextKey).(string)
+	fileID := r.FormValue("file_id")
+
+	if fileID == "" {
+		http.Error(w, "file_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check 1GB Quota
+	currentSize, err := s.db.GetUserTotalFileSize(user)
+	if err != nil {
+		http.Error(w, "Failed to check quota", http.StatusInternalServerError)
+		return
+	}
+	if currentSize >= 1*1024*1024*1024 { // 1GB
+		http.Error(w, "Storage quota exceeded (1GB limit)", http.StatusForbidden)
+		return
+	}
+
+	// Check file_id uniqueness
+	exists, err := s.db.CheckFileIDExists(user, fileID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if exists {
+		http.Error(w, fmt.Sprintf("File ID '%s' already exists", fileID), http.StatusConflict)
+		return
+	}
+
 	file, handler, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Failed to get file", http.StatusBadRequest)
@@ -791,17 +853,111 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	uploadDir := filepath.Join(s.config.HomeDir, user, "uploads", id)
-	os.MkdirAll(uploadDir, 0755)
+	if handler.Size > 100*1024*1024 {
+		http.Error(w, "File too large (max 100MB)", http.StatusRequestEntityTooLarge)
+		return
+	}
 
-	dest, err := os.Create(filepath.Join(uploadDir, filepath.Base(handler.Filename)))
+	// Detect MIME type
+	buff := make([]byte, 512)
+	if _, err := file.Read(buff); err != nil {
+		http.Error(w, "Failed to read file", http.StatusInternalServerError)
+		return
+	}
+	mimeType := http.DetectContentType(buff)
+	file.Seek(0, 0) // Reset pointer
+
+	// Allowlist check can be added here
+	// For now we allow most, maybe block executables if needed
+
+	uuidStr := uuid.New().String()
+	storageDir := filepath.Join(s.config.HomeDir, user, "storage", "files")
+	os.MkdirAll(storageDir, 0755)
+
+	destPath := filepath.Join(storageDir, uuidStr)
+	dest, err := os.Create(destPath)
 	if err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
+		http.Error(w, "Failed to store file", http.StatusInternalServerError)
 		return
 	}
 	defer dest.Close()
-	io.Copy(dest, file)
-	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.Copy(dest, file); err != nil {
+		http.Error(w, "Failed to write file", http.StatusInternalServerError)
+		return
+	}
+
+	// Save metadata to DB
+	err = s.db.SaveUserFile(
+		uuidStr,
+		fileID,
+		user,
+		handler.Filename,
+		mimeType,
+		handler.Size,
+		"", // hash optional for now
+	)
+	if err != nil {
+		// Clean up file if DB fails
+		os.Remove(destPath)
+		http.Error(w, "Failed to save metadata", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{
+		"uuid":              uuidStr,
+		"file_id":           fileID,
+		"original_filename": handler.Filename,
+	})
+}
+
+func (s *Server) handleListFilesGlobal(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	files, err := s.db.ListUserFiles(user)
+	if err != nil {
+		http.Error(w, "Failed to list files", http.StatusInternalServerError)
+		return
+	}
+	if files == nil {
+		files = make([]*models.UserFileRecord, 0)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(files)
+}
+
+func (s *Server) handleDeleteFileGlobal(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	id := r.PathValue("id")
+
+	// Get file to find UUID (for physical deletion)
+	// We iterate list to support deleting by either FileID or UUID
+	files, _ := s.db.ListUserFiles(user)
+	var target *models.UserFileRecord
+	for _, f := range files {
+		if f.FileID == id || f.UUID == id {
+			target = f
+			break
+		}
+	}
+
+	if target == nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete from DB
+	if err := s.db.DeleteUserFile(user, id); err != nil {
+		http.Error(w, "Failed to delete metadata", http.StatusInternalServerError)
+		return
+	}
+
+	// Delete physical file
+	path := filepath.Join(s.config.HomeDir, user, "storage", "files", target.UUID)
+	os.Remove(path) // Ignore error if already gone
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Secret Handlers ---
@@ -879,8 +1035,22 @@ func (s *Server) handleGetWorkflowSchema(w http.ResponseWriter, r *http.Request)
 	}
 
 	// 使用 parser 解析 workflow
-	workflowsDir := filepath.Join(s.config.HomeDir, "workflows")
-	wf, err := parser.ResolveWorkflow(id, workflowsDir)
+	// 这里需要注意：如果是用户的 workflow，我们需要知道是哪个用户。
+	// 目前这个 API 主要是给 Run 用，假设是当前用户？或者 Public？
+	// 暂时假设是当前用户
+	user := r.Context().Value(UserContextKey).(string)
+	userWorkflowDir := filepath.Join(s.config.HomeDir, user, "workflows")
+
+	wf, err := parser.ResolveWorkflow(id, userWorkflowDir)
+	if err != nil {
+		// Fallback to system workflows
+		wfSys, errSys := parser.ResolveWorkflow(id, "workflows")
+		if errSys == nil {
+			wf = wfSys
+			err = nil
+		}
+	}
+
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Workflow not found: %v", err), http.StatusNotFound)
 		return

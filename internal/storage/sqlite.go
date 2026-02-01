@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"path/filepath"
+	"tofi-core/internal/models"
 
 	_ "modernc.org/sqlite"
 )
@@ -75,7 +76,7 @@ func InitDB(homeDir string) (*DB, error) {
 	if _, err := conn.Exec(query); err != nil {
 		return nil, err
 	}
-	
+
 	// Migration: Ensure workflow_id exists
 	// We ignore error "duplicate column name"
 	conn.Exec("ALTER TABLE executions ADD COLUMN workflow_id TEXT")
@@ -107,6 +108,37 @@ func InitDB(homeDir string) (*DB, error) {
 	);
 	CREATE INDEX IF NOT EXISTS idx_logs_exec ON execution_logs(execution_id);`
 	if _, err := conn.Exec(logsQuery); err != nil {
+		return nil, err
+	}
+
+	// 创建 user_files 表 (Global File Library)
+	filesQuery := `
+	CREATE TABLE IF NOT EXISTS user_files (
+		uuid TEXT PRIMARY KEY,
+		file_id TEXT NOT NULL,
+		user TEXT NOT NULL,
+		original_filename TEXT,
+		mime_type TEXT,
+		size_bytes INTEGER,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		hash TEXT,
+		UNIQUE(user, file_id)
+	);`
+	if _, err := conn.Exec(filesQuery); err != nil {
+		return nil, err
+	}
+
+	// 创建 execution_artifacts 表
+	artifactsQuery := `
+	CREATE TABLE IF NOT EXISTS execution_artifacts (
+		id TEXT PRIMARY KEY,
+		execution_id TEXT NOT NULL,
+		filename TEXT NOT NULL,
+		size_bytes INTEGER,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_artifacts_exec ON execution_artifacts(execution_id);`
+	if _, err := conn.Exec(artifactsQuery); err != nil {
 		return nil, err
 	}
 
@@ -258,7 +290,7 @@ func (db *DB) SaveExecution(id, workflowID, name, user, status, stateJSON, resul
 	query := `
 	INSERT OR REPLACE INTO executions (id, workflow_id, workflow_name, user, status, state_json, result_json, created_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT created_at FROM executions WHERE id = ? OR CURRENT_TIMESTAMP));`
-	
+
 	// 注意：SQLite 的 REPLACE 会导致 created_at 丢失，所以我们用一个小技巧保留它
 	_, err := db.conn.Exec(query, id, workflowID, name, user, status, stateJSON, resultJSON, id)
 	return err
@@ -299,7 +331,7 @@ func (db *DB) ListExecutionsByWorkflow(user, workflowID string, limit int) ([]*E
 	          FROM executions 
 	          WHERE user = ? AND (workflow_id = ? OR workflow_name = ?) 
 	          ORDER BY created_at DESC LIMIT ?`
-	
+
 	rows, err := db.conn.Query(query, user, workflowID, workflowID, limit)
 	if err != nil {
 		return nil, err
@@ -452,4 +484,132 @@ func (db *DB) DeleteSecretByID(id string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// --- File Handling ---
+
+func (db *DB) SaveUserFile(uuid, fileID, user, originalFilename, mimeType string, size int64, hash string) error {
+	query := `INSERT INTO user_files (uuid, file_id, user, original_filename, mime_type, size_bytes, hash) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, uuid, fileID, user, originalFilename, mimeType, size, hash)
+	return err
+}
+
+func (db *DB) GetUserFileID(user, fileID string) (*models.UserFileRecord, error) {
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash FROM user_files WHERE user = ? AND file_id = ?`
+	row := db.conn.QueryRow(query, user, fileID)
+	var r models.UserFileRecord
+	err := row.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (db *DB) ListUserFiles(user string) ([]*models.UserFileRecord, error) {
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash FROM user_files WHERE user = ? ORDER BY created_at DESC`
+	rows, err := db.conn.Query(query, user)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*models.UserFileRecord
+	for rows.Next() {
+		var r models.UserFileRecord
+		if err := rows.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash); err != nil {
+			continue
+		}
+		records = append(records, &r)
+	}
+	return records, nil
+}
+
+func (db *DB) GetUserFile(user, fileID string) (*models.UserFileRecord, error) {
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash FROM user_files WHERE user = ? AND file_id = ?`
+	var r models.UserFileRecord
+	err := db.conn.QueryRow(query, user, fileID).Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (db *DB) DeleteUserFile(user, fileID string) error {
+	// Try deleting by file_id first
+	query := `DELETE FROM user_files WHERE user = ? AND file_id = ?`
+	res, err := db.conn.Exec(query, user, fileID)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows > 0 {
+		return nil
+	}
+
+	// If no rows affected, try deleting by UUID (in case input is UUID)
+	query = `DELETE FROM user_files WHERE user = ? AND uuid = ?`
+	res, err = db.conn.Exec(query, user, fileID)
+	if err != nil {
+		return err
+	}
+	rows, _ = res.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (db *DB) GetUserTotalFileSize(user string) (int64, error) {
+	query := `SELECT COALESCE(SUM(size_bytes), 0) FROM user_files WHERE user = ?`
+	var size int64
+	err := db.conn.QueryRow(query, user).Scan(&size)
+	return size, err
+}
+
+func (db *DB) CheckFileIDExists(user, fileID string) (bool, error) {
+	query := `SELECT 1 FROM user_files WHERE user = ? AND file_id = ?`
+	var exists int
+	err := db.conn.QueryRow(query, user, fileID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// Artifacts
+
+func (db *DB) RecordArtifact(execID, filename string, size int64) error {
+	id := execID + "_" + filename // Simple deterministic ID
+	query := `INSERT INTO execution_artifacts (id, execution_id, filename, size_bytes) VALUES (?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, execID, filename, size)
+	return err
+}
+
+func (db *DB) ListAllArtifacts(user string, limit, offset int) ([]*models.ArtifactRecord, error) {
+	// Join with executions to get workflow name and verify user ownership
+	query := `
+	SELECT a.id, a.execution_id, e.workflow_name, a.filename, a.size_bytes, a.created_at
+	FROM execution_artifacts a
+	JOIN executions e ON a.execution_id = e.id
+	WHERE e.user = ?
+	ORDER BY a.created_at DESC
+	LIMIT ? OFFSET ?`
+
+	rows, err := db.conn.Query(query, user, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*models.ArtifactRecord
+	for rows.Next() {
+		var r models.ArtifactRecord
+		var wfName sql.NullString
+		if err := rows.Scan(&r.ID, &r.ExecutionID, &wfName, &r.Filename, &r.SizeBytes, &r.CreatedAt); err != nil {
+			continue
+		}
+		r.WorkflowName = wfName.String
+		records = append(records, &r)
+	}
+	return records, nil
 }

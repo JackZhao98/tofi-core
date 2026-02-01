@@ -27,6 +27,7 @@ type NodeStat struct {
 type Parameter struct {
 	Var    *VarDefinition    `json:"var,omitempty" yaml:"var,omitempty"`
 	Secret *SecretDefinition `json:"secret,omitempty" yaml:"secret,omitempty"`
+	File   *FileDefinition   `json:"file,omitempty" yaml:"file,omitempty"`
 }
 
 // VarDefinition 是变量类型的参数
@@ -41,6 +42,13 @@ type VarDefinition struct {
 type SecretDefinition struct {
 	ID       string `json:"id" yaml:"id"`
 	Value    string `json:"value" yaml:"value"` // 引用全局 Secret Key
+	Optional bool   `json:"optional" yaml:"optional"`
+}
+
+// FileDefinition 是文件类型的参数 (Schem B: Explicit File Ref)
+type FileDefinition struct {
+	ID       string `json:"id" yaml:"id"`             // Input 变量名 (e.g. "my_dataset")
+	FileRef  string `json:"file_ref" yaml:"file_ref"` // 用户可读 ID (e.g. "sales_data_2024")
 	Optional bool   `json:"optional" yaml:"optional"`
 }
 
@@ -103,13 +111,32 @@ type Workflow struct {
 	Timeout     int                    `json:"timeout" yaml:"timeout"` // 全局工作流超时（秒）
 }
 
+type UserFileRecord struct {
+	UUID             string `json:"uuid"`
+	FileID           string `json:"file_id"`
+	User             string `json:"user"`
+	OriginalFilename string `json:"original_filename"`
+	MimeType         string `json:"mime_type"`
+	SizeBytes        int64  `json:"size_bytes"`
+	CreatedAt        string `json:"created_at"`
+	Hash             string `json:"hash"`
+}
+
+type ArtifactRecord struct {
+	ID           string `json:"id"`
+	ExecutionID  string `json:"execution_id"`
+	WorkflowName string `json:"workflow_name"` // Joined from executions
+	Filename     string `json:"filename"`
+	SizeBytes    int64  `json:"size_bytes"`
+	CreatedAt    string `json:"created_at"`
+}
+
 type ExecutionPaths struct {
 	Home      string
 	Logs      string
 	States    string
 	Reports   string
 	Artifacts string // 存放产物 (Output)
-	Uploads   string // 存放用户上传 (Input)
 }
 
 type ExecutionContext struct {
@@ -125,9 +152,9 @@ type ExecutionContext struct {
 	mu           sync.RWMutex
 	Wg           sync.WaitGroup
 	SecretValues []string
-	Depth        int             // 递归深度 (防止死循环)
-	DB           interface{}     // 存储对象 (storage.DB), 使用 interface 避免循环引用
-	Ctx          context.Context // 用于超时控制
+	Depth        int                // 递归深度 (防止死循环)
+	DB           interface{}        // 存储对象 (storage.DB), 使用 interface 避免循环引用
+	Ctx          context.Context    // 用于超时控制
 	Cancel       context.CancelFunc // 用于取消执行
 }
 
@@ -142,13 +169,12 @@ func NewExecutionContext(execID, user, homeDir string) *ExecutionContext {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ExecutionContext{
-		ExecutionID:  execID,
-		User:         user,
+		ExecutionID: execID,
+		User:        user,
 		Paths: ExecutionPaths{
 			Home:    homeDir,
 			Logs:    filepath.Join(userBase, "logs"),
 			Reports: filepath.Join(userBase, "reports"),
-			Uploads: filepath.Join(userBase, "uploads", execID),
 		},
 		Results:      make(map[string]string),
 		Approvals:    make(map[string]string),
@@ -184,14 +210,14 @@ func (ctx *ExecutionContext) SetWorkflowName(name string) {
 func (ctx *ExecutionContext) Log(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
 	msg = ctx.MaskLog(msg)
-	
+
 	// Use global system logger (stdout + rotating file)
 	logger.Printf("[%s] %s", ctx.ExecutionID, msg)
 
 	// Determine Log Type for DB
 	logType := "info"
 	cleanMsg := msg
-	
+
 	if strings.Contains(msg, "<think>") {
 		logType = "think"
 		cleanMsg = strings.ReplaceAll(strings.ReplaceAll(msg, "<think>", ""), "</think>", "")
@@ -292,8 +318,8 @@ func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (
 			result := gjson.Get(output, jsonPath)
 
 			if strict && !result.Exists() {
-				return "", fmt.Errorf("字段不存在: {{%s}}\n" +
-					"  节点 '%s' 的输出中没有字段 '%s'\n" +
+				return "", fmt.Errorf("字段不存在: {{%s}}\n"+
+					"  节点 '%s' 的输出中没有字段 '%s'\n"+
 					"  实际输出: %s",
 					fullPath, nodeID, jsonPath, truncateString(output, 200))
 			}
@@ -312,8 +338,8 @@ func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (
 			if dotIdx := strings.Index(unresolvedVar, "."); dotIdx > 0 {
 				nodeID = unresolvedVar[:dotIdx]
 			}
-			return "", fmt.Errorf("节点不存在: {{%s}}\n" +
-				"  引用的节点 '%s' 不存在或尚未执行\n" +
+			return "", fmt.Errorf("节点不存在: {{%s}}\n"+
+				"  引用的节点 '%s' 不存在或尚未执行\n"+
 				"  提示: 请检查节点ID拼写和依赖关系",
 				unresolvedVar, nodeID)
 		}
@@ -351,14 +377,14 @@ func (ctx *ExecutionContext) ReplaceParamsAny(val interface{}) interface{} {
 }
 
 type ExecutionResult struct {
-	ExecutionID  string            `json:"execution_id"`
-	WorkflowID   string            `json:"workflow_id"`
-	WorkflowName string            `json:"workflow_name"`
-	Status       string            `json:"status"`
-	StartTime    time.Time         `json:"start_time"`
-	EndTime      time.Time         `json:"end_time"`
-	Duration     string            `json:"duration"`
-	Stats        []NodeStat        `json:"stats"`
+	ExecutionID  string                 `json:"execution_id"`
+	WorkflowID   string                 `json:"workflow_id"`
+	WorkflowName string                 `json:"workflow_name"`
+	Status       string                 `json:"status"`
+	StartTime    time.Time              `json:"start_time"`
+	EndTime      time.Time              `json:"end_time"`
+	Duration     string                 `json:"duration"`
+	Stats        []NodeStat             `json:"stats"`
 	Outputs      map[string]interface{} `json:"outputs"`
 }
 
@@ -404,8 +430,8 @@ func (ctx *ExecutionContext) MaskedSnapshot() (map[string]interface{}, []NodeSta
 		// 尝试智能解析 JSON
 		var obj interface{}
 		// 只有看起来像 JSON 对象或数组的才尝试解析，避免数字/布尔值的误判
-		if (strings.HasPrefix(masked, "{") && strings.HasSuffix(masked, "}")) || 
-		   (strings.HasPrefix(masked, "[") && strings.HasSuffix(masked, "]")) {
+		if (strings.HasPrefix(masked, "{") && strings.HasSuffix(masked, "}")) ||
+			(strings.HasPrefix(masked, "[") && strings.HasSuffix(masked, "]")) {
 			if err := json.Unmarshal([]byte(masked), &obj); err == nil {
 				results[k] = obj
 			} else {
@@ -473,7 +499,6 @@ func (ctx *ExecutionContext) Derive(subID string) *ExecutionContext {
 	// 路径偏移：在原有目录下追加子目录
 	newPaths := ctx.Paths
 	newPaths.Artifacts = filepath.Join(ctx.Paths.Artifacts, subID)
-	newPaths.Uploads = filepath.Join(ctx.Paths.Uploads, subID)
 
 	derived := &ExecutionContext{
 		ExecutionID:  newID,
@@ -485,7 +510,7 @@ func (ctx *ExecutionContext) Derive(subID string) *ExecutionContext {
 		startedNodes: make(map[string]bool),
 		Stats:        []NodeStat{},
 		SecretValues: make([]string, len(ctx.SecretValues)),
-		Depth:        ctx.Depth,  // 深度不变，因为 Loop 同级
+		Depth:        ctx.Depth, // 深度不变，因为 Loop 同级
 		DB:           ctx.DB,
 		Ctx:          ctx.Ctx, // 继承父 context
 		Cancel:       ctx.Cancel,

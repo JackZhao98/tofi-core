@@ -10,6 +10,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// FileStore defines interface for looking up user files
+type FileStore interface {
+	GetUserFileID(user, fileID string) (*UserFileRecord, error)
+}
+
 // ResolveLocalContext 执行第一阶段解析：Global -> Local Context
 // 它遍历 Node.Input，将全局变量引用（{{node.id}}）替换为具体值
 // 并根据定义的 ID 存入局部作用域 Map
@@ -35,6 +40,39 @@ func ResolveLocalContext(node *Node, ctx *ExecutionContext) (map[string]interfac
 			localContext[s.ID] = val
 			// 将敏感词加入脱敏列表
 			ctx.AddSecretValue(val)
+		} else if param.File != nil {
+			f := param.File
+			// 3. 解析 File
+			if ctx.DB != nil {
+				if db, ok := ctx.DB.(FileStore); ok {
+					record, err := db.GetUserFileID(ctx.User, f.FileRef)
+					if err != nil {
+						if !f.Optional {
+							return nil, fmt.Errorf("input.file '%s' (ref: %s) not found: %v", f.ID, f.FileRef, err)
+						}
+						continue
+					}
+					// Construct physical path
+					// home/{user}/storage/files/{uuid}
+					// Note: ctx.Paths.Home is base home dir configured in server
+					// We need to ensure path consistency with handlers.go
+					physicalPath := fmt.Sprintf("%s/%s/storage/files/%s", ctx.Paths.Home, ctx.User, record.UUID)
+
+					// Validate existence
+					if _, err := os.Stat(physicalPath); os.IsNotExist(err) {
+						return nil, fmt.Errorf("physical file missing for input '%s' (uuid: %s)", f.ID, record.UUID)
+					}
+					localContext[f.ID] = physicalPath
+				} else {
+					return nil, fmt.Errorf("DB does not implement FileStore")
+				}
+			} else {
+				// No DB available (e.g. unit test or cli mode without db?)
+				// If optional, maybe skip? But usually this implies misconfiguration if file input is used.
+				if !f.Optional {
+					return nil, fmt.Errorf("database connection required for file inputs")
+				}
+			}
 		}
 	}
 
@@ -151,8 +189,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 
 	}
 
-
-
 	// ... (Existing Template Logic) ...
 
 	// 处理转义字符：将 \{{ 临时替换为特殊标记
@@ -160,8 +196,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 	const escapedPlaceholder = "__ESCAPED_BRACES__"
 
 	result := strings.ReplaceAll(s, "\\{{", escapedPlaceholder)
-
-
 
 	// 1. 局部变量优先替换
 
@@ -185,8 +219,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 
 		}
 
-
-
 		// 1.2 JSON 路径替换 {{id.path}}
 
 		prefix := "{{" + id + "."
@@ -207,8 +239,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 
 				jsonPath := strings.TrimPrefix(fullPath, id+".")
 
-
-
 				gv := gjson.Get(string(jsonStr), jsonPath)
 
 				if !gv.Exists() {
@@ -222,8 +252,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 					return nil, fmt.Errorf("local variable '%s' does not have path '%s'", id, jsonPath)
 
 				}
-
-
 
 				// 如果整个字符串就是这个路径，保持其原始类型
 
@@ -240,8 +268,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 		}
 
 	}
-
-
 
 	// 2. 如果还有未解析的 {{}}，尝试全局替换
 
@@ -261,8 +287,6 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 
 	}
 
-
-
 	// 检查是否还有未解析的 {{}}
 
 	if strings.Contains(result, "{{") {
@@ -271,19 +295,13 @@ func resolveLocalString(s string, localContext map[string]interface{}, ctx *Exec
 
 	}
 
-
-
 	// 恢复转义字符
 
 	result = strings.ReplaceAll(result, escapedPlaceholder, "{{")
 
-
-
 	return result, nil
 
 }
-
-
 
 // tryResolveImplicit 尝试解析不带 {{}} 的字符串引用
 
@@ -296,8 +314,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 		return val, true
 
 	}
-
-
 
 	// 2. 尝试 Local Context (Path Match)
 
@@ -325,8 +341,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 
 	}
 
-
-
 	// 3. 尝试 Global Context
 
 	if ctx == nil {
@@ -334,8 +348,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 		return nil, false
 
 	}
-
-
 
 	// 3.1 Global Full Match (Node ID)
 
@@ -345,8 +357,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 
 	}
 
-
-
 	// 3.2 Global Path Match
 
 	// 由于 Node ID 可能包含点 (gpt.write)，我们不能简单分割第一个点
@@ -354,8 +364,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 	// 需要尝试所有可能的分割点 (Longest Prefix Match preferred? Or just any valid node match)
 
 	// 这里的策略是：从最长可能得 Node ID 开始匹配
-
-	
 
 	// 简单的暴力匹配：将 s 在每一个点处拆分，左边是 ID，右边是 Path
 
@@ -365,8 +373,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 
 	// 如果有多个匹配？通常 Node ID 不会是另一个 Node ID 的前缀+点 (除非用户命名非常混乱)
 
-	
-
 	parts := strings.Split(s, ".")
 
 	for i := len(parts) - 1; i > 0; i-- {
@@ -374,8 +380,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 		nodeID := strings.Join(parts[:i], ".")
 
 		jsonPath := strings.Join(parts[i:], ".")
-
-		
 
 		if valStr, ok := ctx.GetResult(nodeID); ok {
 
@@ -392,8 +396,6 @@ func tryResolveImplicit(s string, localContext map[string]interface{}, ctx *Exec
 		}
 
 	}
-
-
 
 	return nil, false
 

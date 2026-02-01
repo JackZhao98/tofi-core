@@ -12,8 +12,8 @@ import (
 )
 
 type Config struct {
-	Port                  int
-	HomeDir               string
+	Port                   int
+	HomeDir                string
 	MaxConcurrentWorkflows int // 最大并发工作流数（默认 10）
 }
 
@@ -108,7 +108,15 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/executions/{id}/logs", s.AuthMiddleware(s.handleGetExecutionLogs))
 	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts", s.AuthMiddleware(s.handleListArtifacts))
 	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.AuthMiddleware(s.handleDownloadArtifact))
-	mux.HandleFunc("POST /api/v1/executions/{id}/uploads", s.AuthMiddleware(s.handleUploadFile))
+
+	// Global Artifacts
+	mux.HandleFunc("GET /api/v1/artifacts", s.AuthMiddleware(s.handleListAllArtifacts))
+
+	// Global File Library
+	mux.HandleFunc("GET /api/v1/files", s.AuthMiddleware(s.handleListFilesGlobal))
+	mux.HandleFunc("POST /api/v1/files", s.AuthMiddleware(s.handleUploadFileGlobal))
+	mux.HandleFunc("DELETE /api/v1/files/{id}", s.AuthMiddleware(s.handleDeleteFileGlobal))
+
 	mux.HandleFunc("POST /api/v1/executions/{id}/nodes/{node_id}/approve", s.AuthMiddleware(s.handleApproveExecution))
 	mux.HandleFunc("POST /api/v1/executions/{id}/cancel", s.AuthMiddleware(s.handleCancelExecution))
 
@@ -156,7 +164,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleStats 返回工作池的统计信息
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.workerPool.GetStats()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
