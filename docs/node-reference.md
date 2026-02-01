@@ -119,7 +119,23 @@ check_condition:
   on_failure: ["reject_flow"]
 ```
 
-### 6. check - 简单值检查
+### 6. hold - 人工审批 (Human-in-the-Loop)
+
+暂停工作流执行，等待外部人工审批（Approve/Reject）。
+通常配合 UI 或 API 使用。
+
+```yaml
+wait_for_approval:
+  type: "hold"
+  input:
+    # 传递给审批人的上下文数据
+    request_id: "{{request.id}}"
+    summary: "请审批部署请求"
+  next: ["deploy"]
+  on_failure: ["notify_rejection"]
+```
+
+### 7. check - 简单值检查
 
 检查单个值的状态。
 
@@ -132,7 +148,7 @@ is_enabled:
     value: "{{feature_flag}}"
 ```
 
-### 7. text - 文本模式匹配
+### 8. text - 文本模式匹配
 
 字符串包含、前缀匹配或正则匹配。
 
@@ -146,7 +162,7 @@ validate_email:
     value: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
 ```
 
-### 8. math - 数值比较
+### 9. math - 数值比较
 
 数值大小比较。
 
@@ -160,7 +176,7 @@ check_cpu:
     right: "80"
 ```
 
-### 9. list - 列表操作
+### 10. list - 列表操作
 
 JSON 列表长度检查或包含检查。
 
@@ -178,7 +194,7 @@ check_tags:
 
 ## 数据类节点（Data）
 
-### 10. var / const - 变量定义
+### 11. var / const - 变量定义
 
 定义流程中使用的静态数据。
 
@@ -193,7 +209,7 @@ app_config:
 
 **使用方式**：`{{app_config.app_name}}`
 
-### 11. secret - 机密存储
+### 12. secret - 机密存储
 
 定义敏感数据，输出日志会自动脱敏（显示为 `********`）。
 
@@ -209,7 +225,7 @@ secrets:
 
 ## 基础类节点（Base）
 
-### 12. virtual - 虚拟占位节点
+### 13. virtual - 虚拟占位节点
 
 用于逻辑分组或作为汇聚点（等待多个并发分支完成）。
 

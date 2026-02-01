@@ -8,6 +8,8 @@
 
 - 🤖 **AI 集成**: 内置 GPT-5.1 支持,开箱即用
 - 🔄 **工作流编排**: DAG (有向无环图) 任务调度
+- 👮 **人机交互**: 支持 Hold 节点,实现人工审批与干预
+- 📂 **文件系统**: 全局文件库与执行产物(Artifacts)管理
 - 📦 **Toolbox**: 官方内置常用功能
 - 🔌 **多服务集成**: Telegram, Slack, Discord, Email, GitHub 等
 - 🎯 **类型丰富**: API, Shell, AI, 条件判断, 循环, 数学运算等
@@ -157,6 +159,7 @@ nodes:
 | `ai` | AI 模型调用 | GPT-5.1, Claude |
 | `workflow` | 调用 Action | `tofi/ai_response` |
 | `if` | 条件判断 | if-else 逻辑 |
+| `hold` | 人工审批 | 暂停等待 API 确认 |
 | `list` | 列表操作 | map, filter, join |
 | `loop` | 循环执行 | for-each 循环 |
 | `math` | 数学运算 | 加减乘除 |
