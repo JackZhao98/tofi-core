@@ -134,7 +134,6 @@ func (l *Loop) executeLoop(
 
 			// 确保子产物目录存在
 			os.MkdirAll(childCtx.Paths.Artifacts, 0755)
-			os.MkdirAll(childCtx.Paths.Uploads, 0755)
 
 			var itemValue string
 			switch v := val.(type) {

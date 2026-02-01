@@ -19,7 +19,6 @@ func (s *Shell) Execute(config map[string]interface{}, ctx *models.ExecutionCont
 
 	// 注入魔术环境变量 (Magic Env Vars)
 	env["TOFI_ARTIFACTS_DIR"] = ctx.Paths.Artifacts
-	env["TOFI_UPLOADS_DIR"] = ctx.Paths.Uploads
 	env["TOFI_EXECUTION_ID"] = ctx.ExecutionID
 
 	if rawEnv := config["env"]; rawEnv != nil {

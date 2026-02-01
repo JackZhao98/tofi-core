@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"tofi-core/internal/models"
@@ -10,79 +9,82 @@ import (
 
 type File struct{}
 
+// DBInterface defines the subset of DB methods we need
+// This avoids importing storage directly if we want to keep dependencies clean,
+// but since we need the models anyway, we can just define the interface here.
+type DBInterface interface {
+	GetUserFile(user, fileID string) (*models.UserFileRecord, error)
+}
+
 func (f *File) Execute(config map[string]interface{}, ctx *models.ExecutionContext) (string, error) {
-	operation, _ := config["operation"].(string)
-	pathRaw, _ := config["path"].(string)
-	base, _ := config["base"].(string) // artifacts, uploads
-	
-	if pathRaw == "" {
-		return "", fmt.Errorf("config.path is required")
+	fileID, _ := config["file_id"].(string)
+
+	// Validation
+	if fileID == "" {
+		return "", fmt.Errorf("no file uploaded (config.file_id is missing)")
 	}
 
-	// 确定基准目录
-	var baseDir string
-	switch strings.ToLower(base) {
-	case "uploads":
-		baseDir = ctx.Paths.Uploads
-	case "artifacts", "":
-		baseDir = ctx.Paths.Artifacts
-	default:
-		return "", fmt.Errorf("unknown base directory: %s (supported: artifacts, uploads)", base)
+	// Resolve DB
+	db, ok := ctx.DB.(DBInterface)
+	if !ok {
+		return "", fmt.Errorf("database connection not available in execution context")
 	}
 
-	if baseDir == "" {
-		return "", fmt.Errorf("base directory '%s' is not initialized", base)
+	// Lookup file
+	fileRecord, err := db.GetUserFile(ctx.User, fileID)
+	if err != nil {
+		return "", fmt.Errorf("file not found: %s (error: %v)", fileID, err)
 	}
 
-	// 安全路径解析
-	cleanPath := filepath.Clean(pathRaw)
-	if strings.HasPrefix(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return "", fmt.Errorf("invalid path: %s (must be relative and cannot contain ..)", pathRaw)
-	}
+	// Check Accepted Extensions
+	if acceptRaw, ok := config["accept"]; ok {
+		var acceptedExts []string
 
-	fullPath := filepath.Join(baseDir, cleanPath)
-
-	switch strings.ToLower(operation) {
-	case "write":
-		content := fmt.Sprint(config["content"])
-		
-		// 确保父目录存在
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			return "", fmt.Errorf("failed to create directory: %v", err)
+		switch v := acceptRaw.(type) {
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					acceptedExts = append(acceptedExts, strings.ToLower(s))
+				}
+			}
+		case []string:
+			for _, s := range v {
+				acceptedExts = append(acceptedExts, strings.ToLower(s))
+			}
+		case string:
+			parts := strings.Split(v, ",")
+			for _, part := range parts {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					acceptedExts = append(acceptedExts, strings.ToLower(trimmed))
+				}
+			}
 		}
 
-		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
-			return "", fmt.Errorf("failed to write file: %v", err)
+		if len(acceptedExts) > 0 {
+			ext := strings.ToLower(filepath.Ext(fileRecord.OriginalFilename))
+			matched := false
+			for _, acc := range acceptedExts {
+				if ext == acc {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return "", fmt.Errorf("file type not allowed: %s (expected: %v)", ext, acceptedExts)
+			}
 		}
-		
-		ctx.Log("[File] Written %d bytes to %s", len(content), cleanPath)
-		return fullPath, nil
-
-	case "read":
-		data, err := os.ReadFile(fullPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read file: %v", err)
-		}
-		ctx.Log("[File] Read %d bytes from %s", len(data), cleanPath)
-		return string(data), nil
-
-	default:
-		return "", fmt.Errorf("unknown operation: %s (supported: write, read)", operation)
 	}
+
+	// Construct Absolute Path
+	// Path convention: $HOME/$USER/storage/files/$UUID
+	absPath := filepath.Join(ctx.Paths.Home, ctx.User, "storage", "files", fileRecord.UUID)
+
+	ctx.Log("[File] Resolved file '%s' (%s) -> %s", fileID, fileRecord.OriginalFilename, absPath)
+	return absPath, nil
 }
 
 func (f *File) Validate(node *models.Node) error {
-	if _, ok := node.Config["path"]; !ok {
-		return fmt.Errorf("config.path is required")
-	}
-	op, _ := node.Config["operation"].(string)
-	if op != "write" && op != "read" {
-		return fmt.Errorf("config.operation must be 'write' or 'read'")
-	}
-	if op == "write" {
-		if _, ok := node.Config["content"]; !ok {
-			return fmt.Errorf("config.content is required for write operation")
-		}
-	}
+	// We allow empty file_id during validation (it might be filled later or user forgot)
+	// But we could warn. For now, strict validation isn't necessary as Execute handles missing ID nicely.
 	return nil
 }
