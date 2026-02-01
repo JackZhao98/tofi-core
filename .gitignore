@@ -7,8 +7,7 @@ tofi
 docs/
 
 # Workflows (user-defined, not tracked)
-workflows/*
-!workflows/demo_*.yaml
+workflows/
 
 # Environment variables (secrets)
 .env

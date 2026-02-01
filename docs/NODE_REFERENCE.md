@@ -594,27 +594,21 @@ Define static or computed values.
 **Config:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `value` | any | No | Single value |
-| `<key>` | any | No | Multiple key-value pairs |
+| `value` | string/number | Yes | Single value to store |
 
-**Output:** Value or JSON object of all config fields
+**Output:** The stored value as a string
 
-**Example (Single Value):**
+**Example:**
 ```yaml
 api_endpoint:
   type: "var"
   config:
     value: "https://api.example.com/v1"
-```
 
-**Example (Multiple Values):**
-```yaml
-app_config:
+max_retries:
   type: "var"
   config:
-    app_name: "MyApp"
-    version: "1.0.0"
-    max_retries: 3
+    value: 3
 ```
 
 **Usage:**
@@ -623,11 +617,6 @@ call_api:
   type: "api"
   config:
     url: "{{api_endpoint}}"
-
-log_name:
-  type: "shell"
-  config:
-    script: "echo {{app_config.app_name}}"
 ```
 
 ---
@@ -893,7 +882,7 @@ nodes:
 | `text` | Logic | String matching | `mode`, `text`, `pattern` |
 | `math` | Logic | Numeric comparison | `operator`, `left`, `right` |
 | `list` | Logic | Array operations | `mode`, `list` |
-| `var` | Data | Define values | `value` or key-values |
+| `var` | Data | Define values | `value` |
 | `secret` | Data | Sensitive values | key-values (supports env) |
 | `dict` | Data | JSON extraction | `input`, `fields` |
 | `virtual` | Base | Sync point | (none) |

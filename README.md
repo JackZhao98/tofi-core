@@ -158,6 +158,7 @@ nodes:
 | `shell` | Shell 命令执行 | 运行脚本 |
 | `ai` | AI 模型调用 | GPT-5.1, Claude |
 | `workflow` | 调用 Action | `tofi/ai_response` |
+| `var` | 变量定义 | 存储静态值或结构化数据 |
 | `if` | 条件判断 | if-else 逻辑 |
 | `hold` | 人工审批 | 暂停等待 API 确认 |
 | `list` | 列表操作 | map, filter, join |
@@ -228,6 +229,23 @@ nodes:
         input:
           prompt: "处理: {{item}}"
 ```
+
+### 4. 结构化数据 (Dict Node)
+
+`dict` 节点用于构建 JSON 对象，适合定义复杂的配置或上下文。
+
+```yaml
+nodes:
+  my_context:
+    type: dict
+    config:
+      fields:
+        - key: "topic"
+          value: "AI"
+        - key: "score"
+          value: "95"
+```
+下游节点可以通过 `{{my_context.topic}}` 引用字段值。
 
 ## 📚 文档
 
