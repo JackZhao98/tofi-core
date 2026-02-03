@@ -120,12 +120,6 @@ func GetAction(nodeType string) Action {
 		return &logic.Compare{}
 	case "branch":
 		return &logic.Branch{}
-	case "text":
-		return &logic.Text{}
-	case "math":
-		return &logic.Math{}
-	case "list":
-		return &logic.List{}
 	case "loop":
 		return &logic.Loop{}
 	case "var", "const":

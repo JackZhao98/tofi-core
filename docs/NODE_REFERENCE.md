@@ -587,80 +587,6 @@ score_check_branch:
 
 ---
 
-### text (Legacy)
-
-String pattern matching. **Prefer using `compare` with string operators instead.**
-
-**Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mode` | string | Yes | Match mode: `contains`, `not_contains`, `starts_with`, `ends_with`, `matches` |
-| `text` | string | Yes | String to check |
-| `pattern` | string | Yes | Pattern or substring |
-| `output_bool` | string | No | If "true", output boolean instead of error |
-
----
-
-### math (Legacy)
-
-Numeric comparison. **Prefer using `compare` with numeric operators instead.**
-
-**Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `operator` | string | Yes | `>`, `<`, `==`, `>=`, `<=`, `!=` |
-| `left` | string | Yes | Left operand |
-| `right` | string | Yes | Right operand |
-| `output_bool` | string | No | If "true", output boolean instead of error |
-
----
-
-### list (Legacy)
-
-JSON array operations. **Prefer using `compare` with list operators instead.**
-
-**Config:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mode` | string | Yes | `length_equals`, `length_gt`, `length_lt`, `contains`, `not_contains` |
-| `list` | string/array | Yes | JSON array |
-| `value` | string | If needed | Value to check |
-| `output_bool` | string | No | If "true", output boolean instead of error |
-
-**Modes:**
-| Mode | Description |
-|------|-------------|
-| `length_equals` | Array length equals value |
-| `length_gt` | Array length greater than value |
-| `length_lt` | Array length less than value |
-| `contains` | Array contains value |
-| `not_contains` | Array does not contain value |
-
-**Output:**
-- On match: "LIST_OK" (or "true" if output_bool="true")
-- On no match: Error "CONDITION_NOT_MET" (or "false" if output_bool="true")
-
-**Example:**
-```yaml
-check_results:
-  type: "list"
-  config:
-    mode: "contains"
-    list: "{{fetch_tags}}"
-    value: "urgent"
-  next: ["handle_urgent"]
-
-check_has_items:
-  type: "list"
-  config:
-    mode: "length_gt"
-    list: "{{data_array}}"
-    value: "0"
-    output_bool: "true"
-```
-
----
-
 ## Data Nodes
 
 ### var
@@ -957,9 +883,6 @@ nodes:
 | `compare` | Logic | Compare two values → true/false | `left`, `operator`, `right` |
 | `check` | Logic | Check single value → true/false | `value`, `operator` |
 | `branch` | Logic | Route based on boolean | `condition`, `on_true`, `on_false` |
-| `text` | Logic | (Legacy) String matching | `mode`, `text`, `pattern` |
-| `math` | Logic | (Legacy) Numeric comparison | `operator`, `left`, `right` |
-| `list` | Logic | (Legacy) Array operations | `mode`, `list` |
 | `var` | Data | Define values | `value` |
 | `secret` | Data | Sensitive values | key-values (supports env) |
 | `dict` | Data | JSON extraction | `input`, `fields` |
