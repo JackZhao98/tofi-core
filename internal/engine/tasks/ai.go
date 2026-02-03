@@ -92,6 +92,15 @@ func (a *AI) Execute(config map[string]interface{}, ctx *models.ExecutionContext
 
 	model := fmt.Sprint(config["model"])
 
+	// Handle openai-compatible mode: user provides full endpoint, use OpenAI format
+	if model == "openai-compatible" {
+		endpoint, _ := config["endpoint"].(string)
+		if endpoint == "" {
+			return "", fmt.Errorf("endpoint is required when model is 'openai-compatible'")
+		}
+		return a.executeOpenAICompatible(config, endpoint, ctx)
+	}
+
 	// Auto-detect provider from model name if not explicitly set
 	provider := strings.ToLower(fmt.Sprint(config["provider"]))
 	if provider == "" || provider == "<nil>" {
@@ -220,6 +229,46 @@ func (a *AI) Execute(config map[string]interface{}, ctx *models.ExecutionContext
 		}
 	}
 	return resp, fmt.Errorf("AI response parsing failed")
+}
+
+// executeOpenAICompatible handles custom OpenAI-compatible endpoints (e.g., Ollama, vLLM)
+// User provides the full endpoint URL, we just call it with OpenAI chat format
+func (a *AI) executeOpenAICompatible(config map[string]interface{}, endpoint string, ctx *models.ExecutionContext) (string, error) {
+	system := fmt.Sprint(config["system"])
+	prompt := fmt.Sprint(config["prompt"])
+
+	if prompt == "" {
+		return "", fmt.Errorf("AI prompt cannot be empty")
+	}
+
+	headers := make(map[string]string)
+	headers["Content-Type"] = "application/json"
+
+	// API key is optional for local services like Ollama
+	if apiKey, ok := config["api_key"].(string); ok && apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	}
+
+	// Use "default" as model name, the actual model is configured on the server side
+	payload := map[string]interface{}{
+		"model": "default",
+		"messages": []map[string]string{
+			{"role": "system", "content": system},
+			{"role": "user", "content": prompt},
+		},
+	}
+
+	resp, err := executor.PostJSON(endpoint, headers, payload, 60)
+	if err != nil {
+		return "", err
+	}
+
+	// Try standard OpenAI response format
+	if res := gjson.Get(resp, "choices.0.message.content"); res.Exists() {
+		return res.String(), nil
+	}
+
+	return resp, fmt.Errorf("AI response parsing failed for openai-compatible endpoint")
 }
 
 func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}, ctx *models.ExecutionContext) (string, error) {
@@ -384,10 +433,19 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 
 func (a *AI) Validate(n *models.Node) error {
-	// Only model is required - provider and endpoint are auto-detected
+	// model is required
 	model, ok := n.Config["model"]
 	if !ok || fmt.Sprint(model) == "" {
 		return fmt.Errorf("config.model is required")
 	}
+
+	// When model is "openai-compatible", endpoint is required
+	if fmt.Sprint(model) == "openai-compatible" {
+		endpoint, _ := n.Config["endpoint"].(string)
+		if endpoint == "" {
+			return fmt.Errorf("config.endpoint is required when model is 'openai-compatible'")
+		}
+	}
+
 	return nil
 }

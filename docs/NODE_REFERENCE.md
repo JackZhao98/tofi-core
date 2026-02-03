@@ -22,10 +22,16 @@ Every node follows this structure:
     <KEY>: "<value>"
   next: ["<node_id>"]         # Nodes to execute on success
   on_failure: ["<node_id>"]   # Nodes to execute on failure
-  dependencies: ["<node_id>"] # Wait for these nodes before starting
+  dependencies: ["<node_id>"] # Wait for these nodes before starting (optional, auto-inferred)
   timeout: <seconds>          # Node-level timeout
   retry_count: <number>       # Retry attempts on failure
 ```
+
+**Note on `next` and `dependencies`:**
+- You only need to specify ONE of these fields; the engine auto-infers the other.
+- If `A.next` contains `B`, then `B.dependencies` will automatically include `A`.
+- If `B.dependencies` contains `A`, then `A.next` will automatically include `B`.
+- This eliminates redundancy and prevents "orphan node" issues.
 
 ---
 
@@ -83,19 +89,20 @@ Call LLM APIs (OpenAI, Claude, Gemini) for text generation.
 **Config:**
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `model` | string | Yes | - | Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-1.5-pro") |
-| `provider` | string | No | Auto-detected | Provider: "openai", "claude", "gemini" |
+| `model` | string | Yes | - | Model name or "openai-compatible" for custom endpoints |
 | `api_key` | string | Yes* | - | API key (or use `use_system_key`) |
 | `use_system_key` | boolean | No | false | Use system-configured API key |
-| `endpoint` | string | No | Provider default | Custom API endpoint |
+| `endpoint` | string | Only if model="openai-compatible" | - | Full API endpoint URL |
 | `system` | string | No | "" | System prompt |
 | `prompt` | string | Yes | - | User prompt |
 | `mcp_servers` | array | No | - | MCP server IDs for agent mode |
 
-**Auto-detection rules:**
-- Model starts with `claude` -> provider = "claude"
-- Model starts with `gemini` -> provider = "gemini"
-- Model starts with `gpt-`, `o1-`, `o3-` -> provider = "openai"
+**Model auto-detection:**
+- `claude*` → Anthropic API
+- `gemini*` → Google Gemini API
+- `gpt-*`, `o1-*`, `o3-*` → OpenAI API (Completions)
+- `gpt-5*` → OpenAI API (Responses, new format)
+- `openai-compatible` → User-provided endpoint (Ollama, vLLM, etc.)
 
 **Output:** Generated text response
 
@@ -119,6 +126,16 @@ analyze:
     model: "claude-3-5-sonnet-20241022"
     api_key: "{{secrets.anthropic_key}}"
     prompt: "Analyze this data: {{data.input}}"
+```
+
+**Example (OpenAI Compatible - Ollama):**
+```yaml
+local_llm:
+  type: "ai"
+  config:
+    model: "openai-compatible"
+    endpoint: "http://localhost:11434/v1/chat/completions"
+    prompt: "Explain quantum computing"
 ```
 
 **Example (Agent with MCP):**

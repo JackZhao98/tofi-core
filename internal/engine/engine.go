@@ -648,9 +648,50 @@ func InitializeGlobals(wf *models.Workflow, ctx *models.ExecutionContext, inputs
 	}
 }
 
+// InferEdges 自动推导 next 和 dependencies 的双向关系
+// 这样用户只需要写其中一个，另一个会自动补全
+func InferEdges(wf *models.Workflow) {
+	// 1. 从 next 推导 dependencies
+	// 如果 A.next 包含 B，那么 B.dependencies 应该包含 A
+	for nodeID, node := range wf.Nodes {
+		for _, nextID := range node.Next {
+			if nextNode, ok := wf.Nodes[nextID]; ok {
+				if !containsString(nextNode.Dependencies, nodeID) {
+					nextNode.Dependencies = append(nextNode.Dependencies, nodeID)
+				}
+			}
+		}
+	}
+
+	// 2. 从 dependencies 推导 next
+	// 如果 B.dependencies 包含 A，那么 A.next 应该包含 B
+	for nodeID, node := range wf.Nodes {
+		for _, depID := range node.Dependencies {
+			if depNode, ok := wf.Nodes[depID]; ok {
+				if !containsString(depNode.Next, nodeID) {
+					depNode.Next = append(depNode.Next, nodeID)
+				}
+			}
+		}
+	}
+}
+
+// containsString 检查字符串切片是否包含指定字符串
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
 // Start 封装了工作流的合法起点启动逻辑
 func Start(wf *models.Workflow, ctx *models.ExecutionContext, inputs map[string]interface{}) {
-	// 0. 预加载全局数据 (强契约模式)
+	// 0. 预处理：自动推导 next 和 dependencies 的双向关系
+	InferEdges(wf)
+
+	// 1. 预加载全局数据 (强契约模式)
 	InitializeGlobals(wf, ctx, inputs)
 
 	// 1. 如果工作流定义了全局超时，应用到 context
