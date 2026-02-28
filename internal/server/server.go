@@ -100,6 +100,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/auth/setup", s.handleSetupAdmin)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 
+	// Webhook 触发端点（公开，不需要认证）
+	mux.HandleFunc("POST /api/v1/hooks/{token}", s.handleWebhookTrigger)
+	mux.HandleFunc("GET /api/v1/hooks/{token}", s.handleWebhookTrigger) // 支持 GET 触发
+
 	// 受保护的 API 路由 (包裹 AuthMiddleware)
 	mux.HandleFunc("GET /api/v1/auth/me", s.AuthMiddleware(s.handleGetMe))
 	mux.HandleFunc("POST /api/v1/run", s.AuthMiddleware(s.handleRunWorkflow))
@@ -133,6 +137,12 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/workflows/{id}/files", s.AuthMiddleware(s.handleCreateWorkflowFileLink))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/files/upload", s.AuthMiddleware(s.handleUploadWorkflowFile))
 	mux.HandleFunc("DELETE /api/v1/workflows/{id}/files/{filename}", s.AuthMiddleware(s.handleDeleteWorkflowFileLink))
+
+	// Webhook 管理路由（受保护）
+	mux.HandleFunc("POST /api/v1/webhooks", s.AuthMiddleware(s.handleCreateWebhook))
+	mux.HandleFunc("GET /api/v1/webhooks", s.AuthMiddleware(s.handleListWebhooks))
+	mux.HandleFunc("DELETE /api/v1/webhooks/{id}", s.AuthMiddleware(s.handleDeleteWebhook))
+	mux.HandleFunc("PUT /api/v1/webhooks/{id}", s.AuthMiddleware(s.handleToggleWebhook))
 
 	// Secret 管理路由
 	mux.HandleFunc("POST /api/v1/secrets", s.AuthMiddleware(s.handleCreateSecret))

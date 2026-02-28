@@ -151,6 +151,42 @@ func InitDB(homeDir string) (*DB, error) {
 	conn.Exec("ALTER TABLE execution_artifacts ADD COLUMN mime_type TEXT")
 	conn.Exec("ALTER TABLE execution_artifacts ADD COLUMN relative_path TEXT")
 
+	// 创建 webhooks 表
+	webhooksQuery := `
+	CREATE TABLE IF NOT EXISTS webhooks (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		workflow_id TEXT NOT NULL,
+		token TEXT UNIQUE NOT NULL,
+		secret TEXT,
+		active INTEGER DEFAULT 1,
+		description TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_webhooks_token ON webhooks(token);
+	CREATE INDEX IF NOT EXISTS idx_webhooks_user ON webhooks(user_id);`
+	if _, err := conn.Exec(webhooksQuery); err != nil {
+		log.Printf("⚠️  webhooks table creation (may already exist): %v", err)
+	}
+
+	// 创建 cron_triggers 表
+	cronQuery := `
+	CREATE TABLE IF NOT EXISTS cron_triggers (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		workflow_id TEXT NOT NULL,
+		expression TEXT NOT NULL,
+		timezone TEXT DEFAULT 'UTC',
+		active INTEGER DEFAULT 1,
+		description TEXT,
+		last_executed DATETIME,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_cron_user ON cron_triggers(user_id);`
+	if _, err := conn.Exec(cronQuery); err != nil {
+		log.Printf("⚠️  cron_triggers table creation (may already exist): %v", err)
+	}
+
 	return &DB{conn: conn}, nil
 }
 
@@ -681,4 +717,171 @@ func (db *DB) ListAllArtifacts(user string, limit, offset int) ([]*models.Artifa
 		records = append(records, &r)
 	}
 	return records, nil
+}
+
+// --- Webhook Management ---
+
+type WebhookRecord struct {
+	ID          string         `json:"id"`
+	UserID      string         `json:"user_id"`
+	WorkflowID  string         `json:"workflow_id"`
+	Token       string         `json:"token"`
+	Secret      string         `json:"secret,omitempty"`
+	Active      bool           `json:"active"`
+	Description string         `json:"description,omitempty"`
+	CreatedAt   sql.NullString `json:"created_at"`
+}
+
+func (db *DB) CreateWebhook(id, userID, workflowID, token, secret, description string) error {
+	query := `INSERT INTO webhooks (id, user_id, workflow_id, token, secret, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, userID, workflowID, token, secret, description)
+	return err
+}
+
+func (db *DB) GetWebhookByToken(token string) (*WebhookRecord, error) {
+	query := `SELECT id, user_id, workflow_id, token, secret, active, description, created_at FROM webhooks WHERE token = ? AND active = 1`
+	row := db.conn.QueryRow(query, token)
+	var w WebhookRecord
+	var active int
+	err := row.Scan(&w.ID, &w.UserID, &w.WorkflowID, &w.Token, &w.Secret, &active, &w.Description, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	w.Active = active == 1
+	return &w, nil
+}
+
+func (db *DB) ListWebhooks(userID string, workflowID string) ([]*WebhookRecord, error) {
+	query := `SELECT id, user_id, workflow_id, token, secret, active, description, created_at FROM webhooks WHERE user_id = ?`
+	args := []interface{}{userID}
+	if workflowID != "" {
+		query += ` AND workflow_id = ?`
+		args = append(args, workflowID)
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*WebhookRecord
+	for rows.Next() {
+		var w WebhookRecord
+		var active int
+		if err := rows.Scan(&w.ID, &w.UserID, &w.WorkflowID, &w.Token, &w.Secret, &active, &w.Description, &w.CreatedAt); err != nil {
+			continue
+		}
+		w.Active = active == 1
+		records = append(records, &w)
+	}
+	return records, nil
+}
+
+func (db *DB) DeleteWebhook(id, userID string) error {
+	query := `DELETE FROM webhooks WHERE id = ? AND user_id = ?`
+	_, err := db.conn.Exec(query, id, userID)
+	return err
+}
+
+func (db *DB) ToggleWebhook(id, userID string, active bool) error {
+	activeInt := 0
+	if active {
+		activeInt = 1
+	}
+	query := `UPDATE webhooks SET active = ? WHERE id = ? AND user_id = ?`
+	_, err := db.conn.Exec(query, activeInt, id, userID)
+	return err
+}
+
+// --- Cron Trigger Management ---
+
+type CronTriggerRecord struct {
+	ID           string         `json:"id"`
+	UserID       string         `json:"user_id"`
+	WorkflowID   string         `json:"workflow_id"`
+	Expression   string         `json:"expression"`
+	Timezone     string         `json:"timezone"`
+	Active       bool           `json:"active"`
+	Description  string         `json:"description,omitempty"`
+	LastExecuted sql.NullString `json:"last_executed"`
+	CreatedAt    sql.NullString `json:"created_at"`
+}
+
+func (db *DB) CreateCronTrigger(id, userID, workflowID, expression, timezone, description string) error {
+	query := `INSERT INTO cron_triggers (id, user_id, workflow_id, expression, timezone, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, userID, workflowID, expression, timezone, description)
+	return err
+}
+
+func (db *DB) ListCronTriggers(userID string, workflowID string) ([]*CronTriggerRecord, error) {
+	query := `SELECT id, user_id, workflow_id, expression, timezone, active, description, last_executed, created_at FROM cron_triggers WHERE user_id = ?`
+	args := []interface{}{userID}
+	if workflowID != "" {
+		query += ` AND workflow_id = ?`
+		args = append(args, workflowID)
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*CronTriggerRecord
+	for rows.Next() {
+		var c CronTriggerRecord
+		var active int
+		if err := rows.Scan(&c.ID, &c.UserID, &c.WorkflowID, &c.Expression, &c.Timezone, &active, &c.Description, &c.LastExecuted, &c.CreatedAt); err != nil {
+			continue
+		}
+		c.Active = active == 1
+		records = append(records, &c)
+	}
+	return records, nil
+}
+
+func (db *DB) ListActiveCronTriggers() ([]*CronTriggerRecord, error) {
+	query := `SELECT id, user_id, workflow_id, expression, timezone, active, description, last_executed, created_at FROM cron_triggers WHERE active = 1`
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*CronTriggerRecord
+	for rows.Next() {
+		var c CronTriggerRecord
+		var active int
+		if err := rows.Scan(&c.ID, &c.UserID, &c.WorkflowID, &c.Expression, &c.Timezone, &active, &c.Description, &c.LastExecuted, &c.CreatedAt); err != nil {
+			continue
+		}
+		c.Active = active == 1
+		records = append(records, &c)
+	}
+	return records, nil
+}
+
+func (db *DB) UpdateCronTrigger(id, userID, expression, timezone, description string, active bool) error {
+	activeInt := 0
+	if active {
+		activeInt = 1
+	}
+	query := `UPDATE cron_triggers SET expression = ?, timezone = ?, description = ?, active = ? WHERE id = ? AND user_id = ?`
+	_, err := db.conn.Exec(query, expression, timezone, description, activeInt, id, userID)
+	return err
+}
+
+func (db *DB) UpdateCronLastExecuted(id string) error {
+	query := `UPDATE cron_triggers SET last_executed = CURRENT_TIMESTAMP WHERE id = ?`
+	_, err := db.conn.Exec(query, id)
+	return err
+}
+
+func (db *DB) DeleteCronTrigger(id, userID string) error {
+	query := `DELETE FROM cron_triggers WHERE id = ? AND user_id = ?`
+	_, err := db.conn.Exec(query, id, userID)
+	return err
 }
