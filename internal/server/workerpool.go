@@ -98,6 +98,9 @@ func (wp *WorkerPool) executeJob(job *WorkflowJob) {
 	engine.Start(job.Workflow, job.Context, job.InitialInputs)
 	job.Context.Wg.Wait()
 
+	// Scan artifacts directory and record files to DB
+	engine.ScanArtifacts(job.Context)
+
 	engine.Cleanup(job.Context)
 
 	if err := engine.SaveReport(job.Workflow, job.Context, job.DB); err != nil {

@@ -122,6 +122,8 @@ func GetAction(nodeType string) Action {
 		return &logic.Loop{}
 	case "var", "const":
 		return &data.Var{}
+	case "save":
+		return &tasks.Save{}
 	case "dict":
 		return &data.Dict{}
 	case "secret":
@@ -421,6 +423,32 @@ func RunNode(wf *models.Workflow, nodeID string, ctx *models.ExecutionContext) {
 	
 	// 注入系统元数据
 	resolvedConfig["_node_id"] = node.ID
+
+	// File 节点特殊处理：如果有依赖（上游连线），注入上游输出作为 _input
+	// 这允许 File 节点作为"文件容器"，既可以接收上游数据，也可以接收用户上传
+	if node.Type == "file" {
+		logger.Printf("%s[%s] [FILE]    [%s] Dependencies: %v (count: %d)",
+			prefix, ctx.ExecutionID, runtimeID, node.Dependencies, len(node.Dependencies))
+
+		if len(node.Dependencies) > 0 {
+			// 使用第一个依赖作为输入源
+			depID := node.Dependencies[0]
+			if upstreamOutput, completed := ctx.GetResult(depID); completed {
+				// 只有当上游输出不是错误时才注入
+				if !strings.HasPrefix(upstreamOutput, "ERR_") {
+					resolvedConfig["_input"] = upstreamOutput
+					logger.Printf("%s[%s] [FILE]    [%s] Injecting upstream data from %s (%d bytes)",
+						prefix, ctx.ExecutionID, runtimeID, depID, len(upstreamOutput))
+				} else {
+					logger.Printf("%s[%s] [FILE]    [%s] Upstream %s has error: %s",
+						prefix, ctx.ExecutionID, runtimeID, depID, upstreamOutput)
+				}
+			} else {
+				logger.Printf("%s[%s] [FILE]    [%s] Upstream %s not completed yet",
+					prefix, ctx.ExecutionID, runtimeID, depID)
+			}
+		}
+	}
 	// ------------------------------------
 
 	startTime := time.Now()

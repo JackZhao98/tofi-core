@@ -45,7 +45,7 @@ func LoadState(execID string, db *storage.DB, homeDir string) (*models.Execution
 	}
 
 	ctx := models.NewExecutionContext(execID, record.User, homeDir)
-	ctx.WorkflowName = record.WorkflowName
+	ctx.SetWorkflowName(record.WorkflowName)
 	ctx.WorkflowID = record.WorkflowID
 	ctx.DB = db
 	

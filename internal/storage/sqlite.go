@@ -128,6 +128,11 @@ func InitDB(homeDir string) (*DB, error) {
 		return nil, err
 	}
 
+	// Migration: Add new columns for File ID system
+	conn.Exec("ALTER TABLE user_files ADD COLUMN workflow_id TEXT")
+	conn.Exec("ALTER TABLE user_files ADD COLUMN node_id TEXT")
+	conn.Exec("ALTER TABLE user_files ADD COLUMN source TEXT DEFAULT 'library'")
+
 	// 创建 execution_artifacts 表
 	artifactsQuery := `
 	CREATE TABLE IF NOT EXISTS execution_artifacts (
@@ -141,6 +146,10 @@ func InitDB(homeDir string) (*DB, error) {
 	if _, err := conn.Exec(artifactsQuery); err != nil {
 		return nil, err
 	}
+
+	// Migration: add mime_type and relative_path to execution_artifacts
+	conn.Exec("ALTER TABLE execution_artifacts ADD COLUMN mime_type TEXT")
+	conn.Exec("ALTER TABLE execution_artifacts ADD COLUMN relative_path TEXT")
 
 	return &DB{conn: conn}, nil
 }
@@ -489,16 +498,27 @@ func (db *DB) DeleteSecretByID(id string) error {
 // --- File Handling ---
 
 func (db *DB) SaveUserFile(uuid, fileID, user, originalFilename, mimeType string, size int64, hash string) error {
-	query := `INSERT INTO user_files (uuid, file_id, user, original_filename, mime_type, size_bytes, hash) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO user_files (uuid, file_id, user, original_filename, mime_type, size_bytes, hash, source) VALUES (?, ?, ?, ?, ?, ?, ?, 'library')`
 	_, err := db.conn.Exec(query, uuid, fileID, user, originalFilename, mimeType, size, hash)
 	return err
 }
 
+// SaveWorkflowFile saves a file uploaded to a specific workflow
+func (db *DB) SaveWorkflowFile(uuid, fileID, user, originalFilename, mimeType string, size int64, hash, workflowID, nodeID string) error {
+	query := `INSERT INTO user_files (uuid, file_id, user, original_filename, mime_type, size_bytes, hash, workflow_id, node_id, source)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'workflow')`
+	_, err := db.conn.Exec(query, uuid, fileID, user, originalFilename, mimeType, size, hash, workflowID, nodeID)
+	return err
+}
+
 func (db *DB) GetUserFileID(user, fileID string) (*models.UserFileRecord, error) {
-	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash FROM user_files WHERE user = ? AND file_id = ?`
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash,
+	          COALESCE(workflow_id,''), COALESCE(node_id,''), COALESCE(source,'library')
+	          FROM user_files WHERE user = ? AND file_id = ?`
 	row := db.conn.QueryRow(query, user, fileID)
 	var r models.UserFileRecord
-	err := row.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash)
+	err := row.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash,
+		&r.WorkflowID, &r.NodeID, &r.Source)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +526,9 @@ func (db *DB) GetUserFileID(user, fileID string) (*models.UserFileRecord, error)
 }
 
 func (db *DB) ListUserFiles(user string) ([]*models.UserFileRecord, error) {
-	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash FROM user_files WHERE user = ? ORDER BY created_at DESC`
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash,
+	          COALESCE(workflow_id,''), COALESCE(node_id,''), COALESCE(source,'library')
+	          FROM user_files WHERE user = ? ORDER BY created_at DESC`
 	rows, err := db.conn.Query(query, user)
 	if err != nil {
 		return nil, err
@@ -516,7 +538,31 @@ func (db *DB) ListUserFiles(user string) ([]*models.UserFileRecord, error) {
 	var records []*models.UserFileRecord
 	for rows.Next() {
 		var r models.UserFileRecord
-		if err := rows.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash); err != nil {
+		if err := rows.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash,
+			&r.WorkflowID, &r.NodeID, &r.Source); err != nil {
+			continue
+		}
+		records = append(records, &r)
+	}
+	return records, nil
+}
+
+// ListWorkflowFiles lists all files belonging to a specific workflow
+func (db *DB) ListWorkflowFiles(user, workflowID string) ([]*models.UserFileRecord, error) {
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash,
+	          COALESCE(workflow_id,''), COALESCE(node_id,''), COALESCE(source,'library')
+	          FROM user_files WHERE user = ? AND workflow_id = ? ORDER BY created_at DESC`
+	rows, err := db.conn.Query(query, user, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*models.UserFileRecord
+	for rows.Next() {
+		var r models.UserFileRecord
+		if err := rows.Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash,
+			&r.WorkflowID, &r.NodeID, &r.Source); err != nil {
 			continue
 		}
 		records = append(records, &r)
@@ -525,9 +571,12 @@ func (db *DB) ListUserFiles(user string) ([]*models.UserFileRecord, error) {
 }
 
 func (db *DB) GetUserFile(user, fileID string) (*models.UserFileRecord, error) {
-	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash FROM user_files WHERE user = ? AND file_id = ?`
+	query := `SELECT uuid, file_id, user, original_filename, mime_type, size_bytes, created_at, hash,
+	          COALESCE(workflow_id,''), COALESCE(node_id,''), COALESCE(source,'library')
+	          FROM user_files WHERE user = ? AND file_id = ?`
 	var r models.UserFileRecord
-	err := db.conn.QueryRow(query, user, fileID).Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash)
+	err := db.conn.QueryRow(query, user, fileID).Scan(&r.UUID, &r.FileID, &r.User, &r.OriginalFilename, &r.MimeType, &r.SizeBytes, &r.CreatedAt, &r.Hash,
+		&r.WorkflowID, &r.NodeID, &r.Source)
 	if err != nil {
 		return nil, err
 	}
@@ -578,17 +627,37 @@ func (db *DB) CheckFileIDExists(user, fileID string) (bool, error) {
 
 // Artifacts
 
-func (db *DB) RecordArtifact(execID, filename string, size int64) error {
+func (db *DB) RecordArtifact(execID, filename, relativePath, mimeType string, size int64) error {
 	id := execID + "_" + filename // Simple deterministic ID
-	query := `INSERT INTO execution_artifacts (id, execution_id, filename, size_bytes) VALUES (?, ?, ?, ?)`
-	_, err := db.conn.Exec(query, id, execID, filename, size)
+	query := `INSERT OR REPLACE INTO execution_artifacts (id, execution_id, filename, relative_path, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, execID, filename, relativePath, mimeType, size)
 	return err
 }
 
+func (db *DB) ListExecutionArtifacts(executionID string) ([]*models.ArtifactRecord, error) {
+	query := `SELECT id, execution_id, filename, COALESCE(relative_path,''), COALESCE(mime_type,''), size_bytes, created_at
+	FROM execution_artifacts WHERE execution_id = ? ORDER BY filename`
+
+	rows, err := db.conn.Query(query, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*models.ArtifactRecord
+	for rows.Next() {
+		var r models.ArtifactRecord
+		if err := rows.Scan(&r.ID, &r.ExecutionID, &r.Filename, &r.RelativePath, &r.MimeType, &r.SizeBytes, &r.CreatedAt); err != nil {
+			continue
+		}
+		records = append(records, &r)
+	}
+	return records, nil
+}
+
 func (db *DB) ListAllArtifacts(user string, limit, offset int) ([]*models.ArtifactRecord, error) {
-	// Join with executions to get workflow name and verify user ownership
 	query := `
-	SELECT a.id, a.execution_id, e.workflow_name, a.filename, a.size_bytes, a.created_at
+	SELECT a.id, a.execution_id, e.workflow_name, a.filename, COALESCE(a.relative_path,''), COALESCE(a.mime_type,''), a.size_bytes, a.created_at
 	FROM execution_artifacts a
 	JOIN executions e ON a.execution_id = e.id
 	WHERE e.user = ?
@@ -605,7 +674,7 @@ func (db *DB) ListAllArtifacts(user string, limit, offset int) ([]*models.Artifa
 	for rows.Next() {
 		var r models.ArtifactRecord
 		var wfName sql.NullString
-		if err := rows.Scan(&r.ID, &r.ExecutionID, &wfName, &r.Filename, &r.SizeBytes, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ExecutionID, &wfName, &r.Filename, &r.RelativePath, &r.MimeType, &r.SizeBytes, &r.CreatedAt); err != nil {
 			continue
 		}
 		r.WorkflowName = wfName.String

@@ -39,12 +39,13 @@ These nodes are registered in the engine and fully functional:
 | `ai` | Task | LLM text generation | `model`, `prompt` | [ai.md](nodes/ai.md) |
 | `shell` | Task | Execute shell scripts | `script` | [shell.md](nodes/shell.md) |
 | `hold` | Task | Wait for manual approval | `input` | [hold.md](nodes/hold.md) |
-| `file` | Task | Load file from library | `file_id` | [file.md](nodes/file.md) |
+| `file` | Data | File container (upstream input or user upload) | `file_id`, `file_path`, `save_to_disk` | [file.md](nodes/file.md) |
 | `workflow` | Task | Call sub-workflow | `uses` | [workflow.md](nodes/workflow.md) |
 | `compare` | Logic | Compare two values → true/false | `left`, `operator`, `right` | [compare.md](nodes/compare.md) |
 | `check` | Logic | Check single value → true/false | `value`, `operator` | [check.md](nodes/check.md) |
 | `branch` | Logic | Route based on boolean | `condition`, `on_true`, `on_false` | [branch.md](nodes/branch.md) |
 | `loop` | Logic | Iterate over items | `mode`, `task` | [loop.md](nodes/loop.md) |
+| `save` | Task | Save content to artifacts | `content`, `filename` | [save.md](nodes/save.md) |
 | `var` | Data | Store a value | `value` | [var.md](nodes/var.md) |
 | `dict` | Data | Build structured JSON | `input`, `fields` | [dict.md](nodes/dict.md) |
 | `secret` | Data | Sensitive values with masking | key-value pairs | [secret.md](nodes/secret.md) |
@@ -66,6 +67,7 @@ Normal nodes do **not** have manual `next`. Edges are auto-computed from `{{}}` 
 - If node B's fields contain `{{A}}`, edge A→B appears automatically.
 - Removing the reference removes the edge.
 - `next` and `dependencies` are auto-computed by the frontend.
+- **Exception**: `file` nodes are container nodes — edges use `dependencies` directly (not `{{}}` refs).
 
 ### Boolean Trigger Edges (Compare/Check Only)
 Only `compare` and `check` nodes can actively trigger downstream via `on_true`/`on_false`.
@@ -78,6 +80,8 @@ These are the only nodes with T/F branching capability.
 - **Compare/Check** nodes auto-generate a `_branch` suffix node in YAML. The frontend merges them back into one node on load.
 - **Secret** references use `ref:SECRET_NAME` format in YAML config, which the engine resolves via database lookup and decryption.
 - **Var** nodes use a top-level `value` field (not inside `config`) in YAML.
+- **File** nodes output structured JSON (`{"path", "filename", "mime_type", "size", "file_id"}`). Use `{{file.content}}` for on-demand content resolution.
+- **Save** nodes write to `{artifacts_dir}/{filename}` and return the absolute path.
 
 ---
 

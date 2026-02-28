@@ -115,6 +115,7 @@ func (s *Server) Start() error {
 	// Global File Library
 	mux.HandleFunc("GET /api/v1/files", s.AuthMiddleware(s.handleListFilesGlobal))
 	mux.HandleFunc("POST /api/v1/files", s.AuthMiddleware(s.handleUploadFileGlobal))
+	mux.HandleFunc("GET /api/v1/files/{id}/preview", s.AuthMiddleware(s.handlePreviewFileGlobal))
 	mux.HandleFunc("DELETE /api/v1/files/{id}", s.AuthMiddleware(s.handleDeleteFileGlobal))
 
 	mux.HandleFunc("POST /api/v1/executions/{id}/nodes/{node_id}/approve", s.AuthMiddleware(s.handleApproveExecution))
@@ -127,6 +128,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/workflows", s.AuthMiddleware(s.handleSaveWorkflow))
 	mux.HandleFunc("POST /api/v1/workflows/validate", s.AuthMiddleware(s.handleValidateWorkflow))
 	mux.HandleFunc("DELETE /api/v1/workflows/{name}", s.AuthMiddleware(s.handleDeleteWorkflow))
+
+	// Workflow File Links (Symlink-based for CLI, Upload for Web)
+	mux.HandleFunc("POST /api/v1/workflows/{id}/files", s.AuthMiddleware(s.handleCreateWorkflowFileLink))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/files/upload", s.AuthMiddleware(s.handleUploadWorkflowFile))
+	mux.HandleFunc("DELETE /api/v1/workflows/{id}/files/{filename}", s.AuthMiddleware(s.handleDeleteWorkflowFileLink))
 
 	// Secret 管理路由
 	mux.HandleFunc("POST /api/v1/secrets", s.AuthMiddleware(s.handleCreateSecret))

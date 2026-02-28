@@ -745,35 +745,18 @@ func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	user := r.Context().Value(UserContextKey).(string)
 
-	// We need to know the workflow name to find the artifact dir
-	record, err := s.db.GetExecution(id)
+	artifacts, err := s.db.ListExecutionArtifacts(id)
 	if err != nil {
-		http.Error(w, "Execution not found", http.StatusNotFound)
+		http.Error(w, "Failed to list artifacts", http.StatusInternalServerError)
 		return
 	}
-
-	artDir := filepath.Join(s.config.HomeDir, user, "artifacts", models.NormalizeID(record.WorkflowName))
-	if _, err := os.Stat(artDir); os.IsNotExist(err) {
-		json.NewEncoder(w).Encode([]string{})
-		return
+	if artifacts == nil {
+		artifacts = make([]*models.ArtifactRecord, 0)
 	}
 
-	files, err := os.ReadDir(artDir)
-	if err != nil {
-		http.Error(w, "Failed to read artifacts", http.StatusInternalServerError)
-		return
-	}
-
-	names := []string{}
-	for _, f := range files {
-		if !f.IsDir() {
-			names = append(names, f.Name())
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(names)
+	json.NewEncoder(w).Encode(artifacts)
 }
 
 func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) {
@@ -787,26 +770,70 @@ func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	filePath := filepath.Join(s.config.HomeDir, user, "artifacts", models.NormalizeID(record.WorkflowName), filepath.Base(filename))
+	// Try new path with execution_id subdirectory first, fallback to legacy path
+	basePath := filepath.Join(s.config.HomeDir, user, "artifacts", models.NormalizeID(record.WorkflowName))
+	filePath := filepath.Join(basePath, id, filepath.Base(filename))
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		http.Error(w, "Artifact not found", http.StatusNotFound)
-		return
+		// Fallback: legacy path without execution_id
+		filePath = filepath.Join(basePath, filepath.Base(filename))
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			http.Error(w, "Artifact not found", http.StatusNotFound)
+			return
+		}
 	}
-	// Determine Content-Type
-	// Try to get from metadata if possible, otherwise guess
-	// Note: In a real implementation we might want to store mime type in DB for artifacts too
-	// For now, we detect on the fly
+
+	// Detect Content-Type
 	file, err := os.Open(filePath)
 	if err == nil {
-		defer file.Close()
-		// Only read first 512 bytes for detection
 		buffer := make([]byte, 512)
 		_, _ = file.Read(buffer)
+		file.Close()
 		contentType := http.DetectContentType(buffer)
 		w.Header().Set("Content-Type", contentType)
 	}
 
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(filename)+"\"")
+	// Support ?mode=preview for inline display
+	mode := r.URL.Query().Get("mode")
+	if mode == "preview" {
+		w.Header().Set("Content-Disposition", "inline; filename=\""+filepath.Base(filename)+"\"")
+	} else {
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(filename)+"\"")
+	}
+	http.ServeFile(w, r, filePath)
+}
+
+// handlePreviewFileGlobal serves a file from the global file library inline (for thumbnails)
+func (s *Server) handlePreviewFileGlobal(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	id := r.PathValue("id")
+
+	files, err := s.db.ListUserFiles(user)
+	if err != nil {
+		http.Error(w, "Failed to list files", http.StatusInternalServerError)
+		return
+	}
+
+	var target *models.UserFileRecord
+	for _, f := range files {
+		if f.FileID == id || f.UUID == id {
+			target = f
+			break
+		}
+	}
+
+	if target == nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(s.config.HomeDir, user, "storage", "files", target.UUID)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "File not found on disk", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", target.MimeType)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+target.OriginalFilename+"\"")
 	http.ServeFile(w, r, filePath)
 }
 
@@ -1009,6 +1036,240 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(UserContextKey).(string)
 	name := r.PathValue("name")
 	s.db.DeleteSecret(user, name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Workflow File Link Handler (Symlink-based) ---
+
+type CreateWorkflowFileLinkRequest struct {
+	NodeID     string `json:"node_id"`
+	SourcePath string `json:"source_path"`
+}
+
+type CreateWorkflowFileLinkResponse struct {
+	RelativePath string `json:"relative_path"`
+	Filename     string `json:"filename"`
+}
+
+// handleCreateWorkflowFileLink creates a symlink in the workflow's files directory
+// POST /api/v1/workflows/{id}/files
+func (s *Server) handleCreateWorkflowFileLink(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	workflowID := r.PathValue("id")
+
+	var req CreateWorkflowFileLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.NodeID == "" {
+		http.Error(w, "node_id is required", http.StatusBadRequest)
+		return
+	}
+	if req.SourcePath == "" {
+		http.Error(w, "source_path is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate source file exists
+	info, err := os.Stat(req.SourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, fmt.Sprintf("Source file does not exist: %s", req.SourcePath), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to access source file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "Source path is a directory, not a file", http.StatusBadRequest)
+		return
+	}
+
+	// Create files directory
+	filesDir := filepath.Join(s.config.HomeDir, user, "workflows", workflowID, "files")
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create files directory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Symlink naming: {node_id}_{filename}
+	originalFilename := filepath.Base(req.SourcePath)
+	symlinkName := fmt.Sprintf("%s_%s", req.NodeID, originalFilename)
+	symlinkPath := filepath.Join(filesDir, symlinkName)
+
+	// Remove existing symlink if any
+	if _, err := os.Lstat(symlinkPath); err == nil {
+		os.Remove(symlinkPath)
+	}
+
+	// Create symlink
+	if err := os.Symlink(req.SourcePath, symlinkPath); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create symlink: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CreateWorkflowFileLinkResponse{
+		RelativePath: symlinkName,
+		Filename:     originalFilename,
+	})
+}
+
+// WorkflowFileUploadResponse is the response for workflow file upload
+type WorkflowFileUploadResponse struct {
+	FileID    string `json:"file_id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mime_type"`
+	SizeBytes int64  `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
+	// Legacy fields for backward compatibility
+	RelativePath string `json:"relative_path,omitempty"`
+}
+
+// handleUploadWorkflowFile uploads a file to the unified storage and registers it in the database
+// POST /api/v1/workflows/{id}/files/upload
+func (s *Server) handleUploadWorkflowFile(w http.ResponseWriter, r *http.Request) {
+	// Parse max 100MB
+	r.ParseMultipartForm(100 << 20)
+
+	user := r.Context().Value(UserContextKey).(string)
+	workflowID := r.PathValue("id")
+	nodeID := r.FormValue("node_id")
+
+	if nodeID == "" {
+		http.Error(w, "node_id is required", http.StatusBadRequest)
+		return
+	}
+
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Failed to get file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	if handler.Size > 100*1024*1024 {
+		http.Error(w, "File too large (max 100MB)", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Generate file ID and stored filename
+	// Format: {nodeId}_{timestamp}_{originalFilename}
+	// Example: input_1738825200_data.csv
+	timestamp := time.Now().Unix()
+	storedFilename := fmt.Sprintf("%s_%d_%s", nodeID, timestamp, handler.Filename)
+	fileID := storedFilename // File ID = stored filename for simplicity and readability
+
+	// Create storage directory: $HOME/{user}/storage/files/
+	storageDir := filepath.Join(s.config.HomeDir, user, "storage", "files")
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create storage directory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	destPath := filepath.Join(storageDir, storedFilename)
+
+	// Create destination file
+	dest, err := os.Create(destPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer dest.Close()
+
+	// Copy content
+	if _, err := io.Copy(dest, file); err != nil {
+		os.Remove(destPath) // Cleanup on failure
+		http.Error(w, fmt.Sprintf("Failed to write file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Detect MIME type from extension
+	mimeType := handler.Header.Get("Content-Type")
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = detectMimeType(handler.Filename)
+	}
+
+	// Save to database
+	// Note: storedFilename is used as UUID since it's unique (nodeId_timestamp_filename)
+	if err := s.db.SaveWorkflowFile(storedFilename, fileID, user, handler.Filename, mimeType, handler.Size, "", workflowID, nodeID); err != nil {
+		os.Remove(destPath) // Cleanup on failure
+		http.Error(w, fmt.Sprintf("Failed to save file record: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Also create a symlink in workflow directory for backward compatibility
+	// This ensures old workflows using file_path still work
+	legacyDir := filepath.Join(s.config.HomeDir, user, "workflows", workflowID, "files")
+	os.MkdirAll(legacyDir, 0755)
+	legacyFilename := fmt.Sprintf("%s_%s", nodeID, handler.Filename)
+	legacyPath := filepath.Join(legacyDir, legacyFilename)
+	os.Remove(legacyPath) // Remove old symlink if exists
+	os.Symlink(destPath, legacyPath)
+
+	createdAt := time.Now().Format(time.RFC3339)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(WorkflowFileUploadResponse{
+		FileID:       fileID,
+		Filename:     handler.Filename,
+		MimeType:     mimeType,
+		SizeBytes:    handler.Size,
+		CreatedAt:    createdAt,
+		RelativePath: legacyFilename, // For backward compatibility
+	})
+}
+
+// detectMimeType returns MIME type based on file extension
+func detectMimeType(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	mimeTypes := map[string]string{
+		".txt":  "text/plain",
+		".md":   "text/markdown",
+		".json": "application/json",
+		".csv":  "text/csv",
+		".xml":  "application/xml",
+		".html": "text/html",
+		".css":  "text/css",
+		".js":   "application/javascript",
+		".ts":   "application/typescript",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".svg":  "image/svg+xml",
+		".pdf":  "application/pdf",
+		".zip":  "application/zip",
+		".yaml": "application/yaml",
+		".yml":  "application/yaml",
+	}
+	if mime, ok := mimeTypes[ext]; ok {
+		return mime
+	}
+	return "application/octet-stream"
+}
+
+// handleDeleteWorkflowFileLink removes a symlink from the workflow's files directory
+// DELETE /api/v1/workflows/{id}/files/{filename}
+func (s *Server) handleDeleteWorkflowFileLink(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(UserContextKey).(string)
+	workflowID := r.PathValue("id")
+	filename := r.PathValue("filename")
+
+	symlinkPath := filepath.Join(s.config.HomeDir, user, "workflows", workflowID, "files", filepath.Base(filename))
+
+	if err := os.Remove(symlinkPath); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "File link not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to delete file link: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

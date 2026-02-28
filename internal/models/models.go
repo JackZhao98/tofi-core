@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -120,6 +121,10 @@ type UserFileRecord struct {
 	SizeBytes        int64  `json:"size_bytes"`
 	CreatedAt        string `json:"created_at"`
 	Hash             string `json:"hash"`
+	// New fields for File ID system
+	WorkflowID string `json:"workflow_id,omitempty"` // Associated workflow (optional)
+	NodeID     string `json:"node_id,omitempty"`     // Associated node (optional)
+	Source     string `json:"source,omitempty"`      // "library" | "workflow"
 }
 
 type ArtifactRecord struct {
@@ -127,6 +132,8 @@ type ArtifactRecord struct {
 	ExecutionID  string `json:"execution_id"`
 	WorkflowName string `json:"workflow_name"` // Joined from executions
 	Filename     string `json:"filename"`
+	RelativePath string `json:"relative_path"`
+	MimeType     string `json:"mime_type"`
 	SizeBytes    int64  `json:"size_bytes"`
 	CreatedAt    string `json:"created_at"`
 }
@@ -156,6 +163,11 @@ type ExecutionContext struct {
 	DB           interface{}        // 存储对象 (storage.DB), 使用 interface 避免循环引用
 	Ctx          context.Context    // 用于超时控制
 	Cancel       context.CancelFunc // 用于取消执行
+
+	// UpstreamContent stores content from upstream nodes for File nodes
+	// Key: nodeID, Value: raw content string
+	// Used for resolving {{file_node.content}} when file is not saved to disk
+	UpstreamContent map[string]string
 }
 
 func NewExecutionContext(execID, user, homeDir string) *ExecutionContext {
@@ -200,10 +212,13 @@ func (ctx *ExecutionContext) GetApproval(nodeID string) (string, bool) {
 }
 
 // SetWorkflowName sets the name and updates relevant paths like Artifacts
+// Artifacts are isolated per execution to prevent overwrites between runs
 func (ctx *ExecutionContext) SetWorkflowName(name string) {
 	ctx.WorkflowName = name
-	// Artifacts are grouped by Workflow Name (Project folder style)
-	ctx.Paths.Artifacts = filepath.Join(ctx.Paths.Home, ctx.User, "artifacts", NormalizeID(name))
+	ctx.Paths.Artifacts = filepath.Join(
+		ctx.Paths.Home, ctx.User, "artifacts",
+		NormalizeID(name), ctx.ExecutionID,
+	)
 }
 
 // Log 封装日志调用
@@ -315,6 +330,25 @@ func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (
 			fullPath := finalScript[startIdx+2 : endIdx]
 			jsonPath := strings.TrimPrefix(fullPath, nodeID+".")
 
+			// Special handling for File node .content field
+			// File node output is JSON without content, so we need to resolve it on demand
+			if jsonPath == "content" {
+				// Check if this is a File node output (has "path" and "mime_type" fields)
+				if gjson.Get(output, "path").Exists() && gjson.Get(output, "mime_type").Exists() {
+					content, err := ctx.resolveFileContent(nodeID, output)
+					if err != nil {
+						if strict {
+							return "", fmt.Errorf("无法读取文件内容: {{%s}}\n  %v", fullPath, err)
+						}
+						// Non-strict mode: replace with error message
+						finalScript = strings.ReplaceAll(finalScript, "{{"+fullPath+"}}", fmt.Sprintf("[Error: %v]", err))
+						continue
+					}
+					finalScript = strings.ReplaceAll(finalScript, "{{"+fullPath+"}}", content)
+					continue
+				}
+			}
+
 			result := gjson.Get(output, jsonPath)
 
 			if strict && !result.Exists() {
@@ -346,6 +380,73 @@ func (ctx *ExecutionContext) replaceParamsInternal(script string, strict bool) (
 	}
 
 	return finalScript, nil
+}
+
+// resolveFileContent reads the content of a file referenced by a File node
+// This is called when {{file_node.content}} is referenced
+func (ctx *ExecutionContext) resolveFileContent(nodeID, output string) (string, error) {
+	path := gjson.Get(output, "path").String()
+	mimeType := gjson.Get(output, "mime_type").String()
+
+	// Case 1: File has a path (saved to disk or user uploaded)
+	if path != "" {
+		// Check if it's a text file
+		if !isTextMimeType(mimeType) {
+			return "", fmt.Errorf("无法读取二进制文件内容 (%s)，请使用 .path 获取文件路径", mimeType)
+		}
+
+		// Read file content
+		content, err := readFileContent(path)
+		if err != nil {
+			return "", err
+		}
+		return content, nil
+	}
+
+	// Case 2: Upstream data not saved to disk - check UpstreamContent
+	if ctx.UpstreamContent != nil {
+		if content, ok := ctx.UpstreamContent[nodeID]; ok {
+			return content, nil
+		}
+	}
+
+	return "", fmt.Errorf("文件内容不可用：文件未保存到磁盘且无上游数据")
+}
+
+// isTextMimeType checks if a MIME type is a text format
+func isTextMimeType(mimeType string) bool {
+	if strings.HasPrefix(mimeType, "text/") {
+		return true
+	}
+	textMimes := map[string]bool{
+		"application/json":       true,
+		"application/javascript": true,
+		"application/typescript": true,
+		"application/xml":        true,
+		"application/yaml":       true,
+		"application/x-yaml":     true,
+	}
+	return textMimes[mimeType]
+}
+
+// readFileContent reads and returns file content with size limit
+func readFileContent(path string) (string, error) {
+	content, err := readFile(path)
+	if err != nil {
+		return "", fmt.Errorf("无法读取文件: %v", err)
+	}
+
+	// Limit content size to prevent memory issues (max 1MB)
+	if len(content) > 1024*1024 {
+		content = content[:1024*1024]
+	}
+
+	return string(content), nil
+}
+
+// readFile is a simple file reader (avoiding import os in this file)
+func readFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 func truncateString(s string, maxLen int) string {
