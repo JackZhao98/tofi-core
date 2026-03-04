@@ -173,7 +173,6 @@ func (s *Server) Start() error {
 
 	// Skills Registry (搜索 skills.sh 生态)
 	mux.HandleFunc("GET /api/v1/registry/search", s.AuthMiddleware(s.handleRegistrySearch))
-	mux.HandleFunc("GET /api/v1/registry/trending", s.AuthMiddleware(s.handleRegistryTrending))
 
 	// Admin 管理路由 (需要 admin 权限)
 	mux.HandleFunc("GET /api/v1/admin/stats", s.AdminMiddleware(s.handleAdminGetStats))

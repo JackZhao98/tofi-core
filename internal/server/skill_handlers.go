@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"tofi-core/internal/models"
@@ -64,16 +63,19 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleInstallSkill POST /api/v1/skills/install — 安装 Skill
-// 支持两种来源:
-//   - source: "local" + content (SKILL.md 内容)
-//   - source: "git" + url (git repo URL)
+//
+// 统一安装入口，支持三种方式:
+//
+//	1. source: "local" + content  — 直接粘贴 SKILL.md 内容
+//	2. source: "git" + url        — owner/repo@skill 或 Git URL（兼容 skills CLI 格式）
+//	3. source 省略 + content      — 等同于 local
 func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
 	var req struct {
-		Source  string `json:"source"`  // "local" | "git"
+		Source  string `json:"source"`  // "local" | "git" | ""
 		Content string `json:"content"` // SKILL.md 内容 (source=local)
-		URL     string `json:"url"`     // git repo URL (source=git)
+		URL     string `json:"url"`     // owner/repo@skill 或 Git URL (source=git)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -83,7 +85,6 @@ func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Source {
 	case "local", "":
-		// 直接从 SKILL.md 内容安装
 		if req.Content == "" {
 			http.Error(w, "content is required for local install", http.StatusBadRequest)
 			return
@@ -91,54 +92,33 @@ func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 		s.installFromContent(w, userID, req.Content, "local", "")
 
 	case "git":
-		// 从 Git repo 安装
 		if req.URL == "" {
 			http.Error(w, "url is required for git install", http.StatusBadRequest)
 			return
 		}
-		s.installFromGit(w, userID, req.URL)
+		s.installFromSource(w, userID, req.URL)
 
 	default:
 		http.Error(w, fmt.Sprintf("unsupported source: %s", req.Source), http.StatusBadRequest)
 	}
 }
 
-// installFromContent 从 SKILL.md 内容安装
+// installFromContent 从 SKILL.md 内容安装（本地粘贴）
 func (s *Server) installFromContent(w http.ResponseWriter, userID, content, source, sourceURL string) {
-	// 解析 SKILL.md
 	skillFile, err := skills.Parse([]byte(content))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid SKILL.md: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	// 构建数据库记录
-	manifest := skillFile.Manifest
-	manifestJSON, _ := json.Marshal(manifest)
-
-	record := &storage.SkillRecord{
-		ID:          fmt.Sprintf("%s/%s", userID, manifest.Name),
-		Name:        manifest.Name,
-		Description: manifest.Description,
-		Version:     "1.0",
-		Source:      source,
-		SourceURL:   sourceURL,
-		ManifestJSON: string(manifestJSON),
-		Instructions: skillFile.Body,
-		HasScripts:  len(skillFile.ScriptDirs) > 0,
-		RequiredSecrets: toJSON(manifest.RequiredEnvVars()),
-		AllowedTools:    toJSON(manifest.AllowedToolsList()),
-		UserID:      userID,
-		InstalledAt: time.Now().Format("2006-01-02 15:04:05"),
-	}
-
-	// 同时保存到本地文件系统
+	// 保存到本地文件系统
 	localStore := skills.NewLocalStore(s.config.HomeDir)
-	if err := localStore.SaveLocal(manifest.Name, content); err != nil {
+	if err := localStore.SaveLocal(skillFile.Manifest.Name, content); err != nil {
 		log.Printf("[skills] warning: failed to save to local store: %v", err)
 	}
 
 	// 保存到数据库
+	record := s.buildSkillRecord(userID, skillFile, source, sourceURL)
 	if err := s.db.SaveSkill(record); err != nil {
 		http.Error(w, fmt.Sprintf("failed to save skill: %v", err), http.StatusInternalServerError)
 		return
@@ -149,67 +129,68 @@ func (s *Server) installFromContent(w http.ResponseWriter, userID, content, sour
 	json.NewEncoder(w).Encode(record)
 }
 
-// installFromGit 从 Git repo 安装 Skill
-func (s *Server) installFromGit(w http.ResponseWriter, userID, gitURL string) {
-	// 使用 LocalStore 管理本地目录
+// installFromSource 从 source 字符串安装（支持 owner/repo@skill、Git URL 等）
+// 兼容 skills CLI 的所有格式: owner/repo, owner/repo@skill, https://github.com/...
+func (s *Server) installFromSource(w http.ResponseWriter, userID, source string) {
 	localStore := skills.NewLocalStore(s.config.HomeDir)
-	if err := localStore.EnsureDir(); err != nil {
-		http.Error(w, fmt.Sprintf("failed to create skills directory: %v", err), http.StatusInternalServerError)
-		return
-	}
+	installer := skills.NewSkillInstaller(localStore)
 
-	// 从 URL 推断 skill 名称
-	name := inferSkillName(gitURL)
-	if name == "" {
-		http.Error(w, "cannot infer skill name from URL", http.StatusBadRequest)
-		return
-	}
-
-	// Git clone 到本地
-	skillDir := localStore.SkillDir(name)
-	cloner := skills.NewGitInstaller()
-	if err := cloner.Clone(gitURL, skillDir); err != nil {
-		http.Error(w, fmt.Sprintf("git clone failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// 解析 SKILL.md
-	skillFile, err := skills.ParseDir(skillDir)
+	result, err := installer.Install(source)
 	if err != nil {
-		// 清理失败的克隆
-		localStore.Remove(name)
-		http.Error(w, fmt.Sprintf("invalid skill: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("install failed: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	// 构建并保存数据库记录
-	manifest := skillFile.Manifest
-	manifestJSON, _ := json.Marshal(manifest)
-
-	record := &storage.SkillRecord{
-		ID:          fmt.Sprintf("%s/%s", userID, manifest.Name),
-		Name:        manifest.Name,
-		Description: manifest.Description,
-		Version:     "1.0",
-		Source:      "git",
-		SourceURL:   gitURL,
-		ManifestJSON: string(manifestJSON),
-		Instructions: skillFile.Body,
-		HasScripts:  len(skillFile.ScriptDirs) > 0,
-		RequiredSecrets: toJSON(manifest.RequiredEnvVars()),
-		AllowedTools:    toJSON(manifest.AllowedToolsList()),
-		UserID:      userID,
-		InstalledAt: time.Now().Format("2006-01-02 15:04:05"),
+	// 保存所有发现的 skills 到数据库
+	var records []*storage.SkillRecord
+	for _, sf := range result.Skills {
+		record := s.buildSkillRecord(userID, sf, string(result.Source.Type), result.Source.DisplayURL())
+		if err := s.db.SaveSkill(record); err != nil {
+			log.Printf("[skills] warning: failed to save skill %s: %v", sf.Manifest.Name, err)
+			continue
+		}
+		records = append(records, record)
 	}
 
-	if err := s.db.SaveSkill(record); err != nil {
-		http.Error(w, fmt.Sprintf("failed to save skill: %v", err), http.StatusInternalServerError)
+	if len(records) == 0 {
+		http.Error(w, "failed to save any skills to database", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(record)
+
+	// 如果只安装了一个 skill，返回单个对象（保持向后兼容）
+	if len(records) == 1 {
+		json.NewEncoder(w).Encode(records[0])
+	} else {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"installed": len(records),
+			"skills":    records,
+		})
+	}
+}
+
+// buildSkillRecord 构建 SkillRecord 数据库记录
+func (s *Server) buildSkillRecord(userID string, sf *models.SkillFile, source, sourceURL string) *storage.SkillRecord {
+	manifest := sf.Manifest
+	manifestJSON, _ := json.Marshal(manifest)
+
+	return &storage.SkillRecord{
+		ID:              fmt.Sprintf("%s/%s", userID, manifest.Name),
+		Name:            manifest.Name,
+		Description:     manifest.Description,
+		Version:         "1.0",
+		Source:          source,
+		SourceURL:       sourceURL,
+		ManifestJSON:    string(manifestJSON),
+		Instructions:    sf.Body,
+		HasScripts:      len(sf.ScriptDirs) > 0,
+		RequiredSecrets: toJSON(manifest.RequiredEnvVars()),
+		AllowedTools:    toJSON(manifest.AllowedToolsList()),
+		UserID:          userID,
+		InstalledAt:     time.Now().Format("2006-01-02 15:04:05"),
+	}
 }
 
 // handleDeleteSkill DELETE /api/v1/skills/{id} — 卸载 Skill
@@ -237,7 +218,6 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRunSkill POST /api/v1/skills/{id}/run — 直接运行 Skill
-// 构建临时单节点工作流并提交到 WorkerPool 执行
 func (s *Server) handleRunSkill(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -258,17 +238,14 @@ func (s *Server) handleRunSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 获取 Skill
 	skill, err := s.db.GetSkill(id)
 	if err != nil {
 		http.Error(w, "skill not found", http.StatusNotFound)
 		return
 	}
 
-	// 构建临时工作流对象（单个 skill 节点）
 	wf := buildSkillWorkflow(skill, req.Prompt, req.Model, req.UseSystemKey)
 
-	// 生成执行 ID
 	uuidStr := uuid.New().String()[:4]
 	execID := time.Now().Format("102150405") + "-" + uuidStr
 
@@ -304,7 +281,6 @@ func buildSkillWorkflow(skill *storage.SkillRecord, prompt, model string, useSys
 		model = "claude-sonnet-4-20250514"
 	}
 
-	skillID := skill.ID
 	wfName := "skill-" + skill.Name
 
 	return &models.Workflow{
@@ -317,7 +293,7 @@ func buildSkillWorkflow(skill *storage.SkillRecord, prompt, model string, useSys
 				Name: "Run " + skill.Name,
 				Type: "skill",
 				Config: map[string]interface{}{
-					"skill_id":       skillID,
+					"skill_id":       skill.ID,
 					"prompt":         prompt,
 					"model":          model,
 					"use_system_key": useSystemKey,
@@ -327,7 +303,7 @@ func buildSkillWorkflow(skill *storage.SkillRecord, prompt, model string, useSys
 	}
 }
 
-// --- Registry Handlers (Browse skills.sh) ---
+// --- Registry Handlers (搜索 skills.sh) ---
 
 // handleRegistrySearch GET /api/v1/registry/search?q=xxx — 搜索 skills.sh
 func (s *Server) handleRegistrySearch(w http.ResponseWriter, r *http.Request) {
@@ -338,29 +314,9 @@ func (s *Server) handleRegistrySearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := skills.NewRegistryClient("")
-	result, err := client.Search(query, 1, 20)
+	result, err := client.Search(query, 10)
 	if err != nil {
-		// Registry 不可达时返回空结果而非错误
 		log.Printf("[registry] search failed: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"skills": []interface{}{},
-			"total":  0,
-			"error":  err.Error(),
-		})
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
-
-// handleRegistryTrending GET /api/v1/registry/trending — 热门技能
-func (s *Server) handleRegistryTrending(w http.ResponseWriter, r *http.Request) {
-	client := skills.NewRegistryClient("")
-	result, err := client.Trending(20)
-	if err != nil {
-		log.Printf("[registry] trending failed: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"skills": []interface{}{},
@@ -383,15 +339,3 @@ func toJSON(v interface{}) string {
 	}
 	return string(b)
 }
-
-func inferSkillName(gitURL string) string {
-	// 从 git URL 推断名称
-	// e.g., "https://github.com/user/my-skill.git" → "my-skill"
-	url := strings.TrimSuffix(gitURL, ".git")
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		return strings.ToLower(parts[len(parts)-1])
-	}
-	return ""
-}
-
