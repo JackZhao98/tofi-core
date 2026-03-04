@@ -77,6 +77,9 @@ func (r *ActionRegistry) RegisterBuiltins() {
 	r.Register("api", &tasks.API{})
 	r.Register("notify", &tasks.Notify{})
 
+	// Skills (Agent Skills ecosystem)
+	r.Register("skill", &tasks.Skill{})
+
 	// Logic
 	r.Register("check", &logic.Check{})
 	r.Register("compare", &logic.Compare{})
