@@ -11,7 +11,6 @@ import (
 	"time"
 	"tofi-core/internal/crypto"
 	"tofi-core/internal/engine/base"
-	"tofi-core/internal/engine/data"
 	"tofi-core/internal/engine/logic"
 	"tofi-core/internal/engine/tasks"
 	"tofi-core/internal/models"
@@ -99,42 +98,14 @@ func init() {
 	tasks.SetWorkflowStarter(Start)
 }
 
-// GetAction 工厂函数：将节点类型映射到对应的子包实现
+// GetAction 工厂函数：从全局 ActionRegistry 获取节点类型对应的 Action 实现
+// 如果类型未注册，返回 Virtual 占位节点（向后兼容）
 func GetAction(nodeType string) Action {
-	switch nodeType {
-	case "shell":
-		return &tasks.Shell{}
-	case "ai":
-		return &tasks.AI{}
-	case "hold":
-		return &tasks.Hold{}
-	case "file":
-		return &tasks.File{}
-	case "workflow":
-		return &tasks.Handoff{}
-	case "check":
-		return &logic.Check{}
-	case "compare":
-		return &logic.Compare{}
-	case "branch":
-		return &logic.Branch{}
-	case "loop":
-		return &logic.Loop{}
-	case "var", "const":
-		return &data.Var{}
-	case "save":
-		return &tasks.Save{}
-	case "api":
-		return &tasks.API{}
-	case "notify":
-		return &tasks.Notify{}
-	case "dict":
-		return &data.Dict{}
-	case "secret":
-		return &data.Secret{}
-	default:
+	action, ok := globalRegistry.Get(nodeType)
+	if !ok {
 		return &base.Virtual{}
 	}
+	return action
 }
 
 // ValidateAll 验证整个工作流的所有节点
