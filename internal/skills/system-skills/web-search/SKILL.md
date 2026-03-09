@@ -7,7 +7,7 @@ required_secrets: ["BRAVE_API_KEY"]
 
 # Web Search Toolkit
 
-You have 6 web research tools. Use them **together** — most good answers need 2-4 tool calls.
+You have 5 search tools. Use them **together** — most good answers need 2-4 tool calls.
 
 ## Tools
 
@@ -41,13 +41,6 @@ python3 skills/web-search/scripts/images.py "query" [--count N] [--search-lang L
 ```
 - `--count N`: Results (default: 10, max: 200) | `--safesearch MODE`: `off`/`strict` (default: strict)
 - Returns images with source, dimensions, and URLs. Use when the user needs visual content.
-
-### `fetch.py` — Read a Web Page
-```bash
-python3 skills/web-search/scripts/fetch.py "URL" [--max-chars N]
-```
-- `--max-chars N`: (default: 12000)
-- Fetches full text from a URL. Use when search snippets lack the detail you need.
 
 ### `summarize.py` — AI Summary
 ```bash
@@ -88,7 +81,6 @@ Pick the tool that matches the **nature** of each information need. Combine tool
 - Breaking/recent events, press coverage → `news.py`
 - Tutorials, demos, reviews in video form → `videos.py`
 - Visual references, photos, diagrams → `images.py`
-- Full article text from a known URL → `fetch.py`
 - Quick factual overview → `summarize.py`
 
 ### 3. Use `site:` when the user mentions a specific website
@@ -97,7 +89,7 @@ When the user mentions or implies a specific website (TMDB, Reddit, GitHub, Wiki
 
 ### 4. Iterate until sufficient
 
-After each tool call, ask: do I have enough to write a thorough response covering **all** aspects? If not, make another call — a different query, a different tool, a `site:` search, or `fetch.py` on a promising URL. Do not stop at one call unless the question is trivially simple.
+After each tool call, ask: do I have enough to write a thorough response covering **all** aspects? If not, make another call — a different query, a different tool, or a `site:` search. Do not stop at one call unless the question is trivially simple.
 
 ### 5. Adjust parameters by complexity
 
