@@ -332,6 +332,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/settings/ai-keys", s.AuthMiddleware(s.handleSetAIKey))
 	mux.HandleFunc("DELETE /api/v1/settings/ai-keys/{provider}", s.AuthMiddleware(s.handleDeleteAIKey))
 
+	// Connectors (Telegram 等)
+	mux.HandleFunc("POST /api/v1/connectors/telegram/setup", s.AuthMiddleware(s.handleTelegramSetup))
+	mux.HandleFunc("GET /api/v1/connectors/telegram/status", s.AuthMiddleware(s.handleTelegramStatus))
+	mux.HandleFunc("POST /api/v1/connectors/telegram/verify", s.AuthMiddleware(s.handleTelegramVerify))
+	mux.HandleFunc("POST /api/v1/connectors/telegram/test", s.AuthMiddleware(s.handleTelegramTest))
+	mux.HandleFunc("DELETE /api/v1/connectors/telegram", s.AuthMiddleware(s.handleTelegramDelete))
+	mux.HandleFunc("DELETE /api/v1/connectors/telegram/receivers/{id}", s.AuthMiddleware(s.handleTelegramDeleteReceiver))
+
 	// Wish 许愿路由
 	mux.HandleFunc("POST /api/v1/wish", s.AuthMiddleware(s.handleWish))
 

@@ -210,6 +210,11 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  agents table creation (may already exist): %v", err)
 	}
 
+	// 创建 telegram_receivers 表
+	if err := db.initTelegramReceiversTable(); err != nil {
+		log.Printf("⚠️  telegram_receivers table creation (may already exist): %v", err)
+	}
+
 	return db, nil
 }
 

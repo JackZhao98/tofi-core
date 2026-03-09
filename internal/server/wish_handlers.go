@@ -143,7 +143,7 @@ func (s *Server) executeWish(card *storage.KanbanCardRecord, userID, requestedMo
 	log.Printf("🌟 [wish:%s] Starting wish execution: %s", cardID[:8], card.Title)
 
 	// Wrap DB with SSE publisher
-	updater := &KanbanUpdaterWithSSE{inner: s.db, hub: s.sseHub}
+	updater := &KanbanUpdaterWithSSE{inner: s.db, hub: s.sseHub, db: s.db}
 	defer s.sseHub.CleanupCard(cardID)
 
 	// 更新状态为 working

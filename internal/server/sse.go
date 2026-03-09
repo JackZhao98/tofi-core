@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"tofi-core/internal/notify"
+	"tofi-core/internal/storage"
 )
 
 // CardEvent represents an SSE event for a kanban card
@@ -94,6 +96,7 @@ type KanbanUpdaterWithSSE struct {
 		UpdateKanbanStep(id string, toolName string, status string, result string, durationMs int64) error
 	}
 	hub *SSEHub
+	db  *storage.DB // for Telegram notification on completion
 }
 
 func (u *KanbanUpdaterWithSSE) UpdateKanbanCardBySystem(id string, status string, progress int, result string) error {
@@ -105,6 +108,37 @@ func (u *KanbanUpdaterWithSSE) UpdateKanbanCardBySystem(id string, status string
 	eventType := "card_updated"
 	if status == "done" || status == "failed" {
 		eventType = "card_done"
+		// 异步发送 Telegram 通知给所有 receivers
+		if u.db != nil {
+			go func() {
+				card, err := u.db.GetKanbanCard(id)
+				if err != nil {
+					return
+				}
+				cfg, err := u.db.GetTelegramConfig(card.UserID)
+				if err != nil || !cfg.Enabled {
+					return
+				}
+				receivers, err := u.db.ListTelegramReceivers(card.UserID)
+				if err != nil || len(receivers) == 0 {
+					return
+				}
+				emoji := "✅"
+				if status == "failed" {
+					emoji = "❌"
+				}
+				resultText := result
+				if len(resultText) > 500 {
+					resultText = resultText[:500] + "..."
+				}
+				text := fmt.Sprintf("%s *Task %s*\n\n%s", emoji, status, resultText)
+				for _, r := range receivers {
+					if err := notify.SendMessage(cfg.BotToken, r.ChatID, text); err != nil {
+						log.Printf("[telegram] notification failed for card %s receiver %s: %v", id, r.ChatID, err)
+					}
+				}
+			}()
+		}
 	}
 	u.hub.Publish(CardEvent{
 		Type:   eventType,
