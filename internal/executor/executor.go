@@ -4,9 +4,10 @@ import "context"
 
 // SandboxConfig holds configuration for sandbox creation.
 type SandboxConfig struct {
-	HomeDir string // Tofi data directory (e.g. ~/.tofi)
-	UserID  string // User identifier for persistent storage
-	CardID  string // Task/card identifier for ephemeral workspace
+	HomeDir      string // Tofi data directory (e.g. ~/.tofi)
+	UserID       string // User identifier for persistent storage
+	CardID       string // Task/card identifier for ephemeral workspace
+	AllowNetwork bool   // Whether to allow network access (Docker mode only)
 }
 
 // Executor abstracts sandbox command execution.

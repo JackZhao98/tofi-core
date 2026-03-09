@@ -10,7 +10,7 @@ RUN CGO_ENABLED=1 go build -o tofi-server ./cmd/tofi
 # ── Stage 2: Runtime ──
 FROM debian:bookworm-slim
 
-# Install runtime tools needed by sandbox
+# Install runtime tools needed by sandbox (direct mode in container)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     curl wget jq git \
@@ -18,11 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Create app user (non-root)
+RUN useradd -m -s /bin/bash -u 1000 tofi
+
 WORKDIR /app
 COPY --from=builder /build/tofi-server .
 
-# Create data directory
-RUN mkdir -p /app/.tofi
+# Create data directory with proper ownership
+RUN mkdir -p /app/.tofi && chown -R tofi:tofi /app
+
+# Switch to non-root user
+USER tofi
 
 EXPOSE 8080
 

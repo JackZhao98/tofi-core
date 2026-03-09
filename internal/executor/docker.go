@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// DockerExecutor runs commands inside per-user Docker containers.
-// Each user gets a persistent container with volume-mounted storage.
+// DockerExecutor runs commands inside ephemeral Docker containers.
+// Each task gets a fresh container that is destroyed after execution.
 type DockerExecutor struct {
 	imageName string // Docker image name (e.g. "tofi-sandbox:latest")
 	dataDir   string // Host data directory for volume mounts
@@ -19,7 +20,6 @@ type DockerExecutor struct {
 
 // NewDockerExecutor creates a DockerExecutor after verifying Docker is available.
 func NewDockerExecutor(dataDir, imageName string) (*DockerExecutor, error) {
-	// Check Docker CLI is available
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		return nil, fmt.Errorf("docker is not available: %v (is Docker running?)", err)
 	}
@@ -29,63 +29,22 @@ func NewDockerExecutor(dataDir, imageName string) (*DockerExecutor, error) {
 	}, nil
 }
 
-// containerName returns the Docker container name for a user.
-func (d *DockerExecutor) containerName(userID string) string {
-	if userID == "" {
-		userID = "default"
+// containerName returns a unique container name for a task.
+func containerName(cardID string) string {
+	if cardID == "" {
+		cardID = "unknown"
 	}
-	return "tofi-sandbox-" + userID
+	return "tofi-task-" + cardID
 }
 
-// ensureContainer makes sure the user's container exists and is running.
-func (d *DockerExecutor) ensureContainer(userID string) error {
-	name := d.containerName(userID)
-
-	// Check if container exists
-	out, err := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", name).Output()
-	if err == nil {
-		// Container exists
-		if strings.TrimSpace(string(out)) == "true" {
-			return nil // already running
-		}
-		// Exists but stopped — start it
-		return exec.Command("docker", "start", name).Run()
-	}
-
-	// Container doesn't exist — create and start it
-	userDir := filepath.Join(d.dataDir, "users", userID)
-	args := []string{
-		"run", "-d",
-		"--name", name,
-		"-v", userDir + ":/home/user",
-		"--memory", "512m",
-		"--cpus", "1",
-		d.imageName,
-	}
-	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create container %s: %v\n%s", name, err, string(out))
-	}
-	return nil
-}
-
-// CreateSandbox ensures the user's container is running and creates a task workspace.
+// CreateSandbox is a no-op for Docker executor — containers are created at execution time.
+// Returns the in-container workspace path.
 func (d *DockerExecutor) CreateSandbox(cfg SandboxConfig) (string, error) {
-	if err := d.ensureContainer(cfg.UserID); err != nil {
-		return "", fmt.Errorf("failed to ensure container: %v", err)
-	}
-
-	// Create task workspace inside container
-	sandboxPath := "/workspace/" + cfg.CardID
-	name := d.containerName(cfg.UserID)
-	if out, err := exec.Command("docker", "exec", name, "mkdir", "-p", sandboxPath+"/tmp").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("failed to create workspace: %v\n%s", err, string(out))
-	}
-
-	return sandboxPath, nil
+	return "/workspace", nil
 }
 
-// Execute runs a command inside the user's container.
-// No ValidateCommand needed — the container itself provides isolation.
+// Execute runs a command inside an ephemeral Docker container.
+// The container is created, runs the command, and is automatically removed (--rm).
 func (d *DockerExecutor) Execute(ctx context.Context, sandboxPath, userDir, command string, timeoutSec int, env map[string]string) (string, error) {
 	if timeoutSec <= 0 {
 		timeoutSec = 60
@@ -97,25 +56,69 @@ func (d *DockerExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	// Extract userID from userDir or use default
-	userID := "default"
+	// Extract cardID from context or generate a short ID
+	cardID := "task"
 	if userDir != "" {
-		userID = filepath.Base(userDir)
+		cardID = filepath.Base(userDir)
 	}
-	name := d.containerName(userID)
+	name := containerName(cardID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()%100000))
 
-	// Build docker exec args with optional env vars
-	args := []string{"exec", "-w", sandboxPath}
+	// Build docker run args with security hardening
+	args := []string{
+		"run", "--rm",
+		"--name", name,
+
+		// Resource limits
+		"--memory", "512m",
+		"--cpus", "1",
+		"--pids-limit", "256", // Prevent fork bombs
+
+		// Security hardening
+		"--read-only",              // Read-only root filesystem
+		"--no-new-privileges",      // Prevent privilege escalation
+		"--cap-drop", "ALL",        // Drop all Linux capabilities
+
+		// Writable temporary directories
+		"--tmpfs", "/tmp:rw,noexec,nosuid,size=100m",
+
+		// Working directory
+		"-w", "/workspace",
+	}
+
+	// Volume mounts — user data directory
+	if userDir != "" {
+		args = append(args, "-v", userDir+":/home/user")
+	}
+
+	// Network policy — default allow for pip install / curl / API calls
+	// Can be restricted later with --network=none
+	// (AllowNetwork is checked via SandboxConfig at CreateSandbox time,
+	//  but since we don't store it, we default to allowing network)
+
+	// Environment variables
+	defaultEnv := map[string]string{
+		"HOME":   "/workspace",
+		"TMPDIR": "/tmp",
+		"LANG":   "en_US.UTF-8",
+		"TERM":   "dumb",
+	}
+	for k, v := range defaultEnv {
+		args = append(args, "-e", k+"="+v)
+	}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
 	}
-	args = append(args, name, "sh", "-c", command)
+
+	// Image + command
+	args = append(args, d.imageName, "sh", "-c", command)
+
 	cmd := exec.CommandContext(execCtx, "docker", args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &stdout, limit: MaxOutputBytes}
 	cmd.Stderr = &limitedWriter{w: &stderr, limit: MaxOutputBytes}
 
+	log.Printf("[docker] running: %s (container: %s)", truncateCmd(command, 80), name)
 	err := cmd.Run()
 
 	output := stdout.String()
@@ -127,6 +130,8 @@ func (d *DockerExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 	}
 
 	if execCtx.Err() == context.DeadlineExceeded {
+		// Force kill container on timeout
+		_ = exec.Command("docker", "kill", name).Run()
 		return output, fmt.Errorf("command timed out after %d seconds", timeoutSec)
 	}
 
@@ -137,21 +142,15 @@ func (d *DockerExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 	return strings.TrimRight(output, "\n"), nil
 }
 
-// Cleanup removes the task workspace inside the container (not the container itself).
+// Cleanup is a no-op — ephemeral containers are automatically removed via --rm.
 func (d *DockerExecutor) Cleanup(sandboxPath string) {
-	if sandboxPath == "" || !strings.HasPrefix(sandboxPath, "/workspace/") {
-		return
+	// Nothing to do — container was created with --rm
+}
+
+// truncateCmd truncates a command string for logging.
+func truncateCmd(cmd string, maxLen int) string {
+	if len(cmd) <= maxLen {
+		return cmd
 	}
-	// Extract userID — we don't have it here, so clean up from all running containers
-	// In practice, the caller should track which container owns which sandbox
-	containers, err := exec.Command("docker", "ps", "--filter", "name=tofi-sandbox-", "--format", "{{.Names}}").Output()
-	if err != nil {
-		return
-	}
-	for _, name := range strings.Split(strings.TrimSpace(string(containers)), "\n") {
-		if name == "" {
-			continue
-		}
-		_ = exec.Command("docker", "exec", name, "rm", "-rf", sandboxPath).Run()
-	}
+	return cmd[:maxLen] + "..."
 }
