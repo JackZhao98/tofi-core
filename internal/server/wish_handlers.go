@@ -216,7 +216,9 @@ The following skills are installed and available to help:
 3. Then fulfill the wish to the best of your ability
 4. Provide a clear, actionable result
 
-Be concise and practical. Focus on delivering value.`, skillDescriptions)
+Be concise and practical. Focus on delivering value.
+
+Current time: %s`, skillDescriptions, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 
 	prompt := card.Title
 	if card.Description != "" {
@@ -237,9 +239,7 @@ Be concise and practical. Focus on delivering value.`, skillDescriptions)
 
 // executeDirectly 没有 Skills 时直接执行
 func (s *Server) executeDirectly(card *storage.KanbanCardRecord, apiKey, model, provider string, updater mcp.KanbanUpdater) (string, error) {
-	systemPrompt := `You are a helpful AI agent. The user has made a wish (request) and you need to fulfill it.
-
-Provide a clear, actionable result. Be concise and practical.`
+	systemPrompt := "You are a helpful AI agent. The user has made a wish (request) and you need to fulfill it.\n\nProvide a clear, actionable result. Be concise and practical.\n\nCurrent time: " + time.Now().Format("2006-01-02 15:04:05 MST (Monday)")
 
 	prompt := card.Title
 	if card.Description != "" {
@@ -395,7 +395,9 @@ When you find a useful skill via search_skills that isn't installed yet:
 - **Fallback chain**: skill command → fix the command → write simpler code yourself → try alternative data source → present partial results. NEVER end with "I couldn't do it."
 
 ## Language
-Always respond in the same language as the user's wish. If the user writes in Chinese, respond in Chinese. If in English, respond in English.`
+Always respond in the same language as the user's wish. If the user writes in Chinese, respond in Chinese. If in English, respond in English.
+
+Current time: ` + time.Now().Format("2006-01-02 15:04:05 MST (Monday)")
 
 	prompt := card.Title
 	if card.Description != "" {
@@ -435,6 +437,17 @@ Always respond in the same language as the user's wish. If the user writes in Ch
 				CardID: cardID,
 				Data:   map[string]any{"delta": delta},
 			})
+		},
+		OnContextCompact: func(summary string, originalTokens, compactedTokens int) {
+			if updater != nil {
+				stepData := map[string]interface{}{
+					"name":             "Context Compressed",
+					"status":           "done",
+					"input_tokens":     originalTokens,
+					"compacted_tokens": compactedTokens,
+				}
+				updater.AppendKanbanStep(cardID, stepData)
+			}
 		},
 	}
 	agentCfg.AI.Model = model

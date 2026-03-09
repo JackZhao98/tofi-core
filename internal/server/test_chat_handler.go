@@ -23,17 +23,18 @@ func (s *Server) handleTestChat(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
 	var req struct {
-		Message      string          `json:"message"`
-		Model        string          `json:"model"`
-		Skills       []string        `json:"skills"`        // e.g. ["web-search"]
-		Capabilities json.RawMessage `json:"capabilities"`  // MCP servers etc (legacy)
+		Message      string                   `json:"message"`
+		Messages     []map[string]interface{}  `json:"messages"`      // conversation history [{role, content}, ...]
+		Model        string                   `json:"model"`
+		Skills       []string                 `json:"skills"`        // e.g. ["web-search"]
+		Capabilities json.RawMessage          `json:"capabilities"`  // MCP servers etc (legacy)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if req.Message == "" {
-		http.Error(w, "message required", 400)
+	if req.Message == "" && len(req.Messages) == 0 {
+		http.Error(w, "message or messages required", 400)
 		return
 	}
 
@@ -149,9 +150,11 @@ func (s *Server) handleTestChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 7. Build system prompt
-	system := `You are a knowledgeable AI assistant with access to tools.
+	system := fmt.Sprintf(`You are a knowledgeable AI assistant with access to tools.
 Always respond in the same language as the user.
-Provide thorough, well-structured answers with sufficient detail.`
+Provide thorough, well-structured answers with sufficient detail.
+
+Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 
 	// Append skill instructions
 	for _, instructions := range skillInstructions {
@@ -162,6 +165,7 @@ Provide thorough, well-structured answers with sufficient detail.`
 	agentCfg := mcp.AgentConfig{
 		System:     system,
 		Prompt:     req.Message,
+		Messages:   req.Messages,
 		MCPServers: capMCPServers,
 		ExtraTools: extraTools,
 		SandboxDir: sandboxDir,
@@ -181,6 +185,15 @@ Provide thorough, well-structured answers with sufficient detail.`
 				"duration_ms": durationMs,
 			})
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", tc)
+			flusher.Flush()
+		},
+		OnContextCompact: func(summary string, originalTokens, compactedTokens int) {
+			data, _ := json.Marshal(map[string]interface{}{
+				"summary":          summary,
+				"original_tokens":  originalTokens,
+				"compacted_tokens": compactedTokens,
+			})
+			fmt.Fprintf(w, "event: context_compact\ndata: %s\n\n", data)
 			flusher.Flush()
 		},
 	}

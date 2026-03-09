@@ -54,6 +54,7 @@ type AgentConfig struct {
 	}
 	System        string
 	Prompt        string
+	Messages      []map[string]interface{} // Optional: full conversation history (overrides Prompt if non-empty)
 	MCPServers    []MCPServerConfig  // Active MCP server connections
 	KanbanCardID  string             // 关联的看板卡片 ID（可选）
 	KanbanUpdater KanbanUpdater      // 看板更新器（可选）
@@ -63,8 +64,10 @@ type AgentConfig struct {
 	UserDir       string               // User persistent directory for installed tools (optional)
 	Executor      executor.Executor    // Sandbox executor (nil = use legacy functions)
 	SecretEnv     map[string]string    // Extra env vars injected into sandbox commands (skill secrets)
-	OnStreamChunk func(cardID, delta string) // Optional: called with each content delta during streaming
-	OnToolCall    func(toolName, input, output string, durationMs int64) // Optional: called after each tool execution
+	OnStreamChunk    func(cardID, delta string) // Optional: called with each content delta during streaming
+	OnToolCall       func(toolName, input, output string, durationMs int64) // Optional: called after each tool execution
+	MaxContextTokens int                                                    // 0 = auto-detect from model name
+	OnContextCompact func(summary string, originalTokens, compactedTokens int) // Optional: called when context is compacted
 }
 
 type MCPServerConfig struct {
@@ -272,9 +275,17 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (string, error)
 - **WEB AUTOMATION**: Modern websites often use complex, non-standard input fields that confuse standard 'fill' tools. If 'fill' fails (especially with "option not found"), assume the tool is incompatible. Immediately switch to 'evaluate_script' (to set .value) or 'click' + 'press_key'.
 `
 
-	messages := []map[string]interface{}{
-		{"role": "system", "content": systemPrompt},
-		{"role": "user", "content": cfg.Prompt},
+	var messages []map[string]interface{}
+	if len(cfg.Messages) > 0 {
+		// Use provided conversation history, prepend system prompt
+		messages = append([]map[string]interface{}{
+			{"role": "system", "content": systemPrompt},
+		}, cfg.Messages...)
+	} else {
+		messages = []map[string]interface{}{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": cfg.Prompt},
+		}
 	}
 
 	// 4. Start Loop
@@ -649,6 +660,39 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (string, error)
 			})
 			markStepDone(outputText)
 		}
+
+		// Context compaction check — after tool execution, before next iteration
+		contextWindow := cfg.MaxContextTokens
+		if contextWindow == 0 {
+			contextWindow = getContextWindow(cfg.AI.Model)
+		}
+		compactThreshold := int64(float64(contextWindow) * 0.80)
+
+		if inputTokens > compactThreshold && len(messages) > 4 {
+			ctx.Log("[Agent] Context compaction triggered: %d tokens > %d threshold", inputTokens, compactThreshold)
+
+			summary, compactErr := compactMessages(cfg, messages)
+			if compactErr != nil {
+				ctx.Log("[Agent] Compaction failed: %v", compactErr)
+			} else {
+				originalCount := len(messages)
+				originalTokens := int(inputTokens)
+				// Keep system prompt (messages[0]) + last 2 messages
+				kept := make([]map[string]interface{}, len(messages[len(messages)-2:]))
+				copy(kept, messages[len(messages)-2:])
+				messages = []map[string]interface{}{
+					messages[0],
+					{"role": "user", "content": fmt.Sprintf("<context_summary>\n%s\n</context_summary>\n\nThe above is a summary of our conversation so far. Please continue from where we left off.", summary)},
+				}
+				messages = append(messages, kept...)
+
+				compactedTokens := estimateTokens(messages)
+				if cfg.OnContextCompact != nil {
+					cfg.OnContextCompact(summary, originalTokens, compactedTokens)
+				}
+				ctx.Log("[Agent] Compacted: %d messages → %d messages (%d → ~%d tokens)", originalCount, len(messages), originalTokens, compactedTokens)
+			}
+		}
 	}
 
 	// Max steps fallback
@@ -664,6 +708,67 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (string, error)
 	}
 
 	return "", fmt.Errorf("max steps (%d) reached without final answer", maxSteps)
+}
+
+// getContextWindow returns the context window size for a given model name.
+func getContextWindow(model string) int {
+	switch {
+	case strings.Contains(model, "gpt-4o"):
+		return 128000
+	case strings.Contains(model, "gpt-4-turbo"):
+		return 128000
+	case strings.Contains(model, "gpt-4"):
+		return 8192
+	case strings.Contains(model, "gpt-3.5"):
+		return 16385
+	case strings.Contains(model, "claude"):
+		return 200000
+	case strings.Contains(model, "deepseek"):
+		return 64000
+	default:
+		return 128000
+	}
+}
+
+// compactMessages uses the same LLM to generate a concise summary of the conversation.
+func compactMessages(cfg AgentConfig, messages []map[string]interface{}) (string, error) {
+	var conversationText strings.Builder
+	for _, msg := range messages[1:] { // skip system prompt
+		role, _ := msg["role"].(string)
+		content, _ := msg["content"].(string)
+		if content == "" || role == "system" {
+			continue
+		}
+		conversationText.WriteString(fmt.Sprintf("[%s]: %s\n\n", role, content))
+	}
+
+	summaryMessages := []map[string]interface{}{
+		{"role": "system", "content": "You are a helpful assistant that creates concise conversation summaries."},
+		{"role": "user", "content": fmt.Sprintf(
+			"Summarize the following conversation concisely. Preserve:\n"+
+				"1. Key decisions and conclusions\n"+
+				"2. Important facts, data, and code snippets mentioned\n"+
+				"3. Current task context and what was being worked on\n"+
+				"4. Any pending questions or next steps\n\n"+
+				"Conversation:\n%s", conversationText.String())},
+	}
+
+	respBody, err := callLLM(cfg, summaryMessages, nil)
+	if err != nil {
+		return "", err
+	}
+	return gjson.Get(respBody, "choices.0.message.content").String(), nil
+}
+
+// estimateTokens provides a rough token count estimate for messages.
+func estimateTokens(messages []map[string]interface{}) int {
+	total := 0
+	for _, msg := range messages {
+		if content, ok := msg["content"].(string); ok {
+			total += len(content) / 4
+		}
+	}
+	return total
 }
 
 // stripThinkTags removes <think>...</think> blocks from LLM content.
