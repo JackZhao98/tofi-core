@@ -18,6 +18,7 @@ type Memory struct {
 }
 
 // initMemoriesTable creates the memories table and FTS5 virtual table for full-text search.
+// Uses trigram tokenizer for CJK (Chinese/Japanese/Korean) language support.
 func (db *DB) initMemoriesTable() error {
 	// Main table
 	_, err := db.conn.Exec(`
@@ -36,14 +37,30 @@ func (db *DB) initMemoriesTable() error {
 		return fmt.Errorf("create memories table: %w", err)
 	}
 
-	// FTS5 virtual table for full-text search with BM25 ranking.
-	// content=memories syncs with the main table via triggers.
+	// Check if FTS table needs migration (from unicode61 to trigram).
+	// We detect the old tokenizer by querying the FTS table's config.
+	needsRebuild := false
+	var ftsSQL string
+	err = db.conn.QueryRow(`SELECT sql FROM sqlite_master WHERE name='memories_fts'`).Scan(&ftsSQL)
+	if err == nil && !strings.Contains(ftsSQL, "trigram") {
+		// Old tokenizer detected — drop and rebuild
+		needsRebuild = true
+		db.conn.Exec(`DROP TRIGGER IF EXISTS memories_ai`)
+		db.conn.Exec(`DROP TRIGGER IF EXISTS memories_ad`)
+		db.conn.Exec(`DROP TRIGGER IF EXISTS memories_au`)
+		db.conn.Exec(`DROP TABLE IF EXISTS memories_fts`)
+	}
+
+	// FTS5 virtual table with trigram tokenizer for CJK support.
+	// Trigram indexes 3-character sliding windows, enabling substring matching
+	// for Chinese, Japanese, Korean text (no word boundaries needed).
 	_, err = db.conn.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 			content,
 			tags,
 			content=memories,
-			content_rowid=id
+			content_rowid=id,
+			tokenize='trigram'
 		);
 	`)
 	if err != nil {
@@ -68,6 +85,11 @@ func (db *DB) initMemoriesTable() error {
 		END;
 	`)
 
+	// If we migrated, rebuild index from existing data
+	if needsRebuild {
+		db.conn.Exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`)
+	}
+
 	return nil
 }
 
@@ -90,8 +112,8 @@ func (db *DB) SaveMemory(userID, content, tags, source, cardID string) (int64, e
 	return result.LastInsertId()
 }
 
-// RecallMemories searches memories using FTS5 full-text search with BM25 ranking.
-// The query string supports FTS5 syntax (e.g., "python AND web" or "user preference").
+// RecallMemories searches memories using FTS5 full-text search (trigram tokenizer).
+// Falls back to LIKE-based search if FTS5 returns no results.
 func (db *DB) RecallMemories(userID, query string, limit int) ([]Memory, error) {
 	if limit <= 0 {
 		limit = 5
@@ -100,12 +122,26 @@ func (db *DB) RecallMemories(userID, query string, limit int) ([]Memory, error) 
 		limit = 50
 	}
 
-	// Sanitize query for FTS5: wrap each word in quotes to avoid syntax errors
-	query = sanitizeFTSQuery(query)
+	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
 	}
 
+	// Try FTS5 trigram search first
+	ftsQuery := sanitizeFTSQuery(query)
+	if ftsQuery != "" {
+		memories, err := db.ftsSearch(userID, ftsQuery, limit)
+		if err == nil && len(memories) > 0 {
+			return memories, nil
+		}
+	}
+
+	// Fallback: LIKE-based substring search (handles edge cases FTS5 misses)
+	return db.likeSearch(userID, query, limit)
+}
+
+// ftsSearch performs FTS5 trigram search.
+func (db *DB) ftsSearch(userID, ftsQuery string, limit int) ([]Memory, error) {
 	rows, err := db.conn.Query(`
 		SELECT m.id, m.user_id, m.content, m.tags, m.source, m.card_id, m.created_at
 		FROM memories_fts
@@ -113,9 +149,61 @@ func (db *DB) RecallMemories(userID, query string, limit int) ([]Memory, error) 
 		WHERE memories_fts MATCH ? AND m.user_id = ?
 		ORDER BY bm25(memories_fts)
 		LIMIT ?
-	`, query, userID, limit)
+	`, ftsQuery, userID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("recall memories: %w", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memories []Memory
+	for rows.Next() {
+		var m Memory
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Content, &m.Tags, &m.Source, &m.CardID, &m.CreatedAt); err != nil {
+			continue
+		}
+		memories = append(memories, m)
+	}
+	return memories, nil
+}
+
+// likeSearch performs LIKE-based substring search as fallback.
+// Splits query into words and matches any word against content or tags.
+func (db *DB) likeSearch(userID, query string, limit int) ([]Memory, error) {
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return nil, nil
+	}
+
+	// Build WHERE clause: (content LIKE '%word1%' OR tags LIKE '%word1%' OR content LIKE '%word2%' ...)
+	var conditions []string
+	var args []interface{}
+	args = append(args, userID)
+	for _, w := range words {
+		w = strings.TrimSpace(w)
+		if w == "" {
+			continue
+		}
+		conditions = append(conditions, "(content LIKE ? OR tags LIKE ?)")
+		pattern := "%" + w + "%"
+		args = append(args, pattern, pattern)
+	}
+
+	if len(conditions) == 0 {
+		return nil, nil
+	}
+
+	sqlStr := fmt.Sprintf(`
+		SELECT id, user_id, content, tags, source, card_id, created_at
+		FROM memories
+		WHERE user_id = ? AND (%s)
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, strings.Join(conditions, " OR "))
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("like search memories: %w", err)
 	}
 	defer rows.Close()
 
