@@ -167,7 +167,7 @@ Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 		Prompt:     req.Message,
 		Messages:   req.Messages,
 		MCPServers: capMCPServers,
-		ExtraTools: extraTools,
+		ExtraTools: append(extraTools, s.buildMemoryTools(userID, "")...),
 		SandboxDir: sandboxDir,
 		UserDir:    userID,
 		Executor:   s.executor,

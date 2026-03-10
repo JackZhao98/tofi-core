@@ -215,6 +215,11 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  telegram_receivers table creation (may already exist): %v", err)
 	}
 
+	// 创建 memories 表 + FTS5 全文搜索索引
+	if err := db.initMemoriesTable(); err != nil {
+		log.Printf("⚠️  memories table creation (may already exist): %v", err)
+	}
+
 	return db, nil
 }
 

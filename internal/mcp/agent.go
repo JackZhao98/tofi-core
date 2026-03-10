@@ -271,6 +271,13 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (string, error)
 3. **VERIFICATION**: Verify the outcome of every action.
 4. **COMPLETION**: Continue until the goal is fully achieved and the system is stable.
 
+### MEMORY:
+You have long-term memory via **memory_save** and **memory_recall** tools.
+- At the **START** of each task, use memory_recall with relevant keywords to check for useful context (user preferences, past learnings, etc.)
+- After **completing** a task, use memory_save to record key learnings, solutions, or patterns worth remembering
+- **Always save** user preferences when you discover them (e.g., preferred language, coding style, tool choices)
+- Save error solutions and workarounds so you don't repeat mistakes
+
 ### DOMAIN KNOWLEDGE:
 - **WEB AUTOMATION**: Modern websites often use complex, non-standard input fields that confuse standard 'fill' tools. If 'fill' fails (especially with "option not found"), assume the tool is incompatible. Immediately switch to 'evaluate_script' (to set .value) or 'click' + 'press_key'.
 `
