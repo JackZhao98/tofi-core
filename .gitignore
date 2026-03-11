@@ -1,6 +1,6 @@
 # Binary
 tofi
-
+tofi-server
 # Runtime files
 .tofi/
 
@@ -21,3 +21,5 @@ workflows/
 # OS files
 .DS_Store
 Thumbs.db
+
+__pycache__/
