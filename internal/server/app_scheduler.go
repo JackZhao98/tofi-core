@@ -224,6 +224,7 @@ func (as *AppScheduler) doRenewal(app *storage.AppRecord) {
 		return
 	}
 
+	added := 0
 	for _, t := range times {
 		run := &storage.AppRunRecord{
 			ID:          uuid.New().String(),
@@ -233,12 +234,17 @@ func (as *AppScheduler) doRenewal(app *storage.AppRecord) {
 			UserID:      app.UserID,
 		}
 		if err := as.server.db.CreateAppRun(run); err != nil {
-			log.Printf("Failed to create app run: %v", err)
-			continue
+			// Stop at first failure to prevent gaps: if we continue past a failed
+			// time slot, GetLastAppScheduledTime will skip over it permanently.
+			log.Printf("[app:%s] Renewal stopped at %s: %v", app.ID[:8], t.Format("15:04"), err)
+			break
 		}
+		added++
 	}
 
-	log.Printf("[app:%s] Renewal complete: added %d runs", app.ID[:8], len(times))
+	if added > 0 {
+		log.Printf("[app:%s] Renewal complete: added %d runs", app.ID[:8], added)
+	}
 }
 
 // ── Public methods ──

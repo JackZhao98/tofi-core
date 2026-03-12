@@ -48,6 +48,16 @@ func InitDB(homeDir string) (*DB, error) {
 		return nil, err
 	}
 
+	// Enable WAL mode for better concurrent read/write performance.
+	// Without WAL, concurrent writes fail immediately with "database is locked".
+	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		log.Printf("⚠️  Failed to enable WAL mode: %v", err)
+	}
+	// Wait up to 5 seconds when DB is locked instead of failing immediately.
+	if _, err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		log.Printf("⚠️  Failed to set busy_timeout: %v", err)
+	}
+
 	// 创建 users 表
 	userQuery := `
 	CREATE TABLE IF NOT EXISTS users (
