@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"tofi-core/internal/apps"
 	"tofi-core/internal/crypto"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/mcp"
@@ -344,6 +343,7 @@ func (s *Server) handleDeactivateApp(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRunAppNow POST /api/v1/apps/{id}/run
+// All runs go through the Dispatcher — manual trigger creates an app_run and dispatches immediately.
 func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -359,7 +359,7 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	card, err := s.createAndExecuteAppCard(app, userID)
+	run, err := s.appScheduler.DispatchManualRun(app, userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to run app: %v", err), http.StatusInternalServerError)
 		return
@@ -367,7 +367,7 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(card)
+	json.NewEncoder(w).Encode(run)
 }
 
 // handleListAppRuns GET /api/v1/apps/{id}/runs
@@ -520,41 +520,6 @@ func cleanJSONResponse(s string) string {
 		}
 	}
 	return s
-}
-
-// createAndExecuteAppCard creates a KanbanCard from an App and executes it
-func (s *Server) createAndExecuteAppCard(app *storage.AppRecord, userID string) (*storage.KanbanCardRecord, error) {
-	// Resolve prompt template with parameter values
-	prompt := apps.ResolveFromJSON(app.Prompt, app.Parameters, app.ParameterDefs)
-
-	card := &storage.KanbanCardRecord{
-		ID:          uuid.New().String(),
-		Title:       prompt,
-		Description: fmt.Sprintf("[App: %s] %s", app.Name, app.Description),
-		Status:      "todo",
-		AppID:       app.ID,
-		AgentID:     app.ID, // backward compat
-		UserID:      userID,
-	}
-
-	if err := s.db.CreateKanbanCard(card); err != nil {
-		return nil, err
-	}
-
-	created, _ := s.db.GetKanbanCard(card.ID)
-	if created == nil {
-		created = card
-	}
-
-	go s.executeAppCard(created, app, userID)
-
-	return created, nil
-}
-
-// executeAppCard executes a KanbanCard using App configuration
-func (s *Server) executeAppCard(card *storage.KanbanCardRecord, app *storage.AppRecord, userID string) {
-	requestedModel := app.Model
-	s.executeWish(card, userID, requestedModel)
 }
 
 // ── Schedules Handlers ──

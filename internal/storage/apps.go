@@ -38,12 +38,13 @@ type AppRecord struct {
 	HasScripts    bool   `json:"has_scripts"`    // has scripts/ directory
 }
 
-// AppRunRecord represents a single scheduled run
+// AppRunRecord represents a single run (scheduled or manual)
 type AppRunRecord struct {
 	ID           string `json:"id"`
 	AppID        string `json:"app_id"`
 	ScheduledAt  string `json:"scheduled_at"`
-	Status       string `json:"status"` // pending / running / done / failed / cancelled
+	Status       string `json:"status"` // pending / running / done / failed / cancelled / skipped
+	Trigger      string `json:"trigger"` // scheduled / manual
 	KanbanCardID string `json:"kanban_card_id"`
 	Result       string `json:"result"`
 	UserID       string `json:"user_id"`
@@ -91,6 +92,7 @@ func (db *DB) initAppsTable() error {
 		app_id TEXT NOT NULL,
 		scheduled_at DATETIME NOT NULL,
 		status TEXT DEFAULT 'pending',
+		trigger_type TEXT DEFAULT 'scheduled',
 		kanban_card_id TEXT DEFAULT '',
 		result TEXT DEFAULT '',
 		user_id TEXT NOT NULL,
@@ -105,6 +107,9 @@ func (db *DB) initAppsTable() error {
 	if _, err := db.conn.Exec(runsQuery); err != nil {
 		return fmt.Errorf("create app_runs table: %w", err)
 	}
+
+	// Migration: add trigger_type column for existing databases
+	db.conn.Exec(`ALTER TABLE app_runs ADD COLUMN trigger_type TEXT DEFAULT 'scheduled'`)
 
 	// Enable foreign key support
 	if _, err := db.conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
@@ -300,9 +305,12 @@ func (db *DB) CreateAppRun(run *AppRunRecord) error {
 	if run.ID == "" {
 		run.ID = uuid.New().String()
 	}
-	query := `INSERT INTO app_runs (id, app_id, scheduled_at, status, kanban_card_id, result, user_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-	_, err := db.conn.Exec(query, run.ID, run.AppID, run.ScheduledAt, run.Status, run.KanbanCardID, run.Result, run.UserID)
+	if run.Trigger == "" {
+		run.Trigger = "scheduled"
+	}
+	query := `INSERT INTO app_runs (id, app_id, scheduled_at, status, trigger_type, kanban_card_id, result, user_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+	_, err := db.conn.Exec(query, run.ID, run.AppID, run.ScheduledAt, run.Status, run.Trigger, run.KanbanCardID, run.Result, run.UserID)
 	return err
 }
 
@@ -311,12 +319,12 @@ func (db *DB) ListAppRuns(appID string, status string, limit int) ([]*AppRunReco
 	var args []any
 
 	if status != "" {
-		query = `SELECT id, app_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
+		query = `SELECT id, app_id, scheduled_at, status, COALESCE(trigger_type,'scheduled'), COALESCE(kanban_card_id,''), COALESCE(result,''),
 			user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
 			FROM app_runs WHERE app_id = ? AND status = ? ORDER BY scheduled_at ASC LIMIT ?`
 		args = []any{appID, status, limit}
 	} else {
-		query = `SELECT id, app_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
+		query = `SELECT id, app_id, scheduled_at, status, COALESCE(trigger_type,'scheduled'), COALESCE(kanban_card_id,''), COALESCE(result,''),
 			user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
 			FROM app_runs WHERE app_id = ? ORDER BY scheduled_at DESC LIMIT ?`
 		args = []any{appID, limit}
@@ -331,7 +339,7 @@ func (db *DB) ListAppRuns(appID string, status string, limit int) ([]*AppRunReco
 	var runs []*AppRunRecord
 	for rows.Next() {
 		var r AppRunRecord
-		if err := rows.Scan(&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
+		if err := rows.Scan(&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.Trigger, &r.KanbanCardID, &r.Result,
 			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
 			return nil, err
 		}
@@ -341,7 +349,7 @@ func (db *DB) ListAppRuns(appID string, status string, limit int) ([]*AppRunReco
 }
 
 func (db *DB) GetPendingAppRunsDue(before time.Time) ([]*AppRunRecord, error) {
-	query := `SELECT r.id, r.app_id, r.scheduled_at, r.status, COALESCE(r.kanban_card_id,''), COALESCE(r.result,''),
+	query := `SELECT r.id, r.app_id, r.scheduled_at, r.status, COALESCE(r.trigger_type,'scheduled'), COALESCE(r.kanban_card_id,''), COALESCE(r.result,''),
 		r.user_id, r.created_at, COALESCE(r.started_at,''), COALESCE(r.completed_at,'')
 		FROM app_runs r JOIN apps a ON r.app_id = a.id
 		WHERE r.status = 'pending' AND r.scheduled_at <= ? AND a.is_active = 1
@@ -355,7 +363,7 @@ func (db *DB) GetPendingAppRunsDue(before time.Time) ([]*AppRunRecord, error) {
 	var runs []*AppRunRecord
 	for rows.Next() {
 		var r AppRunRecord
-		if err := rows.Scan(&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
+		if err := rows.Scan(&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.Trigger, &r.KanbanCardID, &r.Result,
 			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
 			return nil, err
 		}

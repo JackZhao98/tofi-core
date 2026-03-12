@@ -125,8 +125,28 @@ func (as *AppScheduler) pollAndDispatch() {
 	as.checkRenewals()
 }
 
+// DispatchManualRun creates an app_run record with trigger=manual and dispatches it immediately.
+func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string) (*storage.AppRunRecord, error) {
+	run := &storage.AppRunRecord{
+		ID:          uuid.New().String(),
+		AppID:       app.ID,
+		ScheduledAt: time.Now().UTC().Format("2006-01-02 15:04:05"),
+		Status:      "running",
+		Trigger:     "manual",
+		UserID:      userID,
+	}
+	if err := as.server.db.CreateAppRun(run); err != nil {
+		return nil, fmt.Errorf("create app_run: %w", err)
+	}
+	// Mark running (started_at)
+	as.server.db.UpdateAppRunStatus(run.ID, "running", "")
+
+	go as.dispatchRun(run)
+	return run, nil
+}
+
 func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord) {
-	log.Printf("[app-run:%s] Dispatching scheduled run for app %s", run.ID[:8], run.AppID[:8])
+	log.Printf("[app-run:%s] Dispatching %s run for app %s", run.ID[:8], run.Trigger, run.AppID[:8])
 
 	app, err := as.server.db.GetApp(run.AppID)
 	if err != nil {
