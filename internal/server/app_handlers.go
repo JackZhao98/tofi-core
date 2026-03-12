@@ -776,6 +776,7 @@ The --prompt is the ONLY instruction the App Agent receives when it runs. The Ap
 IMPORTANT:
 - Use ask_question when you need the user to choose from specific options (e.g. notification channels, language, timezone). After asking, WAIT for their answer.
 - ALWAYS call present_plan before create/update/delete — never execute without user approval
+- After the user approves (e.g. "确认", "Approve"), execute IMMEDIATELY. Do NOT call present_plan again — the plan was already approved.
 - Only include fields in present_plan that are relevant. For example: updating only the prompt? Don't include schedule or capabilities.
 - For simple queries (list, get, activate/deactivate/run), you can execute directly
 - Schedule JSON format: {"entries": [{"time":"09:00","repeat":{"type":"daily"},"enabled":true}], "timezone":"Asia/Shanghai"}
