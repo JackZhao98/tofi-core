@@ -589,3 +589,126 @@ func (s *Server) handleSkipRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "skipped"})
 }
+
+// ── Manager Chat ──
+
+// handleManagerChat POST /api/v1/apps/manager/chat
+func (s *Server) handleManagerChat(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	var req struct {
+		Message string                   `json:"message"`
+		History []map[string]interface{} `json:"history,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Message == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	// Load current apps for context
+	userApps, err := s.db.ListApps(userID)
+	if err != nil {
+		http.Error(w, "failed to load apps", http.StatusInternalServerError)
+		return
+	}
+
+	// Build apps context
+	var appsCtx []map[string]interface{}
+	for _, a := range userApps {
+		appsCtx = append(appsCtx, map[string]interface{}{
+			"id":          a.ID,
+			"name":        a.Name,
+			"description": a.Description,
+			"prompt":      a.Prompt,
+			"model":       a.Model,
+			"skills":      a.Skills,
+			"schedule":    a.ScheduleRules,
+			"is_active":   a.IsActive,
+		})
+	}
+
+	appsJSON, _ := json.Marshal(appsCtx)
+
+	systemPrompt := fmt.Sprintf(`You are the App Manager for Tofi. You help users manage their AI Apps.
+
+CURRENT APPS:
+%s
+
+You can suggest these actions:
+- create_app: Create a new app
+- update_app: Update an existing app (schedule, prompt, skills, name, model, etc.)
+- delete_app: Delete an app
+- activate_app: Enable scheduling for an app
+- deactivate_app: Disable scheduling for an app
+- run_app: Run an app immediately
+
+RESPONSE FORMAT - Output ONLY valid JSON:
+{
+  "message": "Your response to the user in their language",
+  "actions": [
+    {
+      "type": "create_app|update_app|delete_app|activate_app|deactivate_app|run_app",
+      "app_id": "existing app id (for update/delete/activate/deactivate/run)",
+      "app_name": "name of the app being modified (for display)",
+      "data": {
+        "name": "App Name",
+        "description": "what it does",
+        "prompt": "the task prompt",
+        "model": "model name",
+        "skills": ["skill1", "skill2"],
+        "schedule_rules": { "entries": [...], "timezone": "..." }
+      }
+    }
+  ]
+}
+
+RULES:
+- If the user just chats or asks questions, respond with message only (no actions)
+- If the user wants changes, include actions array with proposed changes
+- For schedule_rules, use the entry-based format with entries array
+- Always respond in the same language as the user
+- Keep messages concise and helpful
+- For update_app, only include fields that are being changed in data`, string(appsJSON))
+
+	// Build conversation prompt
+	var prompt string
+	if len(req.History) > 0 {
+		historyJSON, _ := json.Marshal(req.History)
+		prompt = fmt.Sprintf("Previous conversation:\n%s\n\nUser: %s", string(historyJSON), req.Message)
+	} else {
+		prompt = req.Message
+	}
+
+	model, apiKey, provider, err := s.resolveModelAndKey(userID, "")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("no API key available: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	result, err := callLLM(systemPrompt, prompt, apiKey, model, provider)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("LLM call failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	cleaned := cleanJSONResponse(result)
+
+	var parsed json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		// If not valid JSON, wrap in message-only response
+		resp := map[string]interface{}{
+			"message": result,
+			"actions": []interface{}{},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(parsed)
+}

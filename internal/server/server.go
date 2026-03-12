@@ -373,6 +373,7 @@ func (s *Server) Start() error {
 
 	// App 管理路由
 	mux.HandleFunc("POST /api/v1/apps/parse-schedule", s.AuthMiddleware(s.handleParseSchedule))
+	mux.HandleFunc("POST /api/v1/apps/manager/chat", s.AuthMiddleware(s.handleManagerChat))
 	mux.HandleFunc("GET /api/v1/apps", s.AuthMiddleware(s.handleListApps))
 	mux.HandleFunc("POST /api/v1/apps", s.AuthMiddleware(s.handleCreateApp))
 	mux.HandleFunc("GET /api/v1/apps/{id}", s.AuthMiddleware(s.handleGetApp))
