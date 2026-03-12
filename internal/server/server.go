@@ -223,18 +223,13 @@ func (s *Server) Start() error {
 	// 安装/更新 System Skills（内置技能）
 	skills.InstallSystemSkills(s.db, s.config.HomeDir)
 
-	// 启动前恢复僵尸任务（通过工作池提交）
-	if err := s.recoverZombiesWithPool(); err != nil {
-		log.Printf("⚠️  僵尸任务恢复失败: %v", err)
-	}
-
-	// 恢复僵尸 Hold 卡片（server 重启后 hold channel 丢失，标记为 failed）
-	s.recoverHoldCards()
+	// 统一恢复所有僵尸状态
+	s.recoverAll()
 
 	// 启动 preview session 清理 goroutine
 	go s.cleanupPreviewSessions()
 
-	// 启动 App 调度器（Timer-based）
+	// 启动 App 调度器（DB-poll based）
 	s.appScheduler = NewAppScheduler(s)
 	if err := s.appScheduler.Start(); err != nil {
 		log.Printf("App Scheduler start failed: %v", err)
@@ -388,6 +383,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/apps/{id}/run", s.AuthMiddleware(s.handleRunAppNow))
 	mux.HandleFunc("GET /api/v1/apps/{id}/runs", s.AuthMiddleware(s.handleListAppRuns))
 
+	// Schedules
+	mux.HandleFunc("GET /api/v1/schedules/upcoming", s.AuthMiddleware(s.handleGetUpcomingRuns))
+	mux.HandleFunc("POST /api/v1/schedules/{runId}/skip", s.AuthMiddleware(s.handleSkipRun))
+
 	// Admin 管理路由 (需要 admin 权限)
 	mux.HandleFunc("GET /api/v1/admin/stats", s.AdminMiddleware(s.handleAdminGetStats))
 	mux.HandleFunc("GET /api/v1/admin/users", s.AdminMiddleware(s.handleAdminListUsers))
@@ -426,16 +425,3 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-// recoverHoldCards 恢复僵尸 Hold 卡片（server 重启后 channel 丢失）
-func (s *Server) recoverHoldCards() {
-	// ListKanbanCards 需要 userID，这里直接用 SQL 查 hold 状态的卡片
-	rows, err := s.db.QueryHoldCards()
-	if err != nil {
-		log.Printf("⚠️  Hold 卡片恢复查询失败: %v", err)
-		return
-	}
-	for _, id := range rows {
-		log.Printf("🔄 恢复 hold 卡片 %s → failed", id)
-		s.db.UpdateKanbanCardStatus(id, "failed")
-	}
-}

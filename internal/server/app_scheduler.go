@@ -1,7 +1,6 @@
 package server
 
 import (
-	"container/heap"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -23,9 +22,9 @@ type Schedule struct {
 }
 
 type ScheduleEntry struct {
-	Time        string        `json:"time"`                    // "08:00"
-	EndTime     string        `json:"end_time,omitempty"`      // "17:00" (only if interval)
-	IntervalMin int           `json:"interval_min,omitempty"`  // 0 = once at time
+	Time        string        `json:"time"`                   // "08:00"
+	EndTime     string        `json:"end_time,omitempty"`     // "17:00" (only if interval)
+	IntervalMin int           `json:"interval_min,omitempty"` // 0 = once at time
 	Repeat      RepeatPattern `json:"repeat"`
 	Enabled     bool          `json:"enabled"`
 	Label       string        `json:"label,omitempty"`
@@ -56,102 +55,25 @@ type TimeWindow struct {
 	IntervalMin int    `json:"interval_min"` // 0 = run once at start
 }
 
-// ── Min-Heap for scheduled runs ──
-
-type RunEntry struct {
-	RunID       string
-	AppID       string
-	UserID      string
-	ScheduledAt time.Time
-}
-
-type RunHeap []RunEntry
-
-func (h RunHeap) Len() int            { return len(h) }
-func (h RunHeap) Less(i, j int) bool  { return h[i].ScheduledAt.Before(h[j].ScheduledAt) }
-func (h RunHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *RunHeap) Push(x any)         { *h = append(*h, x.(RunEntry)) }
-func (h *RunHeap) Pop() any {
-	old := *h
-	n := len(old)
-	item := old[n-1]
-	*h = old[:n-1]
-	return item
-}
-func (h RunHeap) Peek() RunEntry { return h[0] }
-
-// RemoveByApp removes all entries for a given app
-func (h *RunHeap) RemoveByApp(appID string) {
-	n := 0
-	for _, entry := range *h {
-		if entry.AppID != appID {
-			(*h)[n] = entry
-			n++
-		}
-	}
-	*h = (*h)[:n]
-	heap.Init(h)
-}
-
-// ── App Scheduler ──
+// ── App Scheduler (DB-poll based) ──
 
 type AppScheduler struct {
-	server    *Server
-	mu        sync.Mutex
-	h         RunHeap
-	timer     *time.Timer
-	renewalCh chan string
-	stopCh    chan struct{}
-	stopped   bool
+	server  *Server
+	mu      sync.Mutex // guards dispatch to prevent double-dispatch
+	stopCh  chan struct{}
+	stopped bool
 }
 
 func NewAppScheduler(server *Server) *AppScheduler {
 	return &AppScheduler{
-		server:    server,
-		h:         RunHeap{},
-		renewalCh: make(chan string, 100),
-		stopCh:    make(chan struct{}),
+		server: server,
+		stopCh: make(chan struct{}),
 	}
 }
 
 func (as *AppScheduler) Start() error {
-	// Recover zombie runs: reset "running" app_runs to "pending" (server restart killed goroutines)
-	recovered, err := as.server.db.RecoverRunningAppRuns()
-	if err != nil {
-		log.Printf("⚠️ Failed to recover running app_runs: %v", err)
-	} else if recovered > 0 {
-		log.Printf("♻️ Recovered %d zombie app_runs (running → pending)", recovered)
-	}
-
-	// Load all pending runs from DB into heap
-	runs, err := as.server.db.GetAllPendingAppRuns()
-	if err != nil {
-		return fmt.Errorf("failed to load pending runs: %w", err)
-	}
-
-	heap.Init(&as.h)
-	for _, r := range runs {
-		t, err := time.Parse("2006-01-02 15:04:05", r.ScheduledAt)
-		if err != nil {
-			t, err = time.Parse(time.RFC3339, r.ScheduledAt)
-			if err != nil {
-				log.Printf("Skipping run %s: invalid scheduled_at: %s", r.ID, r.ScheduledAt)
-				continue
-			}
-		}
-		heap.Push(&as.h, RunEntry{
-			RunID:       r.ID,
-			AppID:       r.AppID,
-			UserID:      r.UserID,
-			ScheduledAt: t,
-		})
-	}
-
-	as.timer = time.NewTimer(as.nextDelay())
-	go as.mainLoop()
-	go as.overdueSweep()
-
-	log.Printf("App Scheduler started with %d pending runs", len(runs))
+	go as.pollLoop()
+	log.Println("⏰ App Scheduler started (DB-poll, 30s interval)")
 	return nil
 }
 
@@ -161,97 +83,55 @@ func (as *AppScheduler) Stop() {
 	}
 	as.stopped = true
 	close(as.stopCh)
-	if as.timer != nil {
-		as.timer.Stop()
-	}
-	log.Println("App Scheduler stopped")
+	log.Println("⏰ App Scheduler stopped")
 }
 
-func (as *AppScheduler) nextDelay() time.Duration {
-	if as.h.Len() == 0 {
-		return 24 * time.Hour
-	}
-	delay := time.Until(as.h.Peek().ScheduledAt)
-	if delay < 0 {
-		return 0
-	}
-	return delay
-}
+func (as *AppScheduler) pollLoop() {
+	// Run immediately on start
+	as.pollAndDispatch()
 
-func (as *AppScheduler) resetTimer() {
-	if as.timer != nil {
-		as.timer.Reset(as.nextDelay())
-	}
-}
-
-func (as *AppScheduler) mainLoop() {
-	for {
-		select {
-		case <-as.timer.C:
-			as.mu.Lock()
-			now := time.Now()
-			for as.h.Len() > 0 && !as.h.Peek().ScheduledAt.After(now) {
-				entry := heap.Pop(&as.h).(RunEntry)
-				go as.dispatchRun(entry)
-			}
-			as.resetTimer()
-			as.mu.Unlock()
-
-		case appID := <-as.renewalCh:
-			as.doRenewal(appID)
-
-		case <-as.stopCh:
-			return
-		}
-	}
-}
-
-// overdueSweep periodically checks for overdue pending runs that the heap missed.
-// This is a safety net against heap/DB desync (e.g., from activate/deactivate races).
-func (as *AppScheduler) overdueSweep() {
-	ticker := time.NewTicker(2 * time.Minute)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			runs, err := as.server.db.GetOverdueAppRuns(time.Now().UTC())
-			if err != nil || len(runs) == 0 {
-				continue
-			}
-			log.Printf("🔍 Overdue sweep: found %d missed runs, re-adding to heap", len(runs))
-			as.mu.Lock()
-			for _, r := range runs {
-				t, err := time.Parse("2006-01-02 15:04:05", r.ScheduledAt)
-				if err != nil {
-					t, _ = time.Parse(time.RFC3339, r.ScheduledAt)
-				}
-				heap.Push(&as.h, RunEntry{
-					RunID:       r.ID,
-					AppID:       r.AppID,
-					UserID:      r.UserID,
-					ScheduledAt: t,
-				})
-			}
-			as.resetTimer()
-			as.mu.Unlock()
+			as.pollAndDispatch()
 		case <-as.stopCh:
 			return
 		}
 	}
 }
 
-func (as *AppScheduler) dispatchRun(entry RunEntry) {
-	log.Printf("[app-run:%s] Dispatching scheduled run for app %s", entry.RunID[:8], entry.AppID[:8])
+func (as *AppScheduler) pollAndDispatch() {
+	as.mu.Lock()
+	defer as.mu.Unlock()
 
-	if err := as.server.db.UpdateAppRunStatus(entry.RunID, "running", ""); err != nil {
-		log.Printf("[app-run:%s] Failed to mark running: %v", entry.RunID[:8], err)
-		return
+	// 1. Dispatch overdue pending runs (only for active apps)
+	runs, err := as.server.db.GetPendingAppRunsDue(time.Now())
+	if err != nil {
+		log.Printf("[app-scheduler] Failed to query due runs: %v", err)
+	} else {
+		for _, r := range runs {
+			// Mark running immediately to prevent double-dispatch on next poll
+			if err := as.server.db.UpdateAppRunStatus(r.ID, "running", ""); err != nil {
+				log.Printf("[app-scheduler] Failed to mark run %s as running: %v", r.ID[:8], err)
+				continue
+			}
+			go as.dispatchRun(r)
+		}
 	}
 
-	app, err := as.server.db.GetApp(entry.AppID)
+	// 2. Check renewals for active apps
+	as.checkRenewals()
+}
+
+func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord) {
+	log.Printf("[app-run:%s] Dispatching scheduled run for app %s", run.ID[:8], run.AppID[:8])
+
+	app, err := as.server.db.GetApp(run.AppID)
 	if err != nil {
-		log.Printf("[app-run:%s] App %s not found: %v", entry.RunID[:8], entry.AppID[:8], err)
-		as.server.db.UpdateAppRunStatus(entry.RunID, "failed", "")
+		log.Printf("[app-run:%s] App %s not found: %v", run.ID[:8], run.AppID[:8], err)
+		as.server.db.UpdateAppRunStatus(run.ID, "failed", "")
 		return
 	}
 
@@ -263,12 +143,12 @@ func (as *AppScheduler) dispatchRun(entry RunEntry) {
 		Description: fmt.Sprintf("[App: %s] %s", app.Name, app.Description),
 		Status:      "todo",
 		AppID:       app.ID,
-		AgentID:     app.ID, // backward compat
-		UserID:      entry.UserID,
+		AgentID:     app.ID,
+		UserID:      run.UserID,
 	}
 	if err := as.server.db.CreateKanbanCard(card); err != nil {
-		log.Printf("[app-run:%s] Failed to create kanban card: %v", entry.RunID[:8], err)
-		as.server.db.UpdateAppRunStatus(entry.RunID, "failed", "")
+		log.Printf("[app-run:%s] Failed to create kanban card: %v", run.ID[:8], err)
+		as.server.db.UpdateAppRunStatus(run.ID, "failed", "")
 		return
 	}
 
@@ -277,35 +157,37 @@ func (as *AppScheduler) dispatchRun(entry RunEntry) {
 		created = card
 	}
 
-	log.Printf("[app-run:%s] Executing with card %s", entry.RunID[:8], card.ID[:8])
-	as.server.executeWish(created, entry.UserID, app.Model)
+	log.Printf("[app-run:%s] Executing with card %s", run.ID[:8], card.ID[:8])
+	as.server.executeWish(created, run.UserID, app.Model)
 
 	finalCard, _ := as.server.db.GetKanbanCard(card.ID)
 	status := "done"
 	if finalCard != nil && finalCard.Status == "failed" {
 		status = "failed"
 	}
-	as.server.db.UpdateAppRunStatus(entry.RunID, status, card.ID)
+	as.server.db.UpdateAppRunStatus(run.ID, status, card.ID)
+}
 
-	count, err := as.server.db.CountPendingAppRuns(entry.AppID)
-	if err == nil {
-		app, err := as.server.db.GetApp(entry.AppID)
-		if err == nil && app.IsActive && count < app.RenewalThreshold {
-			select {
-			case as.renewalCh <- entry.AppID:
-			default:
-			}
+func (as *AppScheduler) checkRenewals() {
+	activeApps, err := as.server.db.ListActiveApps()
+	if err != nil {
+		log.Printf("[app-scheduler] Failed to list active apps: %v", err)
+		return
+	}
+
+	for _, app := range activeApps {
+		count, err := as.server.db.CountPendingAppRuns(app.ID)
+		if err != nil {
+			continue
+		}
+		if count < app.RenewalThreshold {
+			as.doRenewal(app)
 		}
 	}
 }
 
-func (as *AppScheduler) doRenewal(appID string) {
-	app, err := as.server.db.GetApp(appID)
-	if err != nil || !app.IsActive {
-		return
-	}
-
-	count, err := as.server.db.CountPendingAppRuns(appID)
+func (as *AppScheduler) doRenewal(app *storage.AppRecord) {
+	count, err := as.server.db.CountPendingAppRuns(app.ID)
 	if err != nil {
 		return
 	}
@@ -314,21 +196,18 @@ func (as *AppScheduler) doRenewal(appID string) {
 		return
 	}
 
-	log.Printf("[app:%s] Renewal: %d pending, need %d more", appID[:8], count, need)
+	log.Printf("[app:%s] Renewal: %d pending, need %d more", app.ID[:8], count, need)
 
-	lastTime, _ := as.server.db.GetLastAppScheduledTime(appID)
+	lastTime, _ := as.server.db.GetLastAppScheduledTime(app.ID)
 	times := ExpandSchedule(app.ScheduleRules, lastTime, need)
 	if len(times) == 0 {
 		return
 	}
 
-	as.mu.Lock()
-	defer as.mu.Unlock()
-
 	for _, t := range times {
 		run := &storage.AppRunRecord{
 			ID:          uuid.New().String(),
-			AppID:       appID,
+			AppID:       app.ID,
 			ScheduledAt: t.UTC().Format("2006-01-02 15:04:05"),
 			Status:      "pending",
 			UserID:      app.UserID,
@@ -337,16 +216,9 @@ func (as *AppScheduler) doRenewal(appID string) {
 			log.Printf("Failed to create app run: %v", err)
 			continue
 		}
-		heap.Push(&as.h, RunEntry{
-			RunID:       run.ID,
-			AppID:       appID,
-			UserID:      app.UserID,
-			ScheduledAt: t,
-		})
 	}
-	as.resetTimer()
 
-	log.Printf("[app:%s] Renewal complete: added %d runs", appID[:8], len(times))
+	log.Printf("[app:%s] Renewal complete: added %d runs", app.ID[:8], len(times))
 }
 
 // ── Public methods ──
@@ -358,9 +230,6 @@ func (as *AppScheduler) ActivateApp(app *storage.AppRecord) error {
 		return fmt.Errorf("schedule rules produced no future runs")
 	}
 
-	as.mu.Lock()
-	defer as.mu.Unlock()
-
 	for _, t := range times {
 		run := &storage.AppRunRecord{
 			ID:          uuid.New().String(),
@@ -372,31 +241,15 @@ func (as *AppScheduler) ActivateApp(app *storage.AppRecord) error {
 		if err := as.server.db.CreateAppRun(run); err != nil {
 			continue
 		}
-		heap.Push(&as.h, RunEntry{
-			RunID:       run.ID,
-			AppID:       app.ID,
-			UserID:      app.UserID,
-			ScheduledAt: t,
-		})
 	}
-	as.resetTimer()
 
 	log.Printf("App %s activated with %d scheduled runs", app.ID[:8], len(times))
 	return nil
 }
 
 func (as *AppScheduler) RemoveApp(appID string) {
-	as.mu.Lock()
-	defer as.mu.Unlock()
-	as.h.RemoveByApp(appID)
-	as.resetTimer()
-}
-
-func (as *AppScheduler) AddRun(entry RunEntry) {
-	as.mu.Lock()
-	defer as.mu.Unlock()
-	heap.Push(&as.h, entry)
-	as.resetTimer()
+	// No-op: deactivation already calls CancelPendingAppRuns via handler.
+	// DB-poll model doesn't need in-memory cleanup.
 }
 
 // ── Schedule Expansion ──

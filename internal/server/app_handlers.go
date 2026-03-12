@@ -548,3 +548,44 @@ func (s *Server) executeAppCard(card *storage.KanbanCardRecord, app *storage.App
 	requestedModel := app.Model
 	s.executeWish(card, userID, requestedModel)
 }
+
+// ── Schedules Handlers ──
+
+// handleGetUpcomingRuns GET /api/v1/schedules/upcoming
+func (s *Server) handleGetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	runs, err := s.db.GetUpcomingRuns(userID, limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to get upcoming runs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if runs == nil {
+		runs = []*storage.UpcomingRunRecord{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(runs)
+}
+
+// handleSkipRun POST /api/v1/schedules/{runId}/skip
+func (s *Server) handleSkipRun(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+	runID := r.PathValue("runId")
+
+	if err := s.db.SkipAppRun(runID, userID); err != nil {
+		http.Error(w, fmt.Sprintf("failed to skip run: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "skipped"})
+}

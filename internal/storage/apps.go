@@ -340,32 +340,12 @@ func (db *DB) ListAppRuns(appID string, status string, limit int) ([]*AppRunReco
 	return runs, nil
 }
 
-func (db *DB) GetAllPendingAppRuns() ([]*AppRunRecord, error) {
-	query := `SELECT id, app_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
-		user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
-		FROM app_runs WHERE status = 'pending' ORDER BY scheduled_at ASC`
-	rows, err := db.conn.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var runs []*AppRunRecord
-	for rows.Next() {
-		var r AppRunRecord
-		if err := rows.Scan(&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
-			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
-			return nil, err
-		}
-		runs = append(runs, &r)
-	}
-	return runs, nil
-}
-
 func (db *DB) GetPendingAppRunsDue(before time.Time) ([]*AppRunRecord, error) {
-	query := `SELECT id, app_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
-		user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
-		FROM app_runs WHERE status = 'pending' AND scheduled_at <= ? ORDER BY scheduled_at ASC`
+	query := `SELECT r.id, r.app_id, r.scheduled_at, r.status, COALESCE(r.kanban_card_id,''), COALESCE(r.result,''),
+		r.user_id, r.created_at, COALESCE(r.started_at,''), COALESCE(r.completed_at,'')
+		FROM app_runs r JOIN apps a ON r.app_id = a.id
+		WHERE r.status = 'pending' AND r.scheduled_at <= ? AND a.is_active = 1
+		ORDER BY r.scheduled_at ASC`
 	rows, err := db.conn.Query(query, before.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return nil, err
@@ -429,9 +409,10 @@ func (db *DB) GetLastAppScheduledTime(appID string) (time.Time, error) {
 	return t, nil
 }
 
-// RecoverRunningAppRuns resets zombie "running" app_runs to "pending" (server restart recovery).
+// RecoverRunningAppRuns marks zombie "running" app_runs as "failed" on server restart.
+// These runs were interrupted mid-execution — marking as "failed" prevents duplicate execution.
 func (db *DB) RecoverRunningAppRuns() (int, error) {
-	result, err := db.conn.Exec(`UPDATE app_runs SET status = 'pending', started_at = NULL WHERE status = 'running'`)
+	result, err := db.conn.Exec(`UPDATE app_runs SET status = 'failed', completed_at = CURRENT_TIMESTAMP WHERE status = 'running'`)
 	if err != nil {
 		return 0, err
 	}
@@ -439,26 +420,39 @@ func (db *DB) RecoverRunningAppRuns() (int, error) {
 	return int(rows), nil
 }
 
-// GetOverdueAppRuns finds pending runs with scheduled_at in the past (overdue).
-// Only returns runs for active apps to avoid dispatching deactivated apps.
-func (db *DB) GetOverdueAppRuns(now time.Time) ([]*AppRunRecord, error) {
-	nowStr := now.Format("2006-01-02 15:04:05")
-	query := `SELECT r.id, r.app_id, r.scheduled_at, r.status, COALESCE(r.kanban_card_id,''), COALESCE(r.result,''),
-		r.user_id, r.created_at, COALESCE(r.started_at,''), COALESCE(r.completed_at,'')
+func (db *DB) DeleteAppRuns(appID string) error {
+	_, err := db.conn.Exec(`DELETE FROM app_runs WHERE app_id = ?`, appID)
+	return err
+}
+
+// UpcomingRunRecord is a run with app name for the schedules page
+type UpcomingRunRecord struct {
+	ID          string `json:"id"`
+	AppID       string `json:"app_id"`
+	AppName     string `json:"app_name"`
+	ScheduledAt string `json:"scheduled_at"`
+	Status      string `json:"status"`
+	UserID      string `json:"user_id"`
+}
+
+func (db *DB) GetUpcomingRuns(userID string, limit int) ([]*UpcomingRunRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := `SELECT r.id, r.app_id, a.name, r.scheduled_at, r.status, r.user_id
 		FROM app_runs r JOIN apps a ON r.app_id = a.id
-		WHERE r.status = 'pending' AND r.scheduled_at <= ? AND a.is_active = 1
-		ORDER BY r.scheduled_at ASC LIMIT 50`
-	rows, err := db.conn.Query(query, nowStr)
+		WHERE r.user_id = ? AND r.status = 'pending' AND a.is_active = 1
+		ORDER BY r.scheduled_at ASC LIMIT ?`
+	rows, err := db.conn.Query(query, userID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var runs []*AppRunRecord
+	var runs []*UpcomingRunRecord
 	for rows.Next() {
-		var r AppRunRecord
-		if err := rows.Scan(&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
-			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
+		var r UpcomingRunRecord
+		if err := rows.Scan(&r.ID, &r.AppID, &r.AppName, &r.ScheduledAt, &r.Status, &r.UserID); err != nil {
 			return nil, err
 		}
 		runs = append(runs, &r)
@@ -466,8 +460,8 @@ func (db *DB) GetOverdueAppRuns(now time.Time) ([]*AppRunRecord, error) {
 	return runs, nil
 }
 
-func (db *DB) DeleteAppRuns(appID string) error {
-	_, err := db.conn.Exec(`DELETE FROM app_runs WHERE app_id = ?`, appID)
+func (db *DB) SkipAppRun(runID, userID string) error {
+	_, err := db.conn.Exec(`UPDATE app_runs SET status = 'skipped', completed_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = 'pending'`, runID, userID)
 	return err
 }
 
