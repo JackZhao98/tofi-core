@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tofi-core/internal/models"
+	"tofi-core/internal/provider"
 	"tofi-core/internal/skills"
 	"tofi-core/internal/storage"
 
@@ -964,6 +965,65 @@ func (s *Server) handleDeleteAIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListModels GET /api/v1/models — 列出所有已知模型
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	type modelEntry struct {
+		Name            string  `json:"name"`
+		Provider        string  `json:"provider"`
+		ContextWindow   int     `json:"context_window"`
+		InputCostPer1M  float64 `json:"input_cost_per_1m"`
+		OutputCostPer1M float64 `json:"output_cost_per_1m"`
+	}
+
+	all := provider.ListAllModels()
+	models := make([]modelEntry, 0, len(all))
+	for name, info := range all {
+		models = append(models, modelEntry{
+			Name:            name,
+			Provider:        info.Provider,
+			ContextWindow:   info.ContextWindow,
+			InputCostPer1M:  info.InputCostPer1M,
+			OutputCostPer1M: info.OutputCostPer1M,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models)
+}
+
+// handleGetPreferredModel GET /api/v1/settings/preferred-model
+func (s *Server) handleGetPreferredModel(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	model, _ := s.db.GetSetting("preferred_model", userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"model": model})
+}
+
+// handleSetPreferredModel POST /api/v1/settings/preferred-model
+func (s *Server) handleSetPreferredModel(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+
+	if req.Model == "" {
+		// Clear preference
+		s.db.DeleteSetting("preferred_model", userID)
+	} else {
+		s.db.SetSetting("preferred_model", userID, req.Model)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "model": req.Model})
 }
 
 // --- Helper functions ---

@@ -72,19 +72,27 @@ func (s *Server) handleWish(w http.ResponseWriter, r *http.Request) {
 
 // resolveModelAndKey 智能检测可用的 API Key 和模型
 // 优先级：用户指定 model > Settings 中有 key 的 provider > 环境变量中有 key 的 provider
-func (s *Server) resolveModelAndKey(userID, requestedModel string) (model, apiKey, provider string, err error) {
+func (s *Server) resolveModelAndKey(userID, requestedModel string) (model, apiKey, providerName string, err error) {
 	// 1. 用户指定了 model → 根据 model 找 key
 	if requestedModel != "" {
-		provider = detectProvider(requestedModel)
-		apiKey = s.findAPIKey(provider, userID)
+		providerName = detectProvider(requestedModel)
+		apiKey = s.findAPIKey(providerName, userID)
 		if apiKey != "" {
-			return requestedModel, apiKey, provider, nil
+			return requestedModel, apiKey, providerName, nil
 		}
-		return "", "", "", fmt.Errorf("no API key found for model '%s' (provider: %s)", requestedModel, provider)
+		return "", "", "", fmt.Errorf("no API key found for model '%s' (provider: %s)", requestedModel, providerName)
 	}
 
-	// 2. 自动检测：按优先级尝试各 provider
-	// 优先 Settings 表中的 key，再回退到环境变量
+	// 2. 用户偏好模型
+	if preferred, _ := s.db.GetSetting("preferred_model", userID); preferred != "" {
+		providerName = detectProvider(preferred)
+		if key := s.findAPIKey(providerName, userID); key != "" {
+			log.Printf("🔑 Using preferred model: %s (provider: %s)", preferred, providerName)
+			return preferred, key, providerName, nil
+		}
+	}
+
+	// 3. 自动检测：按优先级尝试各 provider
 	providers := []struct {
 		name         string
 		defaultModel string
@@ -93,6 +101,7 @@ func (s *Server) resolveModelAndKey(userID, requestedModel string) (model, apiKe
 		{"anthropic", "claude-sonnet-4-20250514", "TOFI_ANTHROPIC_API_KEY"},
 		{"openai", "gpt-5-mini", "TOFI_OPENAI_API_KEY"},
 		{"gemini", "gemini-2.0-flash", "TOFI_GEMINI_API_KEY"},
+		{"deepseek", "deepseek-chat", "TOFI_DEEPSEEK_API_KEY"},
 	}
 
 	for _, p := range providers {
@@ -127,6 +136,7 @@ func (s *Server) findAPIKey(provider, userID string) string {
 		"anthropic": "TOFI_ANTHROPIC_API_KEY",
 		"claude":    "TOFI_ANTHROPIC_API_KEY",
 		"gemini":    "TOFI_GEMINI_API_KEY",
+		"deepseek":  "TOFI_DEEPSEEK_API_KEY",
 	}
 	if envName, ok := envMap[provider]; ok {
 		if v := os.Getenv(envName); v != "" {
