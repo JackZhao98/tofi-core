@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget jq git \
     nodejs npm \
     ca-certificates \
+    chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user (non-root)
