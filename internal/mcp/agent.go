@@ -680,9 +680,36 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			} else {
 				originalCount := len(messages)
 				originalTokens := int(resp.Usage.InputTokens)
-				// Keep last 2 messages
-				kept := make([]provider.Message, len(messages[len(messages)-2:]))
-				copy(kept, messages[len(messages)-2:])
+
+				// Find the safe cut point: we need to keep complete tool call/result
+				// sequences intact. Walk backwards to find the last assistant message
+				// with tool calls, and keep everything from there onwards.
+				keepFrom := len(messages) - 2
+				if keepFrom < 1 {
+					keepFrom = 1
+				}
+				// Walk backwards to find an assistant message with tool calls
+				// and ensure all its tool results are included
+				for i := keepFrom; i >= 1; i-- {
+					if messages[i].Role == "tool" {
+						// This is a tool result — we need to find its parent assistant message
+						// Keep walking back to find the assistant message with tool calls
+						for j := i - 1; j >= 1; j-- {
+							if messages[j].Role == "assistant" && len(messages[j].ToolCalls) > 0 {
+								keepFrom = j
+								break
+							}
+						}
+						break
+					} else if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+						// Found an assistant with tool calls — check if all results follow
+						keepFrom = i
+						break
+					}
+				}
+
+				kept := make([]provider.Message, len(messages[keepFrom:]))
+				copy(kept, messages[keepFrom:])
 				messages = []provider.Message{
 					{Role: "user", Content: fmt.Sprintf("<context_summary>\n%s\n</context_summary>\n\nThe above is a summary of our conversation so far. Please continue from where we left off.", summary)},
 				}

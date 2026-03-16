@@ -13,9 +13,12 @@ import (
 
 // openaiResponses implements Provider using the OpenAI Responses API.
 // This is the primary API for all OpenAI native models.
+// It includes an automatic fallback to Chat Completions API when the
+// Responses API fails with tool-related errors (known API issue).
 type openaiResponses struct {
 	apiKey  string
 	baseURL string
+	legacy  *openaiLegacy // Chat Completions fallback for tool-related errors
 }
 
 func newOpenAIResponses(apiKey string, cfg *providerConfig) (Provider, error) {
@@ -26,15 +29,34 @@ func newOpenAIResponses(apiKey string, cfg *providerConfig) (Provider, error) {
 	if cfg.BaseURL != "" {
 		baseURL = cfg.BaseURL
 	}
-	return &openaiResponses{apiKey: apiKey, baseURL: baseURL}, nil
+	// Create a Chat Completions fallback for when Responses API has tool issues
+	legacy := &openaiLegacy{apiKey: apiKey, baseURL: baseURL}
+	return &openaiResponses{apiKey: apiKey, baseURL: baseURL, legacy: legacy}, nil
+}
+
+// isToolCallError checks if the error is a Responses API tool-related error
+// that can be retried via the Chat Completions API fallback.
+func isToolCallError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "No tool output found for function call") ||
+		strings.Contains(msg, "tool output") ||
+		(strings.Contains(msg, "HTTP 400") && strings.Contains(msg, "function_call"))
 }
 
 // Chat sends a non-streaming request via the Responses API.
+// Falls back to Chat Completions if the Responses API fails with tool errors.
 func (o *openaiResponses) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	payload := o.buildPayload(req, false)
 
 	body, err := o.doRequest(ctx, payload)
 	if err != nil {
+		// Fallback to Chat Completions API for tool-related errors
+		if isToolCallError(err) && len(req.Tools) > 0 {
+			return o.legacy.Chat(ctx, req)
+		}
 		return nil, err
 	}
 
@@ -42,6 +64,7 @@ func (o *openaiResponses) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 }
 
 // ChatStream sends a streaming request via the Responses API.
+// Falls back to Chat Completions if the Responses API fails with tool errors.
 func (o *openaiResponses) ChatStream(ctx context.Context, req *ChatRequest, onDelta func(StreamDelta)) (*ChatResponse, error) {
 	payload := o.buildPayload(req, true)
 
@@ -66,7 +89,12 @@ func (o *openaiResponses) ChatStream(ctx context.Context, req *ChatRequest, onDe
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		// Fallback to Chat Completions API for tool-related errors
+		if isToolCallError(httpErr) && len(req.Tools) > 0 {
+			return o.legacy.ChatStream(ctx, req, onDelta)
+		}
+		return nil, httpErr
 	}
 
 	return o.parseStream(resp.Body, onDelta)
@@ -137,17 +165,16 @@ func (o *openaiResponses) convertMessages(msgs []Message) []interface{} {
 					})
 				}
 				// Then add function_call items
+				// Note: only set call_id (not id) — id is the item's unique identifier
+				// which we don't preserve from the original response. Setting id to the
+				// wrong value can confuse the Responses API validation.
 				for _, tc := range msg.ToolCalls {
-					var args interface{}
-					if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
-						args = tc.Arguments
-					}
 					input = append(input, map[string]interface{}{
 						"type":      "function_call",
-						"id":        tc.ID,
 						"call_id":   tc.ID,
 						"name":      tc.Name,
 						"arguments": tc.Arguments,
+						"status":    "completed",
 					})
 				}
 			} else if msg.Content != "" {
@@ -166,6 +193,7 @@ func (o *openaiResponses) convertMessages(msgs []Message) []interface{} {
 				"type":    "function_call_output",
 				"call_id": msg.ToolCallID,
 				"output":  msg.Content,
+				"status":  "completed",
 			})
 		}
 	}
@@ -414,14 +442,24 @@ func (o *openaiResponses) parseStream(body io.Reader, onDelta func(StreamDelta))
 	result.Content = contentBuf.String()
 	result.Reasoning = reasoningBuf.String()
 
-	// Assemble tool calls
-	for i := 0; i < len(fcMap); i++ {
-		if acc, ok := fcMap[i]; ok {
-			result.ToolCalls = append(result.ToolCalls, ToolCall{
-				ID:        acc.ID,
-				Name:      acc.Name,
-				Arguments: acc.Args.String(),
-			})
+	// Assemble tool calls — iterate by sorted output_index keys
+	// (output_index may not start at 0 if text/reasoning items precede tool calls)
+	if len(fcMap) > 0 {
+		// Find the max output_index to iterate over all possible indices
+		maxIdx := 0
+		for idx := range fcMap {
+			if idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+		for i := 0; i <= maxIdx; i++ {
+			if acc, ok := fcMap[i]; ok {
+				result.ToolCalls = append(result.ToolCalls, ToolCall{
+					ID:        acc.ID,
+					Name:      acc.Name,
+					Arguments: acc.Args.String(),
+				})
+			}
 		}
 	}
 
