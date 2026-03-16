@@ -352,6 +352,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("DELETE /api/v1/settings/ai-keys/{provider}", s.AuthMiddleware(s.handleDeleteAIKey))
 	mux.HandleFunc("GET /api/v1/settings/preferred-model", s.AuthMiddleware(s.handleGetPreferredModel))
 	mux.HandleFunc("POST /api/v1/settings/preferred-model", s.AuthMiddleware(s.handleSetPreferredModel))
+	mux.HandleFunc("GET /api/v1/settings/enabled-models", s.AuthMiddleware(s.handleGetEnabledModels))
+	mux.HandleFunc("POST /api/v1/settings/enabled-models", s.AuthMiddleware(s.handleSetEnabledModels))
 	mux.HandleFunc("GET /api/v1/models", s.AuthMiddleware(s.handleListModels))
 
 	// Connectors (Telegram 等)

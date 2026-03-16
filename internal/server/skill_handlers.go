@@ -968,6 +968,7 @@ func (s *Server) handleDeleteAIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListModels GET /api/v1/models — 列出所有已知模型
+// 支持 ?enabled=true 仅返回用户已启用的模型
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	type modelEntry struct {
 		Name            string  `json:"name"`
@@ -977,9 +978,27 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		OutputCostPer1M float64 `json:"output_cost_per_1m"`
 	}
 
+	// 构建 enabled 过滤集合
+	var enabledSet map[string]bool
+	if r.URL.Query().Get("enabled") == "true" {
+		userID := r.Context().Value(UserContextKey).(string)
+		val, _ := s.db.GetSetting("enabled_models", userID)
+		if val != "" {
+			var enabledList []string
+			json.Unmarshal([]byte(val), &enabledList)
+			enabledSet = make(map[string]bool, len(enabledList))
+			for _, m := range enabledList {
+				enabledSet[m] = true
+			}
+		}
+	}
+
 	all := provider.ListAllModels()
 	models := make([]modelEntry, 0, len(all))
 	for name, info := range all {
+		if enabledSet != nil && !enabledSet[name] {
+			continue
+		}
 		models = append(models, modelEntry{
 			Name:            name,
 			Provider:        info.Provider,
@@ -1024,6 +1043,43 @@ func (s *Server) handleSetPreferredModel(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "model": req.Model})
+}
+
+// handleGetEnabledModels GET /api/v1/settings/enabled-models
+func (s *Server) handleGetEnabledModels(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	val, _ := s.db.GetSetting("enabled_models", userID)
+	var models []string
+	if val != "" {
+		json.Unmarshal([]byte(val), &models)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"models": models})
+}
+
+// handleSetEnabledModels POST /api/v1/settings/enabled-models
+func (s *Server) handleSetEnabledModels(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	var req struct {
+		Models []string `json:"models"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+
+	if len(req.Models) == 0 {
+		s.db.DeleteSetting("enabled_models", userID)
+	} else {
+		data, _ := json.Marshal(req.Models)
+		s.db.SetSetting("enabled_models", userID, string(data))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "models": req.Models})
 }
 
 // --- Helper functions ---
