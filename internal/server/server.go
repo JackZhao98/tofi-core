@@ -54,7 +54,7 @@ type Server struct {
 	executor   executor.Executor // Sandbox command executor
 	sseHub     *SSEHub           // SSE real-time push hub
 
-	// Hold channel management for agent suggest_install blocking
+	// Hold channel management for agent tofi_suggest_install blocking
 	holdMu       sync.Mutex
 	holdChannels map[string]chan HoldSignal // cardID → signal channel
 

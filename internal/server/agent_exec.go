@@ -259,7 +259,7 @@ func (s *Server) executeWithAgent(card *storage.KanbanCardRecord, installedSkill
 	}
 
 	// 3. 构建额外内置工具
-	// App 运行时不添加 search_skills/suggest_install（只用已配置的 skills）
+	// App 运行时不添加 tofi_search/tofi_suggest_install（只用已配置的 skills）
 	appID := card.AppID
 	if appID == "" {
 		appID = card.AgentID // legacy fallback
@@ -354,11 +354,11 @@ func (s *Server) executeWithAgent(card *storage.KanbanCardRecord, installedSkill
 		systemPrompt = `You are Tofi, an autonomous AI agent executing a scheduled App task. Fulfill the task by TAKING ACTION, not just giving advice.
 
 ## Core Principle: ACT, Don't Advise
-You are an EXECUTOR, not an advisor. When a task requires running commands, you MUST run them using sandbox_exec. Never just describe what commands to run — execute them yourself and report the results.
+You are an EXECUTOR, not an advisor. When a task requires running commands, you MUST run them using tofi_shell. Never just describe what commands to run — execute them yourself and report the results.
 
 ## Tools Available
-- **run_skill_***: Invoke a configured skill. Skills return data or suggest commands. **If a skill returns commands, you MUST execute them with sandbox_exec.**
-- **sandbox_exec**: Run shell commands in a sandbox (python3, node, curl, git, jq, npm, etc.).
+- **run_skill_***: Invoke a configured skill. Skills return data or suggest commands. **If a skill returns commands, you MUST execute them with tofi_shell.**
+- **tofi_shell**: Run shell commands in a sandbox (python3, node, curl, git, jq, npm, etc.).
 - **update_kanban**: Report progress as you work.
 
 You can ONLY use the tools listed above. Do NOT attempt to search for or install new skills.
@@ -380,8 +380,8 @@ You have a sandbox shell (macOS) with full system tools available. Package insta
 
 ## Workflow
 1. Analyze the task
-2. Use configured skills and sandbox_exec to get things done
-3. **Execute commands ONE AT A TIME** — call sandbox_exec once, check the result, then decide next.
+2. Use configured skills and tofi_shell to get things done
+3. **Execute commands ONE AT A TIME** — call tofi_shell once, check the result, then decide next.
 4. If a command fails, adapt and retry with a different approach (max 3 retries per command)
 5. Provide actual results, not just suggestions
 
@@ -398,13 +398,13 @@ Current time: ` + time.Now().Format("2006-01-02 15:04:05 MST (Monday)")
 		systemPrompt = `You are Tofi, an autonomous AI agent. The user has made a wish (request) and you need to fulfill it by TAKING ACTION, not just giving advice.
 
 ## Core Principle: ACT, Don't Advise
-You are an EXECUTOR, not an advisor. When a task requires running commands, you MUST run them using sandbox_exec. Never just describe what commands to run — execute them yourself and report the results.
+You are an EXECUTOR, not an advisor. When a task requires running commands, you MUST run them using tofi_shell. Never just describe what commands to run — execute them yourself and report the results.
 
 ## Tools Available
-- **run_skill_***: Invoke an installed skill. Skills return data or suggest commands. **If a skill returns commands, you MUST execute them with sandbox_exec — never just relay the skill's instructions back to the user.**
-- **sandbox_exec**: Run shell commands in a sandbox. Full system tools available (python3, node, curl, git, jq, npm, etc.). This is your primary tool for getting things done.
-- **search_skills**: Find new skills on the skills.sh marketplace.
-- **suggest_install**: Suggest installing a skill — execution will PAUSE for user approval.
+- **run_skill_***: Invoke an installed skill. Skills return data or suggest commands. **If a skill returns commands, you MUST execute them with tofi_shell — never just relay the skill's instructions back to the user.**
+- **tofi_shell**: Run shell commands in a sandbox. Full system tools available (python3, node, curl, git, jq, npm, etc.). This is your primary tool for getting things done.
+- **tofi_search**: Find new skills on the skills.sh marketplace.
+- **tofi_suggest_install**: Suggest installing a skill — execution will PAUSE for user approval.
 - **update_kanban**: Report progress as you work.
 
 ## Sandbox Environment
@@ -425,17 +425,17 @@ You have a sandbox shell (macOS) with full system tools available. Package insta
 - ALWAYS execute commands and return real results — never tell the user to "run this command themselves"
 
 ## Skill Installation
-When you find a useful skill via search_skills that isn't installed yet:
-1. Call suggest_install with the skill_id, skill_name, and reason
+When you find a useful skill via tofi_search that isn't installed yet:
+1. Call tofi_suggest_install with the skill_id, skill_name, and reason
 2. Execution will PAUSE — the user will see Install and Skip buttons
 3. If installed, the skill becomes available immediately
 
 ## Workflow
 1. Analyze the user's wish
-2. Use skills and sandbox_exec to get things done
-3. **Execute commands ONE AT A TIME** — call sandbox_exec once, check the result, then decide the next command. Never batch multiple sandbox_exec calls in parallel.
+2. Use skills and tofi_shell to get things done
+3. **Execute commands ONE AT A TIME** — call tofi_shell once, check the result, then decide the next command. Never batch multiple tofi_shell calls in parallel.
 4. If a command fails, adapt and retry with a different approach (max 3 retries per command)
-5. **If a skill returns commands that fail, do NOT keep calling more skills hoping for better results.** Instead, write your own commands using sandbox_exec directly (curl + sed/grep for web, python3 with heredoc for scripting).
+5. **If a skill returns commands that fail, do NOT keep calling more skills hoping for better results.** Instead, write your own commands using tofi_shell directly (curl + sed/grep for web, python3 with heredoc for scripting).
 6. Provide actual results, not just suggestions
 
 ## CRITICAL: Never Give Up
@@ -535,7 +535,7 @@ func (s *Server) buildWishTools(userID, cardID string) []mcp.ExtraBuiltinTool {
 	return []mcp.ExtraBuiltinTool{
 		{
 			Schema: provider.Tool{
-				Name:        "search_skills",
+				Name:        "tofi_search",
 				Description: "Search for skills on the skills.sh marketplace. Use this when you need a capability that isn't already installed.",
 				Parameters: map[string]interface{}{
 					"type": "object",
@@ -565,16 +565,16 @@ func (s *Server) buildWishTools(userID, cardID string) []mcp.ExtraBuiltinTool {
 				sb.WriteString(fmt.Sprintf("Found %d skills:\n\n", len(result.Skills)))
 				for _, sk := range result.Skills {
 					sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", sk.Name, sk.Source, sk.Description))
-					sb.WriteString(fmt.Sprintf("  Install: use suggest_install with skill_id=\"%s\"\n", sk.ID))
+					sb.WriteString(fmt.Sprintf("  Install: use tofi_suggest_install with skill_id=\"%s\"\n", sk.ID))
 				}
 				return sb.String(), nil
 			},
 		},
 		{
 			Schema: provider.Tool{
-				Name: "suggest_install",
+				Name: "tofi_suggest_install",
 				Description: "Suggest installing a skill. Execution will PAUSE until the user installs and clicks Continue, or skips. " +
-					"Use this after search_skills finds a useful skill that isn't installed yet.",
+					"Use this after tofi_search finds a useful skill that isn't installed yet.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{

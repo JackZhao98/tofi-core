@@ -142,7 +142,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 
 	// Add built-in 'wait' tool
 	allTools = append(allTools, provider.Tool{
-		Name:        "wait",
+		Name:        "tofi_wait",
 		Description: "Wait for a specified number of seconds. Use this when waiting for page loads, animations, or dynamic content rendering.",
 		Parameters: map[string]interface{}{
 			"type": "object",
@@ -159,7 +159,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 	// Add built-in 'update_kanban' tool (if kanban card is associated)
 	if cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
 		allTools = append(allTools, provider.Tool{
-			Name:        "update_kanban",
+			Name:        "tofi_update_kanban",
 			Description: "Update the progress of the current task on the Kanban board. Use this to report your progress as you work through the task.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -209,10 +209,10 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		extraHandlers[et.Schema.Name] = et.Handler
 	}
 
-	// Register sandbox_exec + file tools (if sandbox is configured)
+	// Register tofi_shell + file tools (if sandbox is configured)
 	if cfg.SandboxDir != "" {
 		allTools = append(allTools, provider.Tool{
-			Name: "sandbox_exec",
+			Name: "tofi_shell",
 			Description: "Execute a shell command in an isolated sandbox directory (macOS). " +
 				"Use this to run python3, node, npx, curl, git clone, etc. " +
 				"Install packages with 'python3 -m pip install <pkg>' (NEVER bare 'pip'). " +
@@ -379,7 +379,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 
 			// Log step to kanban (skip internal tools like wait and update_kanban)
 			toolStartTime := time.Now()
-			if fnName != "wait" && fnName != "update_kanban" && cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
+			if fnName != "tofi_wait" && fnName != "tofi_update_kanban" && cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
 				stepData := map[string]interface{}{
 					"name":       fnName,
 					"status":     "running",
@@ -417,7 +417,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			// markStepDone is a helper to update the step status after tool execution
 			markStepDone := func(result string) {
 				durationMs := time.Since(toolStartTime).Milliseconds()
-				if fnName != "wait" && fnName != "update_kanban" && cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
+				if fnName != "tofi_wait" && fnName != "tofi_update_kanban" && cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
 					cfg.KanbanUpdater.UpdateKanbanStep(cfg.KanbanCardID, fnName, "done", result, durationMs)
 				}
 				if cfg.OnToolCall != nil {
@@ -426,7 +426,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			}
 
 			// Handle Built-in 'wait'
-			if fnName == "wait" {
+			if fnName == "tofi_wait" {
 				secVal := 0.0
 				if s, ok := argsMap["seconds"].(float64); ok {
 					secVal = s
@@ -444,7 +444,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			}
 
 			// Handle Built-in 'update_kanban'
-			if fnName == "update_kanban" && cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
+			if fnName == "tofi_update_kanban" && cfg.KanbanCardID != "" && cfg.KanbanUpdater != nil {
 				progress := 0
 				if p, ok := argsMap["progress"].(float64); ok {
 					progress = int(p)
@@ -474,8 +474,8 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				continue
 			}
 
-			// Handle Built-in 'sandbox_exec'
-			if fnName == "sandbox_exec" && cfg.SandboxDir != "" {
+			// Handle Built-in 'tofi_shell'
+			if fnName == "tofi_shell" && cfg.SandboxDir != "" {
 				command, _ := argsMap["command"].(string)
 				timeout := 60
 				if t, ok := argsMap["timeout"].(float64); ok && t > 0 && t <= 120 {
@@ -522,7 +522,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 					resultMsg = result
 					// If skill returned commands (code blocks), hint agent to execute them
 					if strings.Contains(result, "```") {
-						resultMsg += "\n\n[This skill returned suggested commands. Execute them using sandbox_exec to get actual results — do NOT relay these instructions to the user.]"
+						resultMsg += "\n\n[This skill returned suggested commands. Execute them using tofi_shell to get actual results — do NOT relay these instructions to the user.]"
 					}
 				}
 				ctx.Log("[ExtraTool:%s] %s", fnName, truncate(resultMsg, 200))
@@ -587,7 +587,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 						if symlinkErr != "" {
 							diag.WriteString(fmt.Sprintf("- Symlink: FAILED (%s)\n", symlinkErr))
 						}
-						diag.WriteString("\nSuggestion: Try installing missing dependencies with sandbox_exec, or write your own code to accomplish the goal.")
+						diag.WriteString("\nSuggestion: Try installing missing dependencies with tofi_shell, or write your own code to accomplish the goal.")
 						resultMsg = diag.String()
 					} else {
 						resultMsg = result
@@ -1091,7 +1091,7 @@ Rules:
 
 	resp, err := p.Chat(context.Background(), req)
 	if err != nil {
-		return "", fmt.Errorf("skill sub-call LLM failed for '%s': %v. The skill's sub-LLM call could not complete. Try accomplishing the goal with sandbox_exec directly", skill.Name, err)
+		return "", fmt.Errorf("skill sub-call LLM failed for '%s': %v. The skill's sub-LLM call could not complete. Try accomplishing the goal with tofi_shell directly", skill.Name, err)
 	}
 	content := resp.Content
 	if content == "" {
@@ -1128,14 +1128,14 @@ Rules:
 			for _, cmd := range parsed.Commands {
 				result.WriteString("$ " + cmd + "\n")
 			}
-			result.WriteString("\n[Execute these commands using sandbox_exec to get actual results.]")
+			result.WriteString("\n[Execute these commands using tofi_shell to get actual results.]")
 		}
 		return result.String(), nil
 	}
 
 	// Fallback: LLM didn't return valid JSON, return raw content with hint
 	if strings.Contains(content, "```") {
-		return content + "\n\n[This skill returned suggested commands. Execute them using sandbox_exec to get actual results.]", nil
+		return content + "\n\n[This skill returned suggested commands. Execute them using tofi_shell to get actual results.]", nil
 	}
 	return content, nil
 }

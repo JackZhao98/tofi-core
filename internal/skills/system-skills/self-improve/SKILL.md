@@ -6,7 +6,7 @@ version: "1.0"
 
 # Self-Improvement Protocol
 
-You have access to long-term memory (`memory_save`, `memory_recall`). Use it to continuously improve your performance across sessions.
+You have access to long-term memory (`tofi_save_memory`, `tofi_recall_memory`). Use it to continuously improve your performance across sessions.
 
 ## When to Learn
 
@@ -16,7 +16,7 @@ When a command fails or produces unexpected results:
 2. Fix the issue
 3. Save the lesson:
 ```
-memory_save(content: "LESSON: [topic] — [what went wrong] → [correct approach]", tags: "lesson,error,{topic}")
+tofi_save_memory(content: "LESSON: [topic] — [what went wrong] → [correct approach]", tags: "lesson,error,{topic}")
 ```
 
 ### 2. User Corrections
@@ -25,13 +25,13 @@ When the user corrects you ("actually...", "no, instead...", "that's wrong"):
 2. Apply it immediately
 3. Save it:
 ```
-memory_save(content: "CORRECTION: [what I did wrong] → [what the user wants]", tags: "lesson,correction,{topic}")
+tofi_save_memory(content: "CORRECTION: [what I did wrong] → [what the user wants]", tags: "lesson,correction,{topic}")
 ```
 
 ### 3. Discovered Patterns
 When you discover a useful pattern, shortcut, or project-specific convention:
 ```
-memory_save(content: "PATTERN: [description of the pattern and when to use it]", tags: "pattern,{topic}")
+tofi_save_memory(content: "PATTERN: [description of the pattern and when to use it]", tags: "pattern,{topic}")
 ```
 
 ## When to Recall
@@ -39,13 +39,13 @@ memory_save(content: "PATTERN: [description of the pattern and when to use it]",
 ### At Task Start
 Before beginning a new task, recall relevant context:
 ```
-memory_recall(query: "{keywords related to the task}")
+tofi_recall_memory(query: "{keywords related to the task}")
 ```
 
 ### Before Repeating Past Work
 If a task feels familiar, check if you've done it before:
 ```
-memory_recall(query: "{task description}")
+tofi_recall_memory(query: "{task description}")
 ```
 
 ## Memory Hygiene

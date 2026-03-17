@@ -990,7 +990,7 @@ func (s *Server) buildManagerTools(userID string) []mcp.ExtraBuiltinTool {
 		// search_skills: find skills on the marketplace
 		{
 			Schema: provider.Tool{
-				Name:        "search_skills",
+				Name:        "tofi_search",
 				Description: "Search for skills on the skills.sh marketplace. Use this to find capabilities that could be added to an app.",
 				Parameters: map[string]interface{}{
 					"type": "object",

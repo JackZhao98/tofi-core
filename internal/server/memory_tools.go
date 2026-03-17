@@ -15,7 +15,7 @@ func (s *Server) buildMemoryTools(userID, cardID string) []mcp.ExtraBuiltinTool 
 	return []mcp.ExtraBuiltinTool{
 		{
 			Schema: provider.Tool{
-				Name:        "memory_save",
+				Name:        "tofi_save_memory",
 				Description: "Save information to long-term memory for future reference. Use this to remember user preferences, task outcomes, learned patterns, error solutions, or any knowledge worth retaining across tasks.",
 				Parameters: map[string]interface{}{
 					"type": "object",
@@ -50,7 +50,7 @@ func (s *Server) buildMemoryTools(userID, cardID string) []mcp.ExtraBuiltinTool 
 		},
 		{
 			Schema: provider.Tool{
-				Name:        "memory_recall",
+				Name:        "tofi_recall_memory",
 				Description: "Search long-term memory for relevant information. Use this at the start of a task to recall user preferences, past learnings, or relevant context.",
 				Parameters: map[string]interface{}{
 					"type": "object",

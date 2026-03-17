@@ -19,7 +19,7 @@ func (s *Server) buildBuiltinTools(userID string) []mcp.ExtraBuiltinTool {
 func buildGetTimeTool() mcp.ExtraBuiltinTool {
 	return mcp.ExtraBuiltinTool{
 		Schema: provider.Tool{
-			Name:        "get_time",
+			Name:        "tofi_get_time",
 			Description: "Get the current date, time, and timezone. Use this when you need the exact current time, especially during long-running tasks where the initial time in the system prompt may be stale.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -55,7 +55,7 @@ func buildGetTimeTool() mcp.ExtraBuiltinTool {
 func buildGetUserTool(userID string) mcp.ExtraBuiltinTool {
 	return mcp.ExtraBuiltinTool{
 		Schema: provider.Tool{
-			Name:        "get_user",
+			Name:        "tofi_get_user",
 			Description: "Get the current user's identity and context. Returns user ID and session metadata.",
 			Parameters: map[string]any{
 				"type":       "object",

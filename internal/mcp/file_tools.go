@@ -21,7 +21,7 @@ func buildFileTools(sandboxDir string) []ExtraBuiltinTool {
 func buildFileReadTool(sandboxDir string) ExtraBuiltinTool {
 	return ExtraBuiltinTool{
 		Schema: provider.Tool{
-			Name:        "file_read",
+			Name:        "tofi_read",
 			Description: "Read the contents of a file or list a directory. Paths are relative to the workspace root.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -87,7 +87,7 @@ func buildFileReadTool(sandboxDir string) ExtraBuiltinTool {
 func buildFileWriteTool(sandboxDir string) ExtraBuiltinTool {
 	return ExtraBuiltinTool{
 		Schema: provider.Tool{
-			Name:        "file_write",
+			Name:        "tofi_write",
 			Description: "Write content to a file. Creates the file and parent directories if they don't exist. Paths are relative to the workspace root.",
 			Parameters: map[string]any{
 				"type": "object",

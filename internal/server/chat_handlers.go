@@ -512,11 +512,11 @@ You have a sandbox shell with full system tools available.
 - **Fallback chain**: skill command → fix the command → write simpler code yourself → try alternative approach → present partial results.
 
 ## Self-Improvement
-You have long-term memory (memory_save, memory_recall). Use it to learn and improve:
-- **On error**: Fix it, then save the lesson — memory_save with tags "lesson,error,{topic}"
-- **On user correction**: Apply it, then save — memory_save with tags "lesson,correction"
-- **On useful pattern**: Save it — memory_save with tags "pattern,{topic}"
-- **Before tasks**: Recall relevant context — memory_recall with task keywords
+You have long-term memory (tofi_save_memory, tofi_recall_memory). Use it to learn and improve:
+- **On error**: Fix it, then save the lesson — tofi_save_memory with tags "lesson,error,{topic}"
+- **On user correction**: Apply it, then save — tofi_save_memory with tags "lesson,correction"
+- **On useful pattern**: Save it — tofi_save_memory with tags "pattern,{topic}"
+- **Before tasks**: Recall relevant context — tofi_recall_memory with task keywords
 - **Never make the same mistake twice.**
 
 Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
