@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"sync"
 	"tofi-core/internal/engine/data"
 	"tofi-core/internal/engine/logic"
@@ -102,5 +101,5 @@ func GlobalRegistry() *ActionRegistry {
 func init() {
 	// 启动时自动注册所有内置节点
 	globalRegistry.RegisterBuiltins()
-	fmt.Printf("[registry] %d built-in actions registered\n", len(globalRegistry.actions))
+	// Silent init — built-in actions are registered automatically
 }

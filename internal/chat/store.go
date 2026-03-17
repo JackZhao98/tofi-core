@@ -52,7 +52,13 @@ func (s *Store) relPath(absPath string) string {
 }
 
 // Save writes a session to an XML file and updates the SQLite index.
+// Automatically compacts the session if message count exceeds MaxSessionMessages.
 func (s *Store) Save(userID, scope string, session *Session) error {
+	if session.Compact() {
+		log.Printf("📦 [chat:%s] auto-compacted: kept %d messages, summary updated",
+			session.ID[:min(8, len(session.ID))], len(session.Messages))
+	}
+
 	absPath := s.sessionFilePath(userID, scope, session.ID)
 
 	data, err := session.Marshal()

@@ -6,7 +6,14 @@ package chat
 import (
 	"encoding/xml"
 	"fmt"
+	"strings"
 	"time"
+)
+
+// Session message limits for auto-compaction.
+const (
+	MaxSessionMessages  = 200 // Trigger auto-compact above this count
+	CompactKeepMessages = 100 // Keep this many recent messages after compact
 )
 
 // Scope constants for session ownership.
@@ -87,6 +94,69 @@ func (s *Session) AddMessage(msg Message) {
 // MessageCount returns the number of messages in the session.
 func (s *Session) MessageCount() int {
 	return len(s.Messages)
+}
+
+// Compact trims old messages when the session exceeds MaxSessionMessages.
+// Removed messages are summarized and appended to session.Summary.
+// Returns true if compaction occurred.
+func (s *Session) Compact() bool {
+	if len(s.Messages) <= MaxSessionMessages {
+		return false
+	}
+
+	removeCount := len(s.Messages) - CompactKeepMessages
+	removed := s.Messages[:removeCount]
+
+	// Collect user message topics as summary hints
+	var topics []string
+	for _, msg := range removed {
+		if msg.Role == "user" && msg.Content != "" {
+			line := firstLine(msg.Content, 80)
+			if line != "" {
+				topics = append(topics, "- "+line)
+			}
+		}
+	}
+
+	// Time range of removed messages
+	var timeRange string
+	if len(removed) > 0 {
+		first := removed[0].Timestamp
+		last := removed[len(removed)-1].Timestamp
+		if first != "" && last != "" {
+			timeRange = fmt.Sprintf(" from %s to %s", first, last)
+		}
+	}
+
+	note := fmt.Sprintf("[Auto-compacted: %d messages%s]", removeCount, timeRange)
+	if len(topics) > 0 {
+		if len(topics) > 20 {
+			topics = append(topics[:20], "- ...")
+		}
+		note += "\nTopics:\n" + strings.Join(topics, "\n")
+	}
+
+	if s.Summary != "" {
+		s.Summary += "\n\n" + note
+	} else {
+		s.Summary = note
+	}
+
+	s.Messages = s.Messages[removeCount:]
+	return true
+}
+
+// firstLine returns the first line of s, truncated to maxRunes.
+func firstLine(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return s
 }
 
 // MarshalXML produces the XML representation of a session.

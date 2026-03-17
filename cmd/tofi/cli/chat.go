@@ -23,10 +23,20 @@ var (
 )
 
 var chatCmd = &cobra.Command{
-	Use:   "chat",
+	Use:   "chat [message]",
 	Short: "Interactive AI chat",
-	Long:  "Start an interactive chat session with the Tofi engine. Supports /model, /skills, /history commands.",
-	RunE:  runChat,
+	Long: `Start an interactive chat session with the Tofi engine.
+
+  tofi chat                    Interactive TUI
+  tofi chat "hello"            TUI with initial message
+  tofi chat -p "hello"         Non-interactive: print response to stdout
+  tofi chat -c                 Continue last session
+  tofi chat send "hello"       Non-interactive send (alias for -p)
+  tofi chat history            List past sessions
+  tofi chat model [name]       View or set model
+  tofi chat new                Create new session`,
+	Args: cobra.ArbitraryArgs,
+	RunE: runChat,
 }
 
 func init() {
@@ -161,6 +171,9 @@ type chatModel struct {
 	completionMode   bool
 	completionCmds   []slashCmd
 	completionCursor int
+
+	// Initial message to auto-send after TUI is ready
+	initialMessage string
 }
 
 type selectItem struct {
@@ -239,6 +252,17 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.displaySessionInit()
 			m.viewport.SetContent(m.viewportContent())
 			m.viewport.GotoBottom()
+			// Auto-send initial message if provided via CLI args
+			if m.initialMessage != "" {
+				msg := m.initialMessage
+				m.initialMessage = ""
+				m.appendContent(m.renderUserMsg(msg))
+				m.appendContent("")
+				m.streaming = true
+				m.viewport.SetContent(m.viewportContent())
+				m.viewport.GotoBottom()
+				go m.streamChatMessage(msg)
+			}
 		} else {
 			m.viewport.Width = iw
 			m.viewport.Height = vpHeight
@@ -1404,6 +1428,11 @@ func formatTokens(n int) string {
 // --- Entry point ---
 
 func runChat(cmd *cobra.Command, args []string) error {
+	// Non-interactive mode: -p "message" or positional args with -p
+	if chatPrintMode && len(args) > 0 {
+		return runNonInteractive(strings.Join(args, " "))
+	}
+
 	client := newAPIClient()
 	if err := client.ensureRunning(); err != nil {
 		fmt.Println()
@@ -1414,6 +1443,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	model := newChatModel(client)
 
+	// Pass initial message if provided as positional args
+	if len(args) > 0 {
+		model.initialMessage = strings.Join(args, " ")
+	}
+
 	if err := model.ensureSession(); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ " + err.Error()))
@@ -1423,7 +1457,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	p := tea.NewProgram(model,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 	model.program = p
 
