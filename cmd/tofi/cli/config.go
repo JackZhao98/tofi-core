@@ -48,6 +48,7 @@ func runConfigKeys(cmd *cobra.Command, args []string) error {
 	var result struct {
 		System []map[string]string `json:"system"`
 		User   []map[string]string `json:"user"`
+		Env    []map[string]string `json:"env"`
 	}
 	if err := client.get("/api/v1/settings/ai-keys", &result); err != nil {
 		return fmt.Errorf("failed to fetch keys: %w", err)
@@ -55,36 +56,58 @@ func runConfigKeys(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	border := lipgloss.NewStyle().Foreground(lipgloss.Color("#30363d"))
+	hasKeys := false
 
 	if len(result.System) > 0 {
-		fmt.Println(titleStyle.Render("  System Keys"))
+		hasKeys = true
+		fmt.Println(titleStyle.Render("  System Keys") + subtitleStyle.Render(" (database)"))
 		fmt.Println()
 		for _, k := range result.System {
-			provider := k["provider"]
-			masked := maskKey(k["api_key"])
 			fmt.Printf("  %s  %-12s %s\n",
 				border.Render("│"),
-				accentStyle.Render(provider),
-				subtitleStyle.Render(masked))
+				accentStyle.Render(k["provider"]),
+				subtitleStyle.Render(k["masked_key"]))
 		}
 		fmt.Println()
 	}
 
 	if len(result.User) > 0 {
-		fmt.Println(titleStyle.Render("  User Keys"))
+		hasKeys = true
+		fmt.Println(titleStyle.Render("  User Keys") + subtitleStyle.Render(" (database)"))
 		fmt.Println()
 		for _, k := range result.User {
-			provider := k["provider"]
-			masked := maskKey(k["api_key"])
 			fmt.Printf("  %s  %-12s %s\n",
 				border.Render("│"),
-				accentStyle.Render(provider),
-				subtitleStyle.Render(masked))
+				accentStyle.Render(k["provider"]),
+				subtitleStyle.Render(k["masked_key"]))
 		}
 		fmt.Println()
 	}
 
-	if len(result.System) == 0 && len(result.User) == 0 {
+	if len(result.Env) > 0 {
+		hasKeys = true
+		fmt.Println(titleStyle.Render("  Environment Keys") + subtitleStyle.Render(" (env vars)"))
+		fmt.Println()
+		for _, k := range result.Env {
+			fmt.Printf("  %s  %-12s %s  %s\n",
+				border.Render("│"),
+				accentStyle.Render(k["provider"]),
+				subtitleStyle.Render(k["masked_key"]),
+				subtitleStyle.Render("("+k["source"]+")"))
+		}
+		fmt.Println()
+	}
+
+	hasDBKeys := len(result.System) > 0 || len(result.User) > 0
+
+	if !hasDBKeys && len(result.Env) > 0 {
+		fmt.Println(subtitleStyle.Render("  No keys saved to database."))
+		fmt.Println(subtitleStyle.Render("  Detected from environment variables — these work but won't appear in the UI."))
+		fmt.Println(subtitleStyle.Render("  To persist, run: ") + accentStyle.Render("tofi config set-key <provider> <key>"))
+		fmt.Println()
+	}
+
+	if !hasKeys {
 		fmt.Println(subtitleStyle.Render("  No API keys configured."))
 		fmt.Println(subtitleStyle.Render("  Set one with: ") + accentStyle.Render("tofi config set-key anthropic sk-ant-..."))
 		fmt.Println()

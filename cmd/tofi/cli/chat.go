@@ -213,7 +213,7 @@ func newChatModel(client *apiClient) *chatModel {
 
 	// Create glamour renderer for Markdown (dark theme, auto-width)
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStylePath("dark"),
 		glamour.WithWordWrap(0), // we'll set width dynamically
 	)
 
@@ -271,7 +271,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea.SetWidth(iw)
 		// Recreate glamour renderer with new width
 		if r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStylePath("dark"),
 			glamour.WithWordWrap(iw-2),
 		); err == nil {
 			m.mdRenderer = r

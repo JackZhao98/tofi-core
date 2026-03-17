@@ -904,10 +904,34 @@ func (s *Server) handleListAIKeys(w http.ResponseWriter, r *http.Request) {
 		userKeys = []map[string]string{}
 	}
 
+	// 检测环境变量中的 key（补充到 env 分组）
+	envKeys := []map[string]string{}
+	envProviders := map[string]string{
+		"openai":    "TOFI_OPENAI_API_KEY",
+		"anthropic": "TOFI_ANTHROPIC_API_KEY",
+		"gemini":    "TOFI_GEMINI_API_KEY",
+		"deepseek":  "TOFI_DEEPSEEK_API_KEY",
+	}
+	for provider, envName := range envProviders {
+		if v := os.Getenv(envName); v != "" {
+			envKeys = append(envKeys, map[string]string{
+				"provider":   provider,
+				"masked_key": func(k string) string {
+				if len(k) <= 8 {
+					return "****"
+				}
+				return k[:4] + "****" + k[len(k)-4:]
+			}(v),
+				"source":     envName,
+			})
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"system": systemKeys,
 		"user":   userKeys,
+		"env":    envKeys,
 	})
 }
 
