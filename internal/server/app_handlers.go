@@ -856,6 +856,7 @@ Current time: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST 
 	// 7. Build extra tools: propose_action, search_skills
 	extraTools := s.buildManagerTools(userID)
 	extraTools = append(extraTools, s.buildMemoryTools(userID, "")...)
+	extraTools = append(extraTools, s.buildBuiltinTools(userID)...)
 
 	// 8. Convert messages to provider.Message format
 	var providerMessages []provider.Message

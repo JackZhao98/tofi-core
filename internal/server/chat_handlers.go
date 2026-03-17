@@ -366,7 +366,7 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 		Messages:   providerMessages,
 		MCPServers: capMCPServers,
 		SkillTools: skillTools,
-		ExtraTools: append(extraTools, s.buildMemoryTools(userID, "")...),
+		ExtraTools: append(append(extraTools, s.buildMemoryTools(userID, "")...), s.buildBuiltinTools(userID)...),
 		SandboxDir: sandboxDir,
 		UserDir:    userID,
 		Executor:   s.executor,
@@ -510,6 +510,14 @@ You have a sandbox shell with full system tools available.
 - **Always deliver SOMETHING useful.** If you got partial data, present what you have.
 - **When a skill's commands fail, write your OWN code.**
 - **Fallback chain**: skill command → fix the command → write simpler code yourself → try alternative approach → present partial results.
+
+## Self-Improvement
+You have long-term memory (memory_save, memory_recall). Use it to learn and improve:
+- **On error**: Fix it, then save the lesson — memory_save with tags "lesson,error,{topic}"
+- **On user correction**: Apply it, then save — memory_save with tags "lesson,correction"
+- **On useful pattern**: Save it — memory_save with tags "pattern,{topic}"
+- **Before tasks**: Recall relevant context — memory_recall with task keywords
+- **Never make the same mistake twice.**
 
 Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 }

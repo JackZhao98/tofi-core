@@ -481,7 +481,7 @@ Current time: ` + time.Now().Format("2006-01-02 15:04:05 MST (Monday)")
 		Prompt:        prompt,
 		MCPServers:    capMCPServers,
 		SkillTools:    skillTools,
-		ExtraTools:    append(extraTools, s.buildMemoryTools(userID, cardID)...),
+		ExtraTools:    append(append(extraTools, s.buildMemoryTools(userID, cardID)...), s.buildBuiltinTools(userID)...),
 		KanbanCardID:  cardID,
 		KanbanUpdater: updater,
 		SandboxDir:    sandboxDir,
