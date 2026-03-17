@@ -1,4 +1,4 @@
-package notify
+package connect
 
 import (
 	"crypto/rand"

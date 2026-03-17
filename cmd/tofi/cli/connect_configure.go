@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// --- tofi connector configure ---
+// --- tofi connect configure ---
 
 var connConfigureCmd = &cobra.Command{
 	Use:   "configure",
@@ -1313,14 +1313,14 @@ func (m connConfigModel) View() string {
 				s.WriteString(successStyle.Render("    ✓ Verified: ") + accentStyle.Render(m.verifyReceiver) + "\n")
 			} else if m.connType.canReceive && !m.verifyDone {
 				s.WriteString("\n" + subtitleStyle.Render("    Verification timed out or skipped.") + "\n")
-				s.WriteString(subtitleStyle.Render("    Add receivers later: ") + accentStyle.Render("tofi connector verify "+m.createdID) + "\n")
+				s.WriteString(subtitleStyle.Render("    Add receivers later: ") + accentStyle.Render("tofi connect verify "+m.createdID) + "\n")
 			}
 			s.WriteString("\n" + subtitleStyle.Render("  Next steps:") + "\n")
 			if !m.verifyDone && m.connType.canReceive {
-				s.WriteString("    " + accentStyle.Render("tofi connector verify "+m.createdID) + subtitleStyle.Render(" — add receivers") + "\n")
+				s.WriteString("    " + accentStyle.Render("tofi connect verify "+m.createdID) + subtitleStyle.Render(" — add receivers") + "\n")
 			}
-			s.WriteString("    " + accentStyle.Render("tofi connector test "+m.createdID) + subtitleStyle.Render(" — send a test message") + "\n")
-			s.WriteString("    " + accentStyle.Render("tofi connector list") + subtitleStyle.Render(" — view all connectors") + "\n")
+			s.WriteString("    " + accentStyle.Render("tofi connect test "+m.createdID) + subtitleStyle.Render(" — send a test message") + "\n")
+			s.WriteString("    " + accentStyle.Render("tofi connect list") + subtitleStyle.Render(" — view all connectors") + "\n")
 		}
 	}
 

@@ -82,6 +82,24 @@ func (c *Connector) TelegramConfig() (*TelegramConnectorConfig, error) {
 	return &cfg, nil
 }
 
+// --- Webhook Config helpers (Discord Webhook / Slack Webhook) ---
+
+type WebhookConnectorConfig struct {
+	WebhookURL string `json:"webhook_url"`
+	Name       string `json:"name,omitempty"`
+}
+
+func (c *Connector) WebhookConfig() (*WebhookConnectorConfig, error) {
+	if c.Type != ConnectorDiscordWebhook && c.Type != ConnectorSlackWebhook {
+		return nil, fmt.Errorf("connector %s is not a webhook type", c.ID)
+	}
+	var cfg WebhookConnectorConfig
+	if err := json.Unmarshal([]byte(c.Config), &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
 // --- Telegram Receiver metadata helpers ---
 
 type TelegramReceiverMeta struct {

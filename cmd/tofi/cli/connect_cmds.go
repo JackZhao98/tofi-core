@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// --- tofi connector list ---
+// --- tofi connect list ---
 
 var connListCmd = &cobra.Command{
 	Use:   "list",
@@ -44,7 +44,7 @@ func runConnList(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	if len(connectors) == 0 {
 		fmt.Println(subtitleStyle.Render("  No connectors configured."))
-		fmt.Println(subtitleStyle.Render("  Add one with: ") + accentStyle.Render("tofi connector add telegram --token <BOT_TOKEN>"))
+		fmt.Println(subtitleStyle.Render("  Add one with: ") + accentStyle.Render("tofi connect add telegram --token <BOT_TOKEN>"))
 		fmt.Println()
 		return nil
 	}
@@ -84,7 +84,7 @@ func runConnList(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// --- tofi connector add <type> ---
+// --- tofi connect add <type> ---
 
 var connAddCmd = &cobra.Command{
 	Use:   "add <type>",
@@ -176,12 +176,12 @@ func runConnAdd(cmd *cobra.Command, args []string) error {
 		fmt.Println(subtitleStyle.Render("    App: " + appID))
 	}
 	fmt.Println()
-	fmt.Println(subtitleStyle.Render("  Next: add receivers with ") + accentStyle.Render("tofi connector verify "+result.ID))
+	fmt.Println(subtitleStyle.Render("  Next: add receivers with ") + accentStyle.Render("tofi connect verify "+result.ID))
 	fmt.Println()
 	return nil
 }
 
-// --- tofi connector remove <id> ---
+// --- tofi connect remove <id> ---
 
 var connRemoveCmd = &cobra.Command{
 	Use:   "remove <id>",
@@ -210,7 +210,7 @@ func runConnRemove(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// --- tofi connector verify <id> ---
+// --- tofi connect verify <id> ---
 
 var connVerifyCmd = &cobra.Command{
 	Use:   "verify <id>",
@@ -294,7 +294,7 @@ func runConnVerify(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// --- tofi connector receivers <id> ---
+// --- tofi connect receivers <id> ---
 
 var connReceiversCmd = &cobra.Command{
 	Use:   "receivers <id>",
@@ -324,7 +324,7 @@ func runConnReceivers(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	if len(receivers) == 0 {
 		fmt.Println(subtitleStyle.Render("  No receivers."))
-		fmt.Println(subtitleStyle.Render("  Add one with: ") + accentStyle.Render("tofi connector verify "+connID))
+		fmt.Println(subtitleStyle.Render("  Add one with: ") + accentStyle.Render("tofi connect verify "+connID))
 		fmt.Println()
 		return nil
 	}
@@ -347,7 +347,7 @@ func runConnReceivers(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// --- tofi connector test <id> ---
+// --- tofi connect test <id> ---
 
 var connTestCmd = &cobra.Command{
 	Use:   "test <id>",
@@ -384,7 +384,7 @@ func runConnTest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// --- tofi connector link <connector-id> --app <app-name> ---
+// --- tofi connect link <connector-id> --app <app-name> ---
 
 var connLinkCmd = &cobra.Command{
 	Use:   "link <connector-id>",
@@ -430,7 +430,7 @@ func runConnLink(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// --- tofi connector unlink <connector-id> --app <app-name> ---
+// --- tofi connect unlink <connector-id> --app <app-name> ---
 
 var connUnlinkCmd = &cobra.Command{
 	Use:   "unlink <connector-id>",
@@ -499,13 +499,13 @@ func init() {
 	connLinkCmd.Flags().StringVar(&connLinkApp, "app", "", "app name")
 	connUnlinkCmd.Flags().StringVar(&connUnlinkApp, "app", "", "app name")
 
-	connectorCmd.AddCommand(connConfigureCmd) // interactive wizard first
-	connectorCmd.AddCommand(connListCmd)
-	connectorCmd.AddCommand(connAddCmd)
-	connectorCmd.AddCommand(connRemoveCmd)
-	connectorCmd.AddCommand(connVerifyCmd)
-	connectorCmd.AddCommand(connReceiversCmd)
-	connectorCmd.AddCommand(connTestCmd)
-	connectorCmd.AddCommand(connLinkCmd)
-	connectorCmd.AddCommand(connUnlinkCmd)
+	connectCmd.AddCommand(connConfigureCmd) // interactive wizard first
+	connectCmd.AddCommand(connListCmd)
+	connectCmd.AddCommand(connAddCmd)
+	connectCmd.AddCommand(connRemoveCmd)
+	connectCmd.AddCommand(connVerifyCmd)
+	connectCmd.AddCommand(connReceiversCmd)
+	connectCmd.AddCommand(connTestCmd)
+	connectCmd.AddCommand(connLinkCmd)
+	connectCmd.AddCommand(connUnlinkCmd)
 }

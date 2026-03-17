@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tofi-core/internal/capability"
+	"tofi-core/internal/connect"
 	"tofi-core/internal/crypto"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/mcp"
@@ -348,13 +349,13 @@ func (s *Server) executeWithAgent(card *storage.KanbanCardRecord, installedSkill
 		}
 	}
 
-	// 3b. 注入 tofi_notify 工具（基于 v2 connector 系统）
-	notifyDeps := capability.ConnectorNotifyDeps{
+	// 3b. 注入 tofi_notify 工具（基于 connector 系统）
+	notifyDeps := connect.NotifyDeps{
 		ListConnectorsByApp:    s.db.ListConnectorsByApp,
 		ListConnectors:         s.db.ListConnectors,
 		ListConnectorReceivers: s.db.ListConnectorReceivers,
 	}
-	extraTools = capability.InjectConnectorNotifyTool(extraTools, userID, appID, notifyDeps)
+	extraTools = connect.InjectNotifyTool(extraTools, userID, appID, notifyDeps)
 
 	// 4. System Prompt — App runs get a focused prompt (no skill discovery)
 	var systemPrompt string

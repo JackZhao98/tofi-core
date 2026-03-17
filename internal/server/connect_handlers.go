@@ -5,10 +5,14 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
-	"tofi-core/internal/notify"
+	"tofi-core/internal/connect"
 	"tofi-core/internal/storage"
 )
+
+// pendingVerifiesMu 保护所有 pending verify maps
+var pendingVerifiesMu sync.Mutex
 
 // ===================== Connector CRUD =====================
 
@@ -77,26 +81,46 @@ func (s *Server) handleCreateConnector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 对于 telegram，验证 bot token
-	if ctype == storage.ConnectorTelegram {
+	// 验证 connector config
+	switch ctype {
+	case storage.ConnectorTelegram:
 		var tgCfg storage.TelegramConnectorConfig
 		if err := json.Unmarshal(req.Config, &tgCfg); err != nil || tgCfg.BotToken == "" {
 			http.Error(w, `{"error":"bot_token required for telegram"}`, http.StatusBadRequest)
 			return
 		}
-
-		info, err := notify.GetBotInfo(tgCfg.BotToken)
+		info, err := connect.GetBotInfo(tgCfg.BotToken)
 		if err != nil {
 			http.Error(w, `{"error":"invalid bot token: `+err.Error()+`"}`, http.StatusBadRequest)
 			return
 		}
-
-		// 用验证后的信息填充 config
 		tgCfg.BotName = info.Name
 		tgCfg.BotUsername = info.Username
 		tgCfg.BotPhoto = info.PhotoURL
 		cfgJSON, _ := json.Marshal(tgCfg)
 		req.Config = cfgJSON
+
+	case storage.ConnectorDiscordWebhook:
+		var whCfg storage.WebhookConnectorConfig
+		if err := json.Unmarshal(req.Config, &whCfg); err != nil || whCfg.WebhookURL == "" {
+			http.Error(w, `{"error":"webhook_url required for discord_webhook"}`, http.StatusBadRequest)
+			return
+		}
+		if err := connect.ValidateDiscordWebhook(whCfg.WebhookURL); err != nil {
+			http.Error(w, `{"error":"invalid discord webhook: `+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+
+	case storage.ConnectorSlackWebhook:
+		var whCfg storage.WebhookConnectorConfig
+		if err := json.Unmarshal(req.Config, &whCfg); err != nil || whCfg.WebhookURL == "" {
+			http.Error(w, `{"error":"webhook_url required for slack_webhook"}`, http.StatusBadRequest)
+			return
+		}
+		if err := connect.ValidateSlackWebhook(whCfg.WebhookURL); err != nil {
+			http.Error(w, `{"error":"invalid slack webhook: `+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	configStr := "{}"
@@ -159,7 +183,7 @@ func (s *Server) handleDeleteConnector(w http.ResponseWriter, r *http.Request) {
 			for _, rv := range receivers {
 				meta, _ := rv.TelegramMeta()
 				if meta != nil {
-					go notify.SendMessage(tgCfg.BotToken, meta.ChatID, "🔕 This Tofi connector has been removed.")
+					go connect.SendMessage(tgCfg.BotToken, meta.ChatID, "🔕 This Tofi connector has been removed.")
 				}
 			}
 		}
@@ -227,13 +251,13 @@ func (s *Server) handleConnectorVerify(w http.ResponseWriter, r *http.Request) {
 	// 取消之前的 pending 验证
 	cancelPendingVerify(connID)
 
-	done := make(chan *notify.VerifiedUser, 1)
+	done := make(chan *connect.VerifiedUser, 1)
 
 	// 生成唯一验证码
 	pendingVerifiesMu.Lock()
 	var code string
 	for {
-		code = notify.GenerateVerifyCode()
+		code = connect.GenerateVerifyCode()
 		unique := true
 		for _, p := range pendingConnectorVerifies {
 			if p.BotToken == tgCfg.BotToken && p.Code == code {
@@ -257,7 +281,7 @@ func (s *Server) handleConnectorVerify(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer cancelPendingVerify(connID)
 
-		verified, err := notify.PollForVerifyCode(tgCfg.BotToken, code, 5*time.Minute)
+		verified, err := connect.PollForVerifyCode(tgCfg.BotToken, code, 5*time.Minute)
 		if err != nil {
 			log.Printf("[connector] verify polling failed for connector %s: %v", connID, err)
 			return
@@ -336,7 +360,7 @@ func (s *Server) handleDeleteConnectorReceiver(w http.ResponseWriter, r *http.Re
 			tgCfg, _ := conn.TelegramConfig()
 			meta, _ := receiver.TelegramMeta()
 			if tgCfg != nil && meta != nil {
-				go notify.SendMessage(tgCfg.BotToken, meta.ChatID, "🔕 You have been removed from Tofi notifications.")
+				go connect.SendMessage(tgCfg.BotToken, meta.ChatID, "🔕 You have been removed from Tofi notifications.")
 			}
 		}
 	}
@@ -366,8 +390,34 @@ func (s *Server) handleConnectorTest(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	if conn.Type != storage.ConnectorTelegram {
-		http.Error(w, `{"error":"test only supported for telegram currently"}`, http.StatusBadRequest)
+	msg := "✅ Tofi Connected! You'll receive task notifications here."
+
+	switch conn.Type {
+	case storage.ConnectorDiscordWebhook, storage.ConnectorSlackWebhook:
+		whCfg, err := conn.WebhookConfig()
+		if err != nil || whCfg.WebhookURL == "" {
+			http.Error(w, `{"error":"webhook config invalid"}`, http.StatusBadRequest)
+			return
+		}
+		var sendErr error
+		if conn.Type == storage.ConnectorDiscordWebhook {
+			sendErr = connect.SendDiscordWebhook(whCfg.WebhookURL, msg)
+		} else {
+			sendErr = connect.SendSlackWebhook(whCfg.WebhookURL, msg)
+		}
+		if sendErr != nil {
+			log.Printf("[connect] webhook test failed: %v", sendErr)
+			http.Error(w, `{"error":"test failed: `+sendErr.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+
+	case storage.ConnectorTelegram:
+		// Telegram: send to specific receiver or all receivers
+	default:
+		http.Error(w, `{"error":"test not supported for this connector type"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -377,7 +427,7 @@ func (s *Server) handleConnectorTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := "✅ *Tofi Connected!*\n\nYou'll receive task notifications here."
+	tgMsg := "✅ *Tofi Connected!*\n\nYou'll receive task notifications here."
 
 	if req.ReceiverID != nil {
 		receiver, err := s.db.GetConnectorReceiver(*req.ReceiverID)
@@ -390,8 +440,8 @@ func (s *Server) handleConnectorTest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid receiver metadata"}`, http.StatusInternalServerError)
 			return
 		}
-		if err := notify.SendMessage(tgCfg.BotToken, meta.ChatID, msg); err != nil {
-			log.Printf("[connector] test message failed: %v", err)
+		if err := connect.SendMessage(tgCfg.BotToken, meta.ChatID, tgMsg); err != nil {
+			log.Printf("[connect] test message failed: %v", err)
 		}
 	} else {
 		receivers, _ := s.db.ListConnectorReceivers(connID)
@@ -402,7 +452,7 @@ func (s *Server) handleConnectorTest(w http.ResponseWriter, r *http.Request) {
 		for _, rv := range receivers {
 			meta, _ := rv.TelegramMeta()
 			if meta != nil {
-				if err := notify.SendMessage(tgCfg.BotToken, meta.ChatID, msg); err != nil {
+				if err := connect.SendMessage(tgCfg.BotToken, meta.ChatID, msg); err != nil {
 					log.Printf("[connector] test message failed for %s: %v", meta.ChatID, err)
 				}
 			}
@@ -491,7 +541,7 @@ type PendingConnectorVerify struct {
 	Code        string
 	BotToken    string
 	ConnectorID string
-	Done        chan *notify.VerifiedUser
+	Done        chan *connect.VerifiedUser
 }
 
 var pendingConnectorVerifies = make(map[string]*PendingConnectorVerify) // connectorID → pending

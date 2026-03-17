@@ -382,15 +382,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/settings/enabled-models", s.AuthMiddleware(s.handleSetEnabledModels))
 	mux.HandleFunc("GET /api/v1/models", s.AuthMiddleware(s.handleListModels))
 
-	// Connectors (Telegram 等) — Legacy API (UI 兼容)
-	mux.HandleFunc("POST /api/v1/connectors/telegram/setup", s.AuthMiddleware(s.handleTelegramSetup))
-	mux.HandleFunc("GET /api/v1/connectors/telegram/status", s.AuthMiddleware(s.handleTelegramStatus))
-	mux.HandleFunc("POST /api/v1/connectors/telegram/verify", s.AuthMiddleware(s.handleTelegramVerify))
-	mux.HandleFunc("POST /api/v1/connectors/telegram/test", s.AuthMiddleware(s.handleTelegramTest))
-	mux.HandleFunc("DELETE /api/v1/connectors/telegram", s.AuthMiddleware(s.handleTelegramDelete))
-	mux.HandleFunc("DELETE /api/v1/connectors/telegram/receivers/{id}", s.AuthMiddleware(s.handleTelegramDeleteReceiver))
-
-	// Connectors v2 — 统一多渠道 API
+	// Connectors — 统一多渠道 API
 	mux.HandleFunc("GET /api/v1/connectors", s.AuthMiddleware(s.handleListConnectors))
 	mux.HandleFunc("POST /api/v1/connectors", s.AuthMiddleware(s.handleCreateConnector))
 	mux.HandleFunc("GET /api/v1/connectors/{id}", s.AuthMiddleware(s.handleGetConnector))

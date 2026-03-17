@@ -128,10 +128,7 @@ func BuildExtraTools(caps *ParsedCapabilities, getter SecretGetter) []mcp.ExtraB
 		}
 	}
 
-	// Notify
-	if caps.Notify != nil && len(caps.Notify.Channels) > 0 && getter != nil {
-		tools = append(tools, BuildNotifyTool(caps.Notify.Channels, getter))
-	}
+	// Notify — now handled by connect.InjectNotifyTool (connector system)
 
 	return tools
 }
@@ -143,10 +140,7 @@ func BuildNonSearchTools(caps *ParsedCapabilities, getter SecretGetter) []mcp.Ex
 	}
 	var tools []mcp.ExtraBuiltinTool
 
-	// Notify
-	if caps.Notify != nil && len(caps.Notify.Channels) > 0 && getter != nil {
-		tools = append(tools, BuildNotifyTool(caps.Notify.Channels, getter))
-	}
+	// Notify — now handled by connect.InjectNotifyTool (connector system)
 
 	return tools
 }

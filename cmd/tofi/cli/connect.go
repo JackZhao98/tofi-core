@@ -7,30 +7,30 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var connectorCmd = &cobra.Command{
-	Use:     "connector",
+var connectCmd = &cobra.Command{
+	Use:     "connect",
 	Aliases: []string{"conn"},
 	Short:   "Manage notification connectors (Telegram, Slack, Discord, Email)",
-	RunE:    runConnectorHelp,
+	RunE:    runConnectHelp,
 }
 
 func init() {
-	rootCmd.AddCommand(connectorCmd)
+	rootCmd.AddCommand(connectCmd)
 }
 
-func runConnectorHelp(cmd *cobra.Command, args []string) error {
+func runConnectHelp(cmd *cobra.Command, args []string) error {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff7b72"))
 	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#79c0ff"))
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e"))
 	highlightStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7ee787"))
 
 	fmt.Println()
-	fmt.Println(headerStyle.Render("  Connectors") + descStyle.Render(" — Telegram, Slack, Discord, Email"))
+	fmt.Println(headerStyle.Render("  Connect") + descStyle.Render(" — Telegram, Slack, Discord, Email"))
 	fmt.Println()
 
 	// Highlight configure
 	fmt.Println(highlightStyle.Render("  Get started:"))
-	fmt.Println("    " + cmdStyle.Render("tofi connector configure") + descStyle.Render("   Interactive setup wizard"))
+	fmt.Println("    " + cmdStyle.Render("tofi connect configure") + descStyle.Render("   Interactive setup wizard"))
 	fmt.Println()
 
 	// Other commands
@@ -56,7 +56,7 @@ func runConnectorHelp(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
-	fmt.Println(descStyle.Render("  Use ") + cmdStyle.Render("tofi connector <command> --help") + descStyle.Render(" for details"))
+	fmt.Println(descStyle.Render("  Use ") + cmdStyle.Render("tofi connect <command> --help") + descStyle.Render(" for details"))
 	fmt.Println()
 	return nil
 }

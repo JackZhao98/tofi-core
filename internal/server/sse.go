@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
-	"tofi-core/internal/notify"
+	"tofi-core/internal/connect"
 	"tofi-core/internal/storage"
 )
 
@@ -108,19 +108,15 @@ func (u *KanbanUpdaterWithSSE) UpdateKanbanCardBySystem(id string, status string
 	eventType := "card_updated"
 	if status == "done" || status == "failed" {
 		eventType = "card_done"
-		// 异步发送 Telegram 通知给所有 receivers
+		// 异步发送通知给所有 connector receivers
 		if u.db != nil {
 			go func() {
 				card, err := u.db.GetKanbanCard(id)
 				if err != nil {
 					return
 				}
-				cfg, err := u.db.GetTelegramConfig(card.UserID)
-				if err != nil || !cfg.Enabled {
-					return
-				}
-				receivers, err := u.db.ListTelegramReceivers(card.UserID)
-				if err != nil || len(receivers) == 0 {
+				connectors, err := u.db.ListConnectors(card.UserID)
+				if err != nil || len(connectors) == 0 {
 					return
 				}
 				emoji := "✅"
@@ -132,9 +128,22 @@ func (u *KanbanUpdaterWithSSE) UpdateKanbanCardBySystem(id string, status string
 					resultText = resultText[:500] + "..."
 				}
 				text := fmt.Sprintf("%s *Task %s*\n\n%s", emoji, status, resultText)
-				for _, r := range receivers {
-					if err := notify.SendMessage(cfg.BotToken, r.ChatID, text); err != nil {
-						log.Printf("[telegram] notification failed for card %s receiver %s: %v", id, r.ChatID, err)
+				for _, c := range connectors {
+					if !c.Enabled || c.Type != storage.ConnectorTelegram {
+						continue
+					}
+					tgCfg, err := c.TelegramConfig()
+					if err != nil || tgCfg.BotToken == "" {
+						continue
+					}
+					receivers, _ := u.db.ListConnectorReceivers(c.ID)
+					for _, rv := range receivers {
+						meta, _ := rv.TelegramMeta()
+						if meta != nil {
+							if err := connect.SendMessage(tgCfg.BotToken, meta.ChatID, text); err != nil {
+								log.Printf("[connect] notification failed for card %s receiver %s: %v", id, meta.ChatID, err)
+							}
+						}
 					}
 				}
 			}()

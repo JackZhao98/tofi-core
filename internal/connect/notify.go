@@ -1,30 +1,26 @@
-package capability
+package connect
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 
 	"tofi-core/internal/mcp"
-	"tofi-core/internal/notify"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/storage"
 )
 
-// ConnectorNotifyDeps 依赖注入：tofi_notify 工具需要的 DB 操作
-type ConnectorNotifyDeps struct {
-	ListConnectorsByApp  func(userID, appID string) ([]*storage.Connector, error)
-	ListConnectors       func(userID string) ([]*storage.Connector, error)
+// NotifyDeps 依赖注入：tofi_notify 工具需要的 DB 操作
+type NotifyDeps struct {
+	ListConnectorsByApp    func(userID, appID string) ([]*storage.Connector, error)
+	ListConnectors         func(userID string) ([]*storage.Connector, error)
 	ListConnectorReceivers func(connectorID string) ([]*storage.ConnectorReceiver, error)
 }
 
-// BuildConnectorNotifyTool 基于 v2 connector 系统构建 tofi_notify 工具
-// connectors: 该 App（或全局）可用的所有 connectors
-func BuildConnectorNotifyTool(connectors []*storage.Connector, deps ConnectorNotifyDeps) mcp.ExtraBuiltinTool {
+// BuildNotifyTool 基于 connector 系统构建 tofi_notify 工具
+func BuildNotifyTool(connectors []*storage.Connector, deps NotifyDeps) mcp.ExtraBuiltinTool {
 	// 构建可用渠道描述
 	var channelDescs []string
-	var channelNames []string
 	for _, c := range connectors {
 		if !c.Enabled {
 			continue
@@ -34,7 +30,6 @@ func BuildConnectorNotifyTool(connectors []*storage.Connector, deps ConnectorNot
 			label += " (" + c.Name + ")"
 		}
 		channelDescs = append(channelDescs, label)
-		channelNames = append(channelNames, c.ID)
 	}
 
 	if len(channelDescs) == 0 {
@@ -107,7 +102,14 @@ func BuildConnectorNotifyTool(connectors []*storage.Connector, deps ConnectorNot
 					r, n := sendViaTelegram(c, deps, toNames, sendAll, message)
 					results = append(results, r...)
 					sent += n
-				// TODO: 其他渠道实现
+				case storage.ConnectorDiscordWebhook:
+					r, n := sendViaWebhook(c, "Discord", SendDiscordWebhook, message)
+					results = append(results, r...)
+					sent += n
+				case storage.ConnectorSlackWebhook:
+					r, n := sendViaWebhook(c, "Slack", SendSlackWebhook, message)
+					results = append(results, r...)
+					sent += n
 				default:
 					results = append(results, fmt.Sprintf("Channel %s not yet supported", c.Type))
 				}
@@ -122,7 +124,7 @@ func BuildConnectorNotifyTool(connectors []*storage.Connector, deps ConnectorNot
 	}
 }
 
-func sendViaTelegram(c *storage.Connector, deps ConnectorNotifyDeps, toNames []string, sendAll bool, message string) ([]string, int) {
+func sendViaTelegram(c *storage.Connector, deps NotifyDeps, toNames []string, sendAll bool, message string) ([]string, int) {
 	tgCfg, err := c.TelegramConfig()
 	if err != nil || tgCfg.BotToken == "" {
 		return []string{"Telegram: invalid config"}, 0
@@ -155,7 +157,7 @@ func sendViaTelegram(c *storage.Connector, deps ConnectorNotifyDeps, toNames []s
 			continue
 		}
 
-		if err := notify.SendMessage(tgCfg.BotToken, meta.ChatID, message); err != nil {
+		if err := SendMessage(tgCfg.BotToken, meta.ChatID, message); err != nil {
 			log.Printf("[tofi_notify] telegram send failed to %s: %v", rv.DisplayName, err)
 			results = append(results, fmt.Sprintf("Failed to notify %s: %v", rv.DisplayName, err))
 		} else {
@@ -183,11 +185,27 @@ func sendViaTelegram(c *storage.Connector, deps ConnectorNotifyDeps, toNames []s
 	return results, sent
 }
 
-// InjectConnectorNotifyTool 向 extraTools 注入 tofi_notify（如果有可用 connectors）
-func InjectConnectorNotifyTool(
+// sendViaWebhook Webhook 类型通用发送（Discord Webhook / Slack Webhook）
+// Webhook connector 没有 receivers 概念，直接发到 webhook URL
+func sendViaWebhook(c *storage.Connector, channelName string, sendFn func(string, string) error, message string) ([]string, int) {
+	cfg, err := c.WebhookConfig()
+	if err != nil || cfg.WebhookURL == "" {
+		return []string{fmt.Sprintf("%s: invalid config", channelName)}, 0
+	}
+
+	if err := sendFn(cfg.WebhookURL, message); err != nil {
+		log.Printf("[tofi_notify] %s webhook send failed: %v", channelName, err)
+		return []string{fmt.Sprintf("Failed to notify via %s: %v", channelName, err)}, 0
+	}
+
+	return []string{fmt.Sprintf("Notified via %s webhook", channelName)}, 1
+}
+
+// InjectNotifyTool 向 extraTools 注入 tofi_notify（如果有可用 connectors）
+func InjectNotifyTool(
 	extraTools []mcp.ExtraBuiltinTool,
 	userID, appID string,
-	deps ConnectorNotifyDeps,
+	deps NotifyDeps,
 ) []mcp.ExtraBuiltinTool {
 	var connectors []*storage.Connector
 	var err error
@@ -222,10 +240,5 @@ func InjectConnectorNotifyTool(
 		}
 	}
 
-	return append(filtered, BuildConnectorNotifyTool(enabled, deps))
-}
-
-// marshalJSON is a helper (unused import guard)
-func init() {
-	_ = json.Marshal
+	return append(filtered, BuildNotifyTool(enabled, deps))
 }
