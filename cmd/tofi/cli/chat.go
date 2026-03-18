@@ -1603,12 +1603,19 @@ func (m *chatModel) handleSlashCommand(input string) {
 	case "/new":
 		m.totalInputTokens = 0
 		m.totalOutputTokens = 0
+		m.totalCost = 0
 		m.contextPct = 0
+		m.resumingTitle = ""
+		m.titleAnimating = false
+		m.titleTarget = ""
+		m.titleInitial = ""
+		m.titlePollCount = 0
 		m.content.Reset()
 		if err := m.createNewSession(); err != nil {
 			m.appendContent(m.renderError(err.Error()))
 			m.appendContent("")
 		}
+		m.refreshViewport()
 
 	case "/resume", "/history", "/switch":
 		if len(parts) >= 2 {
