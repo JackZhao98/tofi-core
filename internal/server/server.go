@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"tofi-core/internal/bridge"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/crypto"
 	"tofi-core/internal/executor"
@@ -69,6 +70,9 @@ type Server struct {
 
 	// Chat session store (XML files + SQLite index)
 	chatStore *chat.Store
+
+	// Bridge Manager (Telegram bidirectional chat)
+	bridgeManager *bridge.ChatBridgeManager
 
 	// Access token for token-mode auth (read from config.yaml)
 	accessToken string
@@ -254,6 +258,16 @@ func (s *Server) Start() error {
 		log.Printf("App Scheduler start failed: %v", err)
 	}
 	defer s.appScheduler.Stop()
+
+	// Start Bridge Manager (Telegram bidirectional chat)
+	dispatcher := bridge.NewDispatcher(s.db, s.chatStore, func(userID, scope string, session *chat.Session, message string, opts *bridge.ExecuteOptions) error {
+		_, err := s.executeChatSession(userID, scope, session, message, nil, opts)
+		return err
+	})
+	s.bridgeManager = bridge.NewManager(s.db, dispatcher)
+	s.bridgeManager.StartAll()
+	log.Println("[Server] Bridge Manager started")
+	defer s.bridgeManager.StopAll()
 
 	mux := http.NewServeMux()
 

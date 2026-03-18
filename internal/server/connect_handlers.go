@@ -192,6 +192,11 @@ func (s *Server) handleDeleteConnector(w http.ResponseWriter, r *http.Request) {
 	// 取消 pending 验证
 	cancelPendingVerify(connID)
 
+	if s.bridgeManager != nil {
+		s.bridgeManager.StopBridge(connID)
+	}
+	s.db.DeleteBridgeSessionsByConnector(connID)
+
 	if err := s.db.DeleteConnector(connID, userID); err != nil {
 		http.Error(w, `{"error":"failed to delete"}`, http.StatusInternalServerError)
 		return
@@ -217,6 +222,18 @@ func (s *Server) handleToggleConnector(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.SetConnectorEnabled(connID, userID, req.Enabled); err != nil {
 		http.Error(w, `{"error":"failed to toggle"}`, http.StatusInternalServerError)
 		return
+	}
+
+	// Notify Bridge Manager
+	if s.bridgeManager != nil {
+		if req.Enabled {
+			connector, _ := s.db.GetConnector(connID, userID)
+			if connector != nil {
+				s.bridgeManager.StartBridge(connector)
+			}
+		} else {
+			s.bridgeManager.StopBridge(connID)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -299,6 +316,13 @@ func (s *Server) handleConnectorVerify(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("[connector] connector %s verified receiver: %s (@%s)", connID, verified.DisplayName, verified.Username)
+
+		if s.bridgeManager != nil {
+			connector, _ := s.db.GetConnector(connID, userID)
+			if connector != nil {
+				s.bridgeManager.StartBridge(connector)
+			}
+		}
 
 		select {
 		case done <- verified:
