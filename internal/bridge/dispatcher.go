@@ -202,7 +202,7 @@ func (d *ChatBridgeDispatcher) executeMessage(
 			buf.Write(delta)
 		},
 		OnStepStart: func(toolName, args string) {
-			buf.Flush()
+			buf.FinalizeAndReset() // 工具调用前结束当前消息，后续内容从新消息开始
 			_ = b.SendTyping(msg.ChatID)
 		},
 	}
