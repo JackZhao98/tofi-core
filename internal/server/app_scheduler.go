@@ -180,7 +180,7 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord) {
 	as.server.db.UpdateAppRunStatusWithSession(run.ID, "running", sessionID)
 
 	log.Printf("[app-run:%s] Executing with chat session %s", run.ID[:8], sessionID[:8])
-	result, err := as.server.executeChatSession(run.UserID, scope, session, prompt, nil)
+	result, err := as.server.executeChatSession(run.UserID, scope, session, prompt, nil, nil)
 
 	status := "done"
 	if err != nil {

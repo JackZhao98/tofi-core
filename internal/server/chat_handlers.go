@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"tofi-core/internal/bridge"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/mcp"
@@ -251,7 +252,7 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 		sendSSEEvent(w, flusher, eventType, data)
 	}
 
-	result, err := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent)
+	result, err := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, nil)
 	if err != nil {
 		sendSSEEvent(w, flusher, "error", map[string]string{"error": err.Error()})
 		return
@@ -276,7 +277,7 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 // Used by both the HTTP handler (SSE) and the app scheduler.
 // The onEvent callback receives events: "chunk", "tool_call", "context_compact", "error".
 // If onEvent is nil, events are silently discarded.
-func (s *Server) executeChatSession(userID, scope string, session *chat.Session, message string, onEvent func(eventType string, data any)) (*mcp.AgentResult, error) {
+func (s *Server) executeChatSession(userID, scope string, session *chat.Session, message string, onEvent func(eventType string, data any), opts *bridge.ExecuteOptions) (*mcp.AgentResult, error) {
 	sessionID := session.ID
 
 	emit := func(eventType string, data any) {
@@ -352,22 +353,48 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		UserDir:    userID,
 		Executor:   s.executor,
 		SecretEnv:  secretEnv,
-		OnStreamChunk: func(_ string, delta string) {
+	}
+
+	// Configure agent callbacks
+	if opts != nil && opts.OnStreamChunk != nil {
+		agentCfg.OnStreamChunk = opts.OnStreamChunk
+	} else {
+		agentCfg.OnStreamChunk = func(_ string, delta string) {
 			emit("chunk", map[string]string{"delta": delta})
-		},
-		OnToolCall: func(toolName, input, output string, durationMs int64) {
+		}
+	}
+
+	if opts != nil && opts.OnToolCall != nil {
+		agentCfg.OnToolCall = opts.OnToolCall
+	} else {
+		agentCfg.OnToolCall = func(toolName, input, output string, durationMs int64) {
 			emit("tool_call", map[string]any{
-				"tool": toolName, "input": input,
-				"output": output, "duration_ms": durationMs,
+				"tool":        toolName,
+				"input":       input,
+				"output":      output,
+				"duration_ms": durationMs,
 			})
-		},
-		OnContextCompact: func(summary string, originalTokens, compactedTokens int) {
+		}
+	}
+
+	if opts != nil && opts.OnContextCompact != nil {
+		agentCfg.OnContextCompact = opts.OnContextCompact
+	} else {
+		agentCfg.OnContextCompact = func(summary string, originalTokens, compactedTokens int) {
 			session.Summary = summary
 			emit("context_compact", map[string]any{
-				"summary": summary, "original_tokens": originalTokens,
+				"summary":          summary,
+				"original_tokens":  originalTokens,
 				"compacted_tokens": compactedTokens,
 			})
-		},
+		}
+	}
+
+	if opts != nil && opts.OnStepStart != nil {
+		agentCfg.OnStepStart = opts.OnStepStart
+	}
+	if opts != nil && opts.OnStepDone != nil {
+		agentCfg.OnStepDone = opts.OnStepDone
 	}
 
 	p, err := provider.NewForModel(resolvedModel, apiKey)
