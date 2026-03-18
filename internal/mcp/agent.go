@@ -239,6 +239,12 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 	// Validate all tools before use
 	allTools = validateTools(allTools)
 
+	// Log all registered tool names for debugging
+	var toolNames []string
+	for _, t := range allTools {
+		toolNames = append(toolNames, t.Name)
+	}
+	ctx.Log("[Agent] Registered %d tools: %s", len(allTools), strings.Join(toolNames, ", "))
 	ctx.Log("[Agent] Discovered %d tools across %d servers (+%d skills, +%d extra)",
 		len(allTools)-len(cfg.SkillTools)-len(cfg.ExtraTools), len(activeClients),
 		len(cfg.SkillTools), len(cfg.ExtraTools))

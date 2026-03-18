@@ -56,7 +56,7 @@ func buildGetUserTool(userID string) mcp.ExtraBuiltinTool {
 	return mcp.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_get_user",
-			Description: "Get the current user's identity and context. Returns user ID and session metadata.",
+			Description: "Get the current user's identity. Returns the user ID only. Do NOT use this for token usage, cost, or chat statistics — use tofi_session_info instead.",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},

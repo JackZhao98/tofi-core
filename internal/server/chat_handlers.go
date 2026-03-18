@@ -655,7 +655,7 @@ func buildSessionInfoTool(session *chat.Session, model string) mcp.ExtraBuiltinT
 	return mcp.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_session_info",
-			Description: "Get current chat session information: session ID, model, token usage, cost, and message count. Use this when you need to report session status or check resource usage.",
+			Description: "Get token usage, cost, model name, and message count for the current chat. ALWAYS use this tool when the user asks about usage, tokens, cost, billing, session info, or statistics. Returns: session ID, model, message count, input/output tokens, total cost, active skills.",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
