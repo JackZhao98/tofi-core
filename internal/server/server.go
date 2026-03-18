@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -267,12 +269,17 @@ func (s *Server) Start() error {
 		_, err := s.executeChatSession(userID, scope, session, message, nil, opts)
 		return err
 	})
-	dispatcher.SetRestartFn(func() {
-		log.Println("[Server] Restart requested via Telegram...")
+	dispatcher.SetRestartFn(func(botToken, chatID string) {
+		log.Printf("[Server] Restart requested via Telegram (chat %s)...", chatID)
 		exe, exeErr := os.Executable()
 		if exeErr != nil {
 			log.Printf("[Server] Cannot find executable: %v", exeErr)
 			return
+		}
+		// Write restart-notify file so the new process can send confirmation
+		if botToken != "" && chatID != "" {
+			notifyFile := filepath.Join(s.config.HomeDir, ".restart-notify")
+			_ = os.WriteFile(notifyFile, []byte(botToken+"\n"+chatID), 0600)
 		}
 		// Fork detached shell: wait for us to die (release port), then start new daemon
 		restartSh := fmt.Sprintf("sleep 2 && %s start --home %s --port %d", exe, s.config.HomeDir, s.config.Port)
@@ -291,6 +298,9 @@ func (s *Server) Start() error {
 	s.bridgeManager.StartAll()
 	log.Println("[Server] Bridge Manager started")
 	defer s.bridgeManager.StopAll()
+
+	// Check for pending restart notification
+	s.sendRestartNotification()
 
 	mux := http.NewServeMux()
 
@@ -480,6 +490,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"mode":   s.config.Mode,
 	})
+}
+
+// sendRestartNotification checks for a .restart-notify file left by the previous
+// process and sends a "restart complete" message to the Telegram user who requested it.
+func (s *Server) sendRestartNotification() {
+	notifyFile := filepath.Join(s.config.HomeDir, ".restart-notify")
+	data, err := os.ReadFile(notifyFile)
+	if err != nil {
+		return // no pending notification
+	}
+	os.Remove(notifyFile)
+
+	parts := strings.SplitN(string(data), "\n", 2)
+	if len(parts) != 2 {
+		return
+	}
+	botToken, chatID := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	if botToken == "" || chatID == "" {
+		return
+	}
+
+	sender := &bridge.TelegramSender{BotToken: botToken}
+	_ = sender.SendMessage(chatID, "✅ Tofi 服务已重启完成")
+	log.Printf("[Server] Sent restart confirmation to Telegram chat %s", chatID)
 }
 
 // handleStats 返回工作池的统计信息

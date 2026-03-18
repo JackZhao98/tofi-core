@@ -14,7 +14,8 @@ import (
 type ExecuteFn func(userID, scope string, session *chat.Session, message string, opts *ExecuteOptions) error
 
 // RestartFn is called when a user issues /restart via Telegram.
-type RestartFn func()
+// botToken and chatID identify who requested it, so the new process can notify them.
+type RestartFn func(botToken, chatID string)
 
 // ChatBridgeDispatcher routes incoming messages to Chat Sessions and executes agents.
 type ChatBridgeDispatcher struct {
@@ -36,7 +37,7 @@ func NewDispatcher(db *storage.DB, chatStore *chat.Store, execFn ExecuteFn) *Cha
 	}
 }
 
-// SetRestartFn sets the callback for /restart command.
+// SetRestartFn sets the callback for the /restart command.
 func (d *ChatBridgeDispatcher) SetRestartFn(fn RestartFn) {
 	d.restartFn = fn
 }
@@ -300,9 +301,15 @@ func (d *ChatBridgeDispatcher) handleCommand(
 			return
 		}
 		_ = b.SendMessage(msg.ChatID, "🔄 正在重启 Tofi 服务...")
+		// Get bot token for post-restart notification
+		botToken := ""
+		if cfg, cfgErr := connector.TelegramConfig(); cfgErr == nil {
+			botToken = cfg.BotToken
+		}
+		chatID := msg.ChatID
 		go func() {
-			time.Sleep(500 * time.Millisecond) // 让消息先发出去
-			d.restartFn()
+			time.Sleep(500 * time.Millisecond)
+			d.restartFn(botToken, chatID)
 		}()
 
 	case "help":
