@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 	"tofi-core/internal/bridge"
 	"tofi-core/internal/daemon"
@@ -266,14 +268,23 @@ func (s *Server) Start() error {
 		return err
 	})
 	dispatcher.SetRestartFn(func() {
-		log.Println("[Server] Restart requested via Telegram, spawning new process...")
-		daemon.RemovePID(s.config.HomeDir)
-		newPID, err := daemon.Start(s.config.HomeDir, s.config.Port, false)
-		if err != nil {
-			log.Printf("[Server] Failed to restart: %v", err)
+		log.Println("[Server] Restart requested via Telegram...")
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			log.Printf("[Server] Cannot find executable: %v", exeErr)
 			return
 		}
-		log.Printf("[Server] New process started (pid %d), exiting current...", newPID)
+		// Fork detached shell: wait for us to die (release port), then start new daemon
+		restartSh := fmt.Sprintf("sleep 2 && %s start --home %s --port %d", exe, s.config.HomeDir, s.config.Port)
+		cmd := exec.Command("sh", "-c", restartSh)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if startErr := cmd.Start(); startErr != nil {
+			log.Printf("[Server] Failed to schedule restart: %v", startErr)
+			return
+		}
+		log.Println("[Server] Restart scheduled, exiting now...")
+		daemon.RemovePID(s.config.HomeDir)
+		time.Sleep(500 * time.Millisecond)
 		os.Exit(0)
 	})
 	s.bridgeManager = bridge.NewManager(s.db, dispatcher)
