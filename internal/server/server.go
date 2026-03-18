@@ -264,6 +264,10 @@ func (s *Server) Start() error {
 		_, err := s.executeChatSession(userID, scope, session, message, nil, opts)
 		return err
 	})
+	dispatcher.SetRestartFn(func() {
+		log.Println("[Server] Restart requested via Telegram, shutting down...")
+		os.Exit(0)
+	})
 	s.bridgeManager = bridge.NewManager(s.db, dispatcher)
 	s.bridgeManager.StartAll()
 	log.Println("[Server] Bridge Manager started")

@@ -13,11 +13,15 @@ import (
 // ExecuteFn is the function signature for executeChatSession (decouples from Server).
 type ExecuteFn func(userID, scope string, session *chat.Session, message string, opts *ExecuteOptions) error
 
+// RestartFn is called when a user issues /restart via Telegram.
+type RestartFn func()
+
 // ChatBridgeDispatcher routes incoming messages to Chat Sessions and executes agents.
 type ChatBridgeDispatcher struct {
 	db           *storage.DB
 	chatStore    *chat.Store
 	execFn       ExecuteFn
+	restartFn    RestartFn
 	sessionLocks sync.Map // sessionID → *sync.Mutex
 	pendingMsgs  sync.Map // sessionID → *pendingQueue
 	bridges      sync.Map // connectorID → ChatBridge
@@ -30,6 +34,11 @@ func NewDispatcher(db *storage.DB, chatStore *chat.Store, execFn ExecuteFn) *Cha
 		chatStore: chatStore,
 		execFn:    execFn,
 	}
+}
+
+// SetRestartFn sets the callback for /restart command.
+func (d *ChatBridgeDispatcher) SetRestartFn(fn RestartFn) {
+	d.restartFn = fn
 }
 
 // RegisterBridge registers a bridge for sending replies.
@@ -242,6 +251,59 @@ func (d *ChatBridgeDispatcher) handleCommand(
 		} else {
 			_ = b.SendMessage(msg.ChatID, "当前没有正在执行的任务")
 		}
+
+	case "status":
+		if receiver == nil {
+			_ = b.SendMessage(msg.ChatID, "请先完成验证。")
+			return
+		}
+		sessionID, _ := d.db.GetBridgeSession(msg.ConnectorID, msg.ChatID)
+		if sessionID == "" {
+			_ = b.SendMessage(msg.ChatID, "当前没有活跃对话。发消息即可开始。")
+			return
+		}
+		scope := chat.ScopeUser
+		if connector.AppID != "" {
+			appPrefix := connector.AppID
+			if len(appPrefix) > 8 {
+				appPrefix = appPrefix[:8]
+			}
+			scope = chat.AgentScope("app-" + appPrefix)
+		}
+		session, err := d.chatStore.Load(userID, scope, sessionID)
+		if err != nil {
+			_ = b.SendMessage(msg.ChatID, fmt.Sprintf("Session: %s\n状态: 未知", sessionID))
+			return
+		}
+		status := "空闲"
+		if session.Status == "running" {
+			status = "运行中"
+		} else if session.Status == "hold" {
+			status = "等待中"
+		}
+		model := session.Model
+		if model == "" {
+			model = "默认"
+		}
+		statusMsg := fmt.Sprintf(
+			"Session: %s\n状态: %s\n模型: %s\n消息数: %d\nTokens: %d in / %d out\n费用: $%.4f",
+			session.ID, status, model,
+			len(session.Messages),
+			session.Usage.InputTokens, session.Usage.OutputTokens,
+			session.Usage.Cost,
+		)
+		_ = b.SendMessage(msg.ChatID, statusMsg)
+
+	case "restart":
+		if d.restartFn == nil {
+			_ = b.SendMessage(msg.ChatID, "重启功能未配置")
+			return
+		}
+		_ = b.SendMessage(msg.ChatID, "🔄 正在重启 Tofi 服务...")
+		go func() {
+			time.Sleep(500 * time.Millisecond) // 让消息先发出去
+			d.restartFn()
+		}()
 
 	case "help":
 		_ = b.SendMessage(msg.ChatID, FormatHelp())

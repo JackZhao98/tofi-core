@@ -55,10 +55,36 @@ func (b *TelegramPollingBridge) SendTyping(chatID string) error {
 	return b.sender.SendTyping(chatID)
 }
 
+// registerCommands 向 Telegram 注册 slash 命令菜单
+func (b *TelegramPollingBridge) registerCommands() {
+	commands := []map[string]string{
+		{"command": "new", "description": "开始新对话"},
+		{"command": "stop", "description": "停止当前任务"},
+		{"command": "status", "description": "查看当前对话状态"},
+		{"command": "restart", "description": "重启 Tofi 服务"},
+		{"command": "help", "description": "查看帮助"},
+	}
+	body, _ := json.Marshal(map[string]any{"commands": commands})
+	resp, err := http.Post(
+		telegramAPIBase+b.botToken+"/setMyCommands",
+		"application/json",
+		strings.NewReader(string(body)),
+	)
+	if err != nil {
+		log.Printf("[Bridge:Telegram:%s] Failed to register commands: %v", b.connectorID[:8], err)
+		return
+	}
+	resp.Body.Close()
+	log.Printf("[Bridge:Telegram:%s] Registered slash commands menu", b.connectorID[:8])
+}
+
 // Start 启动 long polling 循环（阻塞直到 ctx 取消）
 func (b *TelegramPollingBridge) Start(ctx context.Context) error {
 	ctx, b.cancel = context.WithCancel(ctx)
 	log.Printf("[Bridge:Telegram:%s] Starting polling for bot @%s", b.connectorID[:8], b.botName)
+
+	// 注册命令菜单（用户输入 / 时显示）
+	b.registerCommands()
 
 	backoff := time.Second
 	maxBackoff := 60 * time.Second
