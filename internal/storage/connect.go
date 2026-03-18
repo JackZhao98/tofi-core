@@ -488,3 +488,126 @@ func (db *DB) FindConnectorByType(userID string, ctype ConnectorType) (*Connecto
 	}
 	return c, nil
 }
+
+// GetConnectorByID 按 ID 查找 connector（不限 userID，内部使用）
+func (db *DB) GetConnectorByID(connectorID string) (*Connector, error) {
+	c := &Connector{}
+	err := db.conn.QueryRow(
+		`SELECT id, user_id, app_id, type, name, config, enabled, created_at
+		 FROM connectors WHERE id = ?`,
+		connectorID,
+	).Scan(&c.ID, &c.UserID, &c.AppID, &c.Type, &c.Name, &c.Config, &c.Enabled, &c.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return c, nil
+}
+
+// ListAllConnectorsByType 查询所有启用的指定类型 Connector（跨用户）
+func (db *DB) ListAllConnectorsByType(ctype ConnectorType) ([]*Connector, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, user_id, app_id, type, name, config, enabled, created_at
+		 FROM connectors WHERE type = ? AND enabled = 1 ORDER BY created_at`,
+		string(ctype),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var connectors []*Connector
+	for rows.Next() {
+		c := &Connector{}
+		if err := rows.Scan(&c.ID, &c.UserID, &c.AppID, &c.Type, &c.Name, &c.Config, &c.Enabled, &c.CreatedAt); err != nil {
+			continue
+		}
+		connectors = append(connectors, c)
+	}
+	return connectors, nil
+}
+
+// ===================== Receiver CRUD (extended) =====================
+
+// GetReceiverByIdentifier 根据 connectorID + identifier 查找接收者
+func (db *DB) GetReceiverByIdentifier(connectorID, identifier string) (*ConnectorReceiver, error) {
+	r := &ConnectorReceiver{}
+	err := db.conn.QueryRow(
+		`SELECT id, connector_id, identifier, display_name, avatar_url, metadata, verified_at
+		 FROM connector_receivers WHERE connector_id = ? AND identifier = ?`,
+		connectorID, identifier,
+	).Scan(&r.ID, &r.ConnectorID, &r.Identifier, &r.DisplayName, &r.AvatarURL, &r.Metadata, &r.VerifiedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return r, nil
+}
+
+// ===================== Bridge Sessions =====================
+
+func (db *DB) initBridgeSessionsTable() error {
+	_, err := db.conn.Exec(`
+	CREATE TABLE IF NOT EXISTS bridge_sessions (
+		connector_id TEXT NOT NULL,
+		chat_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(connector_id, chat_id),
+		FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_bridge_sessions_user ON bridge_sessions(user_id);
+	`)
+	return err
+}
+
+// GetBridgeSession 查找已有的 bridge → chat session 映射
+func (db *DB) GetBridgeSession(connectorID, chatID string) (string, error) {
+	var sessionID string
+	err := db.conn.QueryRow(
+		`SELECT session_id FROM bridge_sessions WHERE connector_id = ? AND chat_id = ?`,
+		connectorID, chatID,
+	).Scan(&sessionID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return sessionID, nil
+}
+
+// SetBridgeSession 设置或更新 bridge → chat session 映射
+func (db *DB) SetBridgeSession(connectorID, chatID, userID, sessionID string) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO bridge_sessions (connector_id, chat_id, user_id, session_id)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(connector_id, chat_id) DO UPDATE SET
+		   session_id = excluded.session_id`,
+		connectorID, chatID, userID, sessionID,
+	)
+	return err
+}
+
+// DeleteBridgeSession 删除映射（/new 命令时使用）
+func (db *DB) DeleteBridgeSession(connectorID, chatID string) error {
+	_, err := db.conn.Exec(
+		`DELETE FROM bridge_sessions WHERE connector_id = ? AND chat_id = ?`,
+		connectorID, chatID,
+	)
+	return err
+}
+
+// DeleteBridgeSessionsByConnector 删除 connector 下所有映射
+func (db *DB) DeleteBridgeSessionsByConnector(connectorID string) error {
+	_, err := db.conn.Exec(
+		`DELETE FROM bridge_sessions WHERE connector_id = ?`,
+		connectorID,
+	)
+	return err
+}

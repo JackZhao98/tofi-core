@@ -237,6 +237,9 @@ func InitDB(homeDir string) (*DB, error) {
 	if err := db.initAppConnectorsTable(); err != nil {
 		log.Printf("⚠️  app_connectors table creation (may already exist): %v", err)
 	}
+	if err := db.initBridgeSessionsTable(); err != nil {
+		log.Printf("⚠️  bridge_sessions table creation (may already exist): %v", err)
+	}
 	db.migrateOldTelegramToConnectors()
 
 	// 创建 memories 表 + FTS5 全文搜索索引

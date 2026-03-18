@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Session message limits for auto-compaction.
@@ -79,6 +81,11 @@ type ToolCall struct {
 	ID      string   `xml:"id,attr"`
 	Name    string   `xml:"name,attr"`
 	Input   string   `xml:"input"`
+}
+
+// NewSessionID 生成新的 session ID
+func NewSessionID() string {
+	return "s_" + uuid.New().String()[:12]
 }
 
 // NewSession creates a new empty session with a generated ID.
