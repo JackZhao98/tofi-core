@@ -150,6 +150,8 @@ type chatModel struct {
 	streamCancel context.CancelFunc // cancel SSE stream
 	ctrlCOnce    bool               // first Ctrl+C pressed
 	ctrlCTimer   *time.Timer        // 3s reset timer
+	inputHistory []string // user message history
+	historyIdx   int     // -1 = not browsing, 0..len-1 = browsing
 	client       *apiClient
 	sessionID    string
 	scope       string
@@ -382,16 +384,50 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// Save to input history
+			m.inputHistory = append(m.inputHistory, input)
+			m.historyIdx = -1
+
 			m.appendContent(m.renderUserMsg(input))
 			m.appendContent("")
 
 			m.streaming = true
+			m.textarea.Blur()
 			ctx, cancel := context.WithCancel(context.Background())
 			m.streamCancel = cancel
 			m.refreshViewport()
 
 			go m.streamChatMessage(ctx, input)
 			return m, nil
+
+		case "up":
+			// Up arrow: browse input history (only when textarea is empty or already browsing)
+			if !m.streaming && len(m.inputHistory) > 0 {
+				val := strings.TrimSpace(m.textarea.Value())
+				if val == "" || m.historyIdx >= 0 {
+					if m.historyIdx < 0 {
+						m.historyIdx = len(m.inputHistory) - 1
+					} else if m.historyIdx > 0 {
+						m.historyIdx--
+					}
+					m.textarea.SetValue(m.inputHistory[m.historyIdx])
+					m.textarea.CursorEnd()
+					return m, nil
+				}
+			}
+		case "down":
+			// Down arrow: navigate forward in history
+			if !m.streaming && m.historyIdx >= 0 {
+				if m.historyIdx < len(m.inputHistory)-1 {
+					m.historyIdx++
+					m.textarea.SetValue(m.inputHistory[m.historyIdx])
+					m.textarea.CursorEnd()
+				} else {
+					m.historyIdx = -1
+					m.textarea.SetValue("")
+				}
+				return m, nil
+			}
 
 		case "pgup", "pgdown", "home", "end":
 			var cmd tea.Cmd
@@ -434,6 +470,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamDoneMsg:
 		m.finalizeStreamBlock()
 		m.streaming = false
+		m.textarea.Focus()
 		m.totalInputTokens += msg.inputTokens
 		m.totalOutputTokens += msg.outputTokens
 		m.totalCost += msg.cost
@@ -451,6 +488,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamErrorMsg:
 		m.finalizeStreamBlock()
 		m.streaming = false
+		m.textarea.Focus()
 		m.appendContent(m.renderError(msg.err))
 		m.appendContent("")
 		return m, nil
@@ -539,6 +577,13 @@ func (m *chatModel) View() string {
 			accentStyle.Render("Esc") + subtitleStyle.Render(" Cancel")
 		out.WriteString(m.padBorderLine(" "+hint, iw) + "\n")
 		// Fill remaining textarea lines
+		for i := 1; i < m.textarea.Height(); i++ {
+			out.WriteString(m.padBorderLine("", iw) + "\n")
+		}
+	} else if m.streaming {
+		// During streaming: show muted placeholder instead of textarea
+		streamHint := subtitleStyle.Render("...")
+		out.WriteString(m.padBorderLine(" "+streamHint, iw) + "\n")
 		for i := 1; i < m.textarea.Height(); i++ {
 			out.WriteString(m.padBorderLine("", iw) + "\n")
 		}
