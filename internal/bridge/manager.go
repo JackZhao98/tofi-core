@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"tofi-core/internal/storage"
 )
@@ -112,6 +113,25 @@ func (m *ChatBridgeManager) IsRunning(connectorID string) bool {
 	defer m.mu.Unlock()
 	_, exists := m.bridges[connectorID]
 	return exists
+}
+
+// WaitForVerifyCode 通过已运行的 bridge 等待验证码。
+// 如果该 connector 没有运行中的 bridge，返回 nil 错误（表示不可用）。
+func (m *ChatBridgeManager) WaitForVerifyCode(connectorID, code string, timeout time.Duration) (*verifyResult, error) {
+	m.mu.Lock()
+	b, exists := m.bridges[connectorID]
+	m.mu.Unlock()
+
+	if !exists {
+		return nil, fmt.Errorf("no active bridge")
+	}
+
+	tb, ok := b.(*TelegramPollingBridge)
+	if !ok {
+		return nil, fmt.Errorf("bridge is not Telegram")
+	}
+
+	return tb.WaitForVerifyCode(code, timeout)
 }
 
 func (m *ChatBridgeManager) createBridge(connector *storage.Connector) (ChatBridge, error) {

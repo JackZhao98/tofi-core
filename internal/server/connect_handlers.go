@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -294,41 +295,81 @@ func (s *Server) handleConnectorVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	pendingVerifiesMu.Unlock()
 
-	// 后台 polling
-	go func() {
-		defer cancelPendingVerify(connID)
+	// 后台 polling：如果 bridge 已在运行，使用 bridge-based 验证避免 offset 冲突
+	if s.bridgeManager != nil && s.bridgeManager.IsRunning(connID) {
+		go func() {
+			defer cancelPendingVerify(connID)
 
-		verified, err := connect.PollForVerifyCode(tgCfg.BotToken, code, 5*time.Minute)
-		if err != nil {
-			log.Printf("[connector] verify polling failed for connector %s: %v", connID, err)
-			return
-		}
-
-		// 保存 receiver
-		meta := storage.TelegramReceiverMeta{ChatID: verified.ChatID, Username: verified.Username}
-		metaJSON, _ := json.Marshal(meta)
-		_, err = s.db.AddConnectorReceiver(
-			connID, verified.ChatID, verified.DisplayName, verified.AvatarURL, string(metaJSON),
-		)
-		if err != nil {
-			log.Printf("[connector] failed to save receiver for connector %s: %v", connID, err)
-			return
-		}
-
-		log.Printf("[connector] connector %s verified receiver: %s (@%s)", connID, verified.DisplayName, verified.Username)
-
-		if s.bridgeManager != nil {
-			connector, _ := s.db.GetConnector(connID, userID)
-			if connector != nil {
-				s.bridgeManager.StartBridge(connector)
+			result, err := s.bridgeManager.WaitForVerifyCode(connID, code, 5*time.Minute)
+			if err != nil {
+				log.Printf("[connector] bridge verify failed for connector %s: %v", connID, err)
+				return
 			}
-		}
 
-		select {
-		case done <- verified:
-		default:
-		}
-	}()
+			// 获取用户头像（需要 int64 userID）
+			var senderIDInt int64
+			fmt.Sscanf(result.SenderID, "%d", &senderIDInt)
+			avatarURL := connect.GetUserAvatar(tgCfg.BotToken, senderIDInt)
+
+			// 保存 receiver（bridge 验证不返回 username，留空）
+			meta := storage.TelegramReceiverMeta{ChatID: result.ChatID, Username: ""}
+			metaJSON, _ := json.Marshal(meta)
+			_, err = s.db.AddConnectorReceiver(
+				connID, result.ChatID, result.SenderName, avatarURL, string(metaJSON),
+			)
+			if err != nil {
+				log.Printf("[connector] failed to save receiver for connector %s: %v", connID, err)
+				return
+			}
+
+			log.Printf("[connector] connector %s verified receiver via bridge: %s", connID, result.SenderName)
+
+			verified := &connect.VerifiedUser{
+				ChatID:      result.ChatID,
+				DisplayName: result.SenderName,
+				AvatarURL:   avatarURL,
+			}
+			select {
+			case done <- verified:
+			default:
+			}
+		}()
+	} else {
+		go func() {
+			defer cancelPendingVerify(connID)
+
+			verified, err := connect.PollForVerifyCode(tgCfg.BotToken, code, 5*time.Minute)
+			if err != nil {
+				log.Printf("[connector] verify polling failed for connector %s: %v", connID, err)
+				return
+			}
+
+			// 保存 receiver
+			meta := storage.TelegramReceiverMeta{ChatID: verified.ChatID, Username: verified.Username}
+			metaJSON, _ := json.Marshal(meta)
+			_, err = s.db.AddConnectorReceiver(
+				connID, verified.ChatID, verified.DisplayName, verified.AvatarURL, string(metaJSON),
+			)
+			if err != nil {
+				log.Printf("[connector] failed to save receiver for connector %s: %v", connID, err)
+				return
+			}
+
+			log.Printf("[connector] connector %s verified receiver: %s (@%s)", connID, verified.DisplayName, verified.Username)
+
+			if s.bridgeManager != nil {
+				connector, _ := s.db.GetConnector(connID, userID)
+				if connector != nil {
+					s.bridgeManager.StartBridge(connector)
+				}
+			}
+
+			select {
+			case done <- verified:
+			default:
+			}
+		}()
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{

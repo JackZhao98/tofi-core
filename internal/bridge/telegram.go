@@ -7,20 +7,31 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"tofi-core/internal/storage"
 )
 
+// verifyResult 验证成功后返回的用户信息
+type verifyResult struct {
+	ChatID     string
+	SenderName string
+	SenderID   string
+}
+
 // TelegramPollingBridge 通过 long polling 接收 Telegram 消息
 type TelegramPollingBridge struct {
-	connectorID string
-	botToken    string
-	botName     string
-	onMessage   MessageHandler
-	sender      *TelegramSender
-	cancel      context.CancelFunc
-	offset      int64
+	connectorID   string
+	botToken      string
+	botName       string
+	onMessage     MessageHandler
+	sender        *TelegramSender
+	cancel        context.CancelFunc
+	offset        int64
+	verifyMu      sync.Mutex
+	verifyWaiters map[string]chan verifyResult // code → channel
 }
 
 func NewTelegramPollingBridge(connectorID, botToken, botName string, handler MessageHandler) *TelegramPollingBridge {
@@ -82,6 +93,24 @@ func (b *TelegramPollingBridge) Start(ctx context.Context) error {
 				continue
 			}
 
+			// 检查 /start {code} 验证码消息，优先路由到等待中的 verify waiter
+			if strings.HasPrefix(u.Message.Text, "/start ") {
+				code := strings.TrimSpace(strings.TrimPrefix(u.Message.Text, "/start "))
+				if code != "" {
+					b.verifyMu.Lock()
+					ch, exists := b.verifyWaiters[code]
+					b.verifyMu.Unlock()
+					if exists {
+						ch <- verifyResult{
+							ChatID:     fmt.Sprintf("%d", u.Message.Chat.ID),
+							SenderName: u.Message.From.DisplayName(),
+							SenderID:   fmt.Sprintf("%d", u.Message.From.ID),
+						}
+						continue // 不再作为普通消息处理
+					}
+				}
+			}
+
 			msg := IncomingMessage{
 				ConnectorID: b.connectorID,
 				ChatID:      fmt.Sprintf("%d", u.Message.Chat.ID),
@@ -99,6 +128,32 @@ func (b *TelegramPollingBridge) Start(ctx context.Context) error {
 func (b *TelegramPollingBridge) Stop() {
 	if b.cancel != nil {
 		b.cancel()
+	}
+}
+
+// WaitForVerifyCode 注册一个验证码并等待用户发送 /start {code}。
+// 当用户发送后返回 chat 信息；超时返回错误。
+func (b *TelegramPollingBridge) WaitForVerifyCode(code string, timeout time.Duration) (*verifyResult, error) {
+	ch := make(chan verifyResult, 1)
+
+	b.verifyMu.Lock()
+	if b.verifyWaiters == nil {
+		b.verifyWaiters = make(map[string]chan verifyResult)
+	}
+	b.verifyWaiters[code] = ch
+	b.verifyMu.Unlock()
+
+	defer func() {
+		b.verifyMu.Lock()
+		delete(b.verifyWaiters, code)
+		b.verifyMu.Unlock()
+	}()
+
+	select {
+	case result := <-ch:
+		return &result, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("verification timed out")
 	}
 }
 
