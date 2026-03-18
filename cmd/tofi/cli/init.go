@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/bcrypt"
+	"tofi-core/internal/daemon"
 )
 
 var initForce bool
@@ -34,13 +35,15 @@ func init() {
 type initStep int
 
 const (
-	stepWelcome initStep = iota
+	stepWelcome     initStep = iota
 	stepProvider
 	stepAPIKey
 	stepAuthMode
 	stepUsername
 	stepPassword
 	stepConfirm
+	stepStartEngine // ask whether to start engine
+	stepAutoStart   // ask whether to enable auto-start on boot
 	stepDone
 )
 
@@ -74,11 +77,16 @@ type initModel struct {
 	quitting bool
 
 	// Auth
-	authMode      authMode
-	authCursor    int
-	usernameInput textinput.Model
-	passwordInput textinput.Model
+	authMode       authMode
+	authCursor     int
+	usernameInput  textinput.Model
+	passwordInput  textinput.Model
 	generatedToken string
+
+	// Post-init
+	engineStarted  bool
+	engineStartErr error
+	autoStartSet   bool
 }
 
 func newInitModel(home string) initModel {
@@ -147,6 +155,10 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePassword(msg)
 	case stepConfirm:
 		return m.updateConfirm(msg)
+	case stepStartEngine:
+		return m.updateStartEngine(msg)
+	case stepAutoStart:
+		return m.updateAutoStart(msg)
 	}
 
 	return m, nil
@@ -284,8 +296,12 @@ func (m initModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch keyMsg.String() {
 		case "enter", "y", "Y":
 			m.err = m.writeConfig()
-			m.step = stepDone
-			return m, tea.Quit
+			if m.err != nil {
+				m.step = stepDone
+				return m, tea.Quit
+			}
+			m.step = stepStartEngine
+			return m, nil
 		case "n", "N", "esc":
 			m.step = stepProvider
 			m.cursor = 0
@@ -294,6 +310,44 @@ func (m initModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.passwordInput.SetValue("")
 			m.generatedToken = ""
 			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m initModel) updateStartEngine(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "y", "Y", "enter":
+			pid, err := daemon.Start(m.homeDir, daemon.DefaultPort, false)
+			if err != nil {
+				m.engineStartErr = err
+			} else {
+				m.engineStarted = true
+				_ = pid
+			}
+			m.step = stepAutoStart
+			return m, nil
+		case "n", "N":
+			m.step = stepAutoStart
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m initModel) updateAutoStart(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "y", "Y", "enter":
+			if err := daemon.EnableAutoStart(m.homeDir); err == nil {
+				m.autoStartSet = true
+			}
+			m.step = stepDone
+			return m, tea.Quit
+		case "n", "N":
+			m.step = stepDone
+			return m, tea.Quit
 		}
 	}
 	return m, nil
@@ -409,26 +463,44 @@ func (m initModel) View() string {
 		s.WriteString(box.Render(strings.Join(lines, "\n")) + "\n\n")
 		s.WriteString("  " + accentStyle.Render("Y") + subtitleStyle.Render("/Enter confirm · ") + accentStyle.Render("N") + subtitleStyle.Render(" go back"))
 
+	case stepStartEngine:
+		s.WriteString(successStyle.Render("  ✓ Workspace initialized!") + "\n\n")
+		if m.authMode == authToken {
+			s.WriteString("  " + subtitleStyle.Render("Your access token:") + "\n")
+			s.WriteString("  " + accentStyle.Render(m.generatedToken) + "\n\n")
+			s.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#d29922")).Render(
+				"  Save this token! It won't be shown again.") + "\n\n")
+		}
+		s.WriteString(titleStyle.Render("  Start engine now?") + "\n\n")
+		s.WriteString("  " + accentStyle.Render("Y") + subtitleStyle.Render("/Enter start · ") + accentStyle.Render("N") + subtitleStyle.Render(" skip"))
+
+	case stepAutoStart:
+		if m.engineStarted {
+			s.WriteString(successStyle.Render("  ✓ Engine started") + "\n\n")
+		} else if m.engineStartErr != nil {
+			s.WriteString(errorStyle.Render("  ✗ Engine start failed: "+m.engineStartErr.Error()) + "\n\n")
+		}
+		s.WriteString(titleStyle.Render("  Enable auto-start on boot?") + "\n\n")
+		s.WriteString("  " + accentStyle.Render("Y") + subtitleStyle.Render("/Enter enable · ") + accentStyle.Render("N") + subtitleStyle.Render(" skip"))
+
 	case stepDone:
 		if m.err != nil {
 			s.WriteString(errorStyle.Render("  ✗ Setup failed: "+m.err.Error()) + "\n")
 		} else {
-			s.WriteString(successStyle.Render("  ✓ Workspace initialized!") + "\n\n")
-			s.WriteString("  " + subtitleStyle.Render("Created:") + "\n")
-			s.WriteString("  " + accentStyle.Render(m.homeDir+"/") + "\n")
-			s.WriteString("  " + subtitleStyle.Render("├── config.yaml") + "\n")
-			s.WriteString("  " + subtitleStyle.Render("├── users/") + "\n")
-			s.WriteString("  " + subtitleStyle.Render("├── skills/") + "\n")
-			s.WriteString("  " + subtitleStyle.Render("└── logs/") + "\n\n")
+			s.WriteString(successStyle.Render("  ✓ Setup complete!") + "\n\n")
 
-			if m.authMode == authToken {
-				s.WriteString("  " + subtitleStyle.Render("Your access token:") + "\n")
-				s.WriteString("  " + accentStyle.Render(m.generatedToken) + "\n\n")
-				s.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#d29922")).Render(
-					"  Save this token! It won't be shown again.") + "\n\n")
+			if m.engineStarted {
+				s.WriteString("  " + successStyle.Render("Engine: running") + "\n")
+			} else {
+				s.WriteString("  " + subtitleStyle.Render("Engine: not started") + "\n")
+				s.WriteString("  " + subtitleStyle.Render("  Run ") + accentStyle.Render("tofi start") + subtitleStyle.Render(" to launch") + "\n")
 			}
 
-			s.WriteString("  " + subtitleStyle.Render("Next: ") + accentStyle.Render("tofi start") + subtitleStyle.Render(" to launch the engine") + "\n")
+			if m.autoStartSet {
+				s.WriteString("  " + successStyle.Render("Auto-start: enabled") + "\n")
+			} else {
+				s.WriteString("  " + subtitleStyle.Render("Auto-start: disabled") + "\n")
+			}
 		}
 	}
 
@@ -526,6 +598,42 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Println(subtitleStyle.Render("  Run ") + accentStyle.Render("tofi init --force") + subtitleStyle.Render(" to re-initialize"))
 		fmt.Println()
 		return nil
+	}
+
+	// Force reinit: check if engine is running and ask to stop
+	if initForce {
+		status := daemon.GetStatus(homeDir, daemon.DefaultPort)
+		if status.Running {
+			fmt.Println()
+			fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("#d29922")).Render(
+				"  Detected running engine (PID "+fmt.Sprintf("%d", status.PID)+")"))
+			fmt.Println()
+			fmt.Print(subtitleStyle.Render("  Stop engine and continue re-init? ") + accentStyle.Render("(Y/n) "))
+			var answer string
+			fmt.Scanln(&answer)
+			if answer != "" && answer != "y" && answer != "Y" {
+				fmt.Println(subtitleStyle.Render("  Cancelled."))
+				return nil
+			}
+
+			fmt.Print(subtitleStyle.Render("  This will reset workspace data. Are you sure? ") + accentStyle.Render("(Y/n) "))
+			fmt.Scanln(&answer)
+			if answer != "" && answer != "y" && answer != "Y" {
+				fmt.Println(subtitleStyle.Render("  Cancelled."))
+				return nil
+			}
+
+			// Disable auto-start first
+			daemon.DisableAutoStart(homeDir)
+
+			// Stop the engine
+			if err := daemon.Stop(homeDir, false); err != nil {
+				fmt.Println(errorStyle.Render("  ✗ Failed to stop engine: " + err.Error()))
+				return err
+			}
+			fmt.Println(successStyle.Render("  ✓ Engine stopped"))
+			fmt.Println()
+		}
 	}
 
 	p := tea.NewProgram(newInitModel(homeDir))

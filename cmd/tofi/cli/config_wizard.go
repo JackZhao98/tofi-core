@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"tofi-core/internal/daemon"
 )
 
 // --- tofi config wizard (interactive TUI) ---
@@ -44,6 +45,7 @@ const (
 	cfgStepAddKeyInput                  // enter key value
 	cfgStepDeleteKey                    // choose key to delete
 	cfgStepModels                       // unified: enable/disable models + set default
+	cfgStepAutoStart                    // toggle auto-start on boot
 	cfgStepDone                         // result message
 )
 
@@ -58,6 +60,7 @@ type cfgMenuItem struct {
 var cfgMenuItems = []cfgMenuItem{
 	{id: "keys", display: "AI Keys", description: "View and manage API keys"},
 	{id: "models", display: "Models", description: "Enable models and set default"},
+	{id: "autostart", display: "Auto Start", description: "Start engine on boot"},
 }
 
 var cfgProviderOrder = []string{"openai", "anthropic", "gemini", "deepseek"}
@@ -238,6 +241,8 @@ func (m cfgModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDeleteKey(msg)
 	case cfgStepModels:
 		return m.updateModels(msg)
+	case cfgStepAutoStart:
+		return m.updateAutoStart(msg)
 	case cfgStepDone:
 		return m.updateDone(msg)
 	}
@@ -250,7 +255,7 @@ func (m cfgModel) handleEsc() (tea.Model, tea.Cmd) {
 	case cfgStepMenu:
 		m.quitting = true
 		return m, tea.Quit
-	case cfgStepKeys, cfgStepModels:
+	case cfgStepKeys, cfgStepModels, cfgStepAutoStart:
 		m.step = cfgStepMenu
 		m.cursor = 0
 		return m, nil
@@ -307,6 +312,10 @@ func (m cfgModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.enabledLoaded = false
 				m.enabledModels = make(map[string]bool)
 				return m, m.loadModels()
+			case "autostart":
+				m.step = cfgStepAutoStart
+				m.cursor = 0
+				return m, nil
 			}
 		}
 	}
@@ -491,6 +500,42 @@ func (m cfgModel) updateModels(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // adjustViewOffset keeps cursor within the visible window
+func (m cfgModel) updateAutoStart(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Two items: Enable (0) and Disable (1)
+		items := 2
+		switch keyMsg.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < items-1 {
+				m.cursor++
+			}
+		case "enter":
+			if m.cursor == 0 {
+				// Enable
+				if err := daemon.EnableAutoStart(homeDir); err != nil {
+					m.resultMsg = "Error: " + err.Error()
+				} else {
+					m.resultMsg = "Auto-start enabled"
+				}
+			} else {
+				// Disable
+				if err := daemon.DisableAutoStart(homeDir); err != nil {
+					m.resultMsg = "Error: " + err.Error()
+				} else {
+					m.resultMsg = "Auto-start disabled"
+				}
+			}
+			m.step = cfgStepDone
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
 func (m *cfgModel) adjustViewOffset() {
 	if m.cursor < m.viewOffset {
 		m.viewOffset = m.cursor
@@ -544,6 +589,8 @@ func (m cfgModel) View() string {
 		m.viewDeleteKey(&s)
 	case cfgStepModels:
 		m.viewModels(&s)
+	case cfgStepAutoStart:
+		m.viewAutoStart(&s)
 	case cfgStepDone:
 		m.viewDone(&s)
 	}
@@ -764,6 +811,36 @@ func (m cfgModel) viewModels(s *strings.Builder) {
 	}
 
 	s.WriteString("\n" + subtitleStyle.Render("  space toggle · d set default · enter save · esc back") + "\n")
+}
+
+func (m cfgModel) viewAutoStart(s *strings.Builder) {
+	s.WriteString(titleStyle.Render("  Auto Start") + "\n")
+	enabled := daemon.IsAutoStartEnabled(homeDir)
+	if enabled {
+		s.WriteString(subtitleStyle.Render("  Current: ") + successStyle.Render("enabled") + "\n")
+	} else {
+		s.WriteString(subtitleStyle.Render("  Current: ") + subtitleStyle.Render("disabled") + "\n")
+	}
+	s.WriteString("\n")
+
+	options := []struct {
+		label string
+		desc  string
+	}{
+		{"Enable", "Start engine automatically on boot"},
+		{"Disable", "Manual start only"},
+	}
+
+	for i, opt := range options {
+		if i == m.cursor {
+			s.WriteString(tuiSelectedRow.Render("► "+opt.label+"   "+opt.desc+" ") + "\n")
+		} else {
+			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f6fc"))
+			s.WriteString("  " + nameStyle.Render(opt.label) + "   " + subtitleStyle.Render(opt.desc) + "\n")
+		}
+	}
+
+	s.WriteString("\n" + subtitleStyle.Render("  ↑↓ navigate · enter select · esc back") + "\n")
 }
 
 func (m cfgModel) viewDone(s *strings.Builder) {
