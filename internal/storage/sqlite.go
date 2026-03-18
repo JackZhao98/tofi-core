@@ -237,6 +237,9 @@ func InitDB(homeDir string) (*DB, error) {
 	if err := db.initAppConnectorsTable(); err != nil {
 		log.Printf("⚠️  app_connectors table creation (may already exist): %v", err)
 	}
+	if err := db.initAppNotifyTargetsTable(); err != nil {
+		log.Printf("⚠️  app_notify_targets table creation (may already exist): %v", err)
+	}
 	if err := db.initBridgeSessionsTable(); err != nil {
 		log.Printf("⚠️  bridge_sessions table creation (may already exist): %v", err)
 	}

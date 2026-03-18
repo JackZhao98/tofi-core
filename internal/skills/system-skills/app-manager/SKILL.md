@@ -1,186 +1,112 @@
 ---
 name: app-manager
-description: Create, update, delete, and manage Tofi Apps via API. When creating apps, decomposes natural language descriptions into complete app definitions with soul, identity, skills, schedule, and capabilities.
-version: "2.0"
-required_secrets: ["TOFI_TOKEN"]
+description: Guide for creating, managing, and configuring Tofi Apps. Decomposes natural language descriptions into complete app definitions with identity, soul, skills, schedule, and notify targets.
+version: "3.0"
 ---
 
-# App Manager Toolkit
+# App Manager
 
-Manage Tofi Apps directly via API scripts. **Always use these scripts** to create, update, or delete apps — never propose changes that require frontend execution.
+Guide the AI through creating and managing Tofi Apps using built-in `tofi_*` tools.
 
-Environment variables `TOFI_API_URL` and `TOFI_TOKEN` are automatically injected.
+## Available Tools
 
-## Tools
-
-### `manage.py list` — List all apps
-```bash
-python3 skills/app-manager/scripts/manage.py list
-```
-Returns JSON array of all apps with id, name, description, is_active, schedule, model.
-
-### `manage.py get <app_id>` — Get app details
-```bash
-python3 skills/app-manager/scripts/manage.py get <app_id>
-```
-Returns full JSON of a single app.
-
-### `manage.py create` — Create a new app
-```bash
-python3 skills/app-manager/scripts/manage.py create --name "App Name" --prompt "What the app does..." [options]
-```
-Options:
-- `--name NAME` (required): App display name
-- `--prompt PROMPT` (required): What the app should do each run
-- `--description DESC`: Brief description
-- `--model MODEL`: Model ID (e.g., claude-sonnet-4-20250514, gpt-4o)
-- `--skills SKILL1,SKILL2`: Comma-separated skill IDs
-- `--schedule JSON`: Schedule rules as JSON string
-- `--system-prompt TEXT`: Custom system prompt that defines the app's personality and behavior
-- `--capabilities JSON`: Capabilities config as JSON (e.g., `'{"web_search":{"enabled":true}}'`)
-
-Returns the created app as JSON.
-
-### `manage.py update <app_id>` — Update an existing app
-```bash
-python3 skills/app-manager/scripts/manage.py update <app_id> [options]
-```
-Same options as `create`. Only specified fields are updated.
-
-### `manage.py delete <app_id>` — Delete an app
-```bash
-python3 skills/app-manager/scripts/manage.py delete <app_id>
-```
-
-### `manage.py activate <app_id>` — Enable scheduling
-```bash
-python3 skills/app-manager/scripts/manage.py activate <app_id>
-```
-
-### `manage.py deactivate <app_id>` — Disable scheduling
-```bash
-python3 skills/app-manager/scripts/manage.py deactivate <app_id>
-```
-
-### `manage.py run <app_id>` — Run app immediately
-```bash
-python3 skills/app-manager/scripts/manage.py run <app_id>
-```
+| Tool | Purpose |
+|------|---------|
+| `tofi_list_apps` | List all apps with status |
+| `tofi_create_app` | Create a new app |
+| `tofi_update_app` | Update app configuration |
+| `tofi_delete_app` | Delete an app |
+| `tofi_run_app` | Trigger manual run |
+| `tofi_list_app_runs` | View run history |
+| `tofi_activate_app` | Enable/disable schedule |
+| `tofi_list_notify_targets` | List available receivers |
+| `tofi_set_notify_targets` | Set push notification targets |
 
 ---
 
 ## Creating Apps from Natural Language
 
-When the user describes what they want an app to do in natural language, decompose their description into a complete app definition before calling `create`.
+When the user describes what they want, decompose into a complete app definition.
 
 ### Step 1: Understand the Request
 
-Ask clarifying questions ONLY if the description is too vague to determine:
+Ask clarifying questions ONLY if too vague to determine:
 1. **What** the app does (core purpose)
-2. **How** it behaves (personality/tone)
+2. **When** it runs (schedule or manual)
+3. **Who** gets notified (push targets)
 
-If clear enough, skip straight to decomposition.
+If clear enough, skip to decomposition.
 
 ### Step 2: Decompose into Components
 
 #### A. Identity
-- `name`: Display name for the app
+- `name`: kebab-case name (e.g., `daily-weather-report`)
 - `description`: One-line summary (< 80 chars)
 
-#### B. Soul (becomes the `--system-prompt`)
-- `role`: Core role definition (1-2 sentences)
-- `personality`: Communication style and tone
-- `principles`: 3-5 behavioral rules
-- `boundaries`: What the app refuses to do
+#### B. Prompt (the core instruction)
+Write a clear, actionable prompt that tells the AI exactly what to do each run.
+Include:
+- Step-by-step operational instructions
+- Output format expectations
+- Error handling behavior
+- Tone and language preferences
 
-#### C. Capabilities
-- `skills`: Skills from the Tofi registry the app needs
-- `capabilities`: Built-in Tofi capabilities:
-  - `web_search` — search the web
-  - `web_fetch` — fetch and read web pages
-  - `file_read` — read workspace files
-  - `file_write` — write workspace files
-- `model`: Pick from the user's enabled models. Default to cost-effective for simple tasks.
-
-#### D. Operations
-- `schedule`: When the app runs (see Schedule Format below)
-- If the user doesn't mention scheduling, default to manual trigger (no schedule).
-
-### Step 3: Build the System Prompt
-
-Compose a `--system-prompt` that encodes the Soul:
-
-```
-You are {role}.
-
-## Personality
-{personality description}
-
-## Principles
-- {principle 1}
-- {principle 2}
-- {principle 3}
-
-## Boundaries
-- {boundary 1}
-- {boundary 2}
-
-## Instructions
-{Step-by-step operational instructions}
-```
-
-### Step 4: Create via API
-
-Call `manage.py create` with all the decomposed fields.
-
-### Step 5: Review with User
-
-Present a summary and confirm. Adjust with `manage.py update` if needed.
-
----
-
-## Model Selection Guide
-
+#### C. Model Selection
 | Task Complexity | Recommended Models |
 |----------------|-------------------|
-| Simple fetching, formatting, summarizing | `gpt-4o-mini`, `deepseek-chat`, `gemini-2.0-flash` |
-| Analysis, writing, multi-step reasoning | `gpt-4o`, `claude-sonnet-4`, `gemini-2.5-flash` |
-| Deep reasoning, research, architecture | `claude-opus-4`, `gpt-5`, `gemini-2.5-pro` |
+| Simple fetching, formatting | `gpt-4o-mini`, `deepseek-chat`, `gemini-2.0-flash` |
+| Analysis, writing, reasoning | `gpt-4o`, `claude-sonnet-4`, `gemini-2.5-flash` |
+| Deep reasoning, research | `claude-opus-4`, `gpt-5`, `gemini-2.5-pro` |
 
-Always prefer the user's enabled models.
+Always prefer the user's enabled models. Default to cost-effective for simple tasks.
 
-## Schedule Format
+#### D. Skills
+Search for relevant skills using `tofi_search` if the task needs specialized tools (web search, data export, etc.).
 
-Tofi uses structured JSON for schedules:
-
+#### E. Schedule
+If the user mentions timing, format as JSON:
 ```json
-{
-  "entries": [
-    {"time": "09:00", "repeat": {"type": "daily"}, "enabled": true}
-  ],
-  "timezone": "Asia/Shanghai"
-}
+[{"time":"09:00","repeat":{"type":"daily"},"enabled":true}]
 ```
 
-Repeat types: `daily`, `weekdays`, `weekly` (with `day_of_week`), `monthly` (with `day_of_month`), `custom` (with cron expression).
+Repeat types: `daily`, `weekdays`, `weekly` (+ `day_of_week`), `monthly` (+ `day_of_month`).
 
-### Examples
+If no timing mentioned, leave empty (manual trigger only).
 
-| Need | Schedule JSON |
-|------|--------------|
-| Every morning at 8am | `{"entries":[{"time":"08:00","repeat":{"type":"daily"},"enabled":true}],"timezone":"Asia/Shanghai"}` |
-| Weekdays 9am and 5pm | `{"entries":[{"time":"09:00","repeat":{"type":"weekdays"},"enabled":true},{"time":"17:00","repeat":{"type":"weekdays"},"enabled":true}],"timezone":"Asia/Shanghai"}` |
-| Every Monday at 10am | `{"entries":[{"time":"10:00","repeat":{"type":"weekly","day_of_week":1},"enabled":true}],"timezone":"Asia/Shanghai"}` |
+#### F. Notify Targets
+After creating the app, ask if the user wants push notifications.
+- Use `tofi_list_notify_targets` to show available receivers
+- Use `tofi_set_notify_targets` to configure who gets notified
+
+### Step 3: Confirm Before Creating
+
+Present a summary in the user's language:
+```
+App 名称: daily-weather-report
+描述: 每天早上查询天气并推送
+Prompt: [前 50 字...]
+模型: gpt-4o-mini
+调度: 每天 08:00
+通知: Jack (Telegram)
+```
+
+Wait for user confirmation.
+
+### Step 4: Execute
+
+1. Call `tofi_create_app` with all fields
+2. If schedule provided, call `tofi_activate_app`
+3. If notify targets requested, call `tofi_set_notify_targets`
+4. Optionally run once with `tofi_run_app` to test
 
 ---
 
-## Workflow (for all operations)
+## Workflow (all operations)
 
-1. **Understand** the user's request — ask clarifying questions if needed
-2. **Research** if needed (web search, skill search)
-3. **Describe** your plan to the user in text, listing what you will create/change
-4. **Wait for confirmation** — only proceed after the user says yes / approves
-5. **Execute** using the scripts above
-6. **Verify** by running `list` or `get` to confirm the changes
+1. **Understand** — ask only if truly unclear
+2. **Plan** — describe what you will do
+3. **Confirm** — wait for user approval
+4. **Execute** — use `tofi_*` tools
+5. **Verify** — call `tofi_list_apps` or `tofi_list_app_runs` to confirm
 
-**Important**: Always describe what you plan to do BEFORE executing. For destructive actions (delete, deactivate), double-check with the user.
+**Important**: For destructive actions (delete, deactivate), always double-check with the user.

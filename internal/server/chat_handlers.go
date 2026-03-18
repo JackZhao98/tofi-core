@@ -11,6 +11,7 @@ import (
 
 	"tofi-core/internal/bridge"
 	"tofi-core/internal/chat"
+	"tofi-core/internal/connect"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/mcp"
 	"tofi-core/internal/models"
@@ -296,10 +297,14 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	// 2. Build system prompt based on scope
 	systemPrompt := s.buildChatSystemPrompt(userID, scope)
 
-	// 3. Load skills
+	// 3. Load skills (session skills + system skills)
 	var skillNames []string
 	if session.Skills != "" {
 		skillNames = strings.Split(session.Skills, ",")
+	}
+	// Always include system skills for user-scope sessions
+	if scope == chat.ScopeUser {
+		skillNames = appendSystemSkills(skillNames, s.db)
 	}
 	skillTools, skillInstructions, secretEnv := s.buildSkillToolsFromNames(userID, skillNames)
 
@@ -346,11 +351,27 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		Messages:   providerMessages,
 		MCPServers: capMCPServers,
 		SkillTools: skillTools,
-		ExtraTools: append(append(append(append(append(extraTools,
-			s.buildChatWishTools(userID, sessionID, session, scope)...),
-			s.buildMemoryTools(userID, "")...),
-			s.buildBuiltinTools(userID)...),
-			buildSessionInfoTool(session, resolvedModel, &liveUsage))),
+		ExtraTools: func() []mcp.ExtraBuiltinTool {
+			tools := append(extraTools, s.buildChatWishTools(userID, sessionID, session, scope)...)
+			tools = append(tools, s.buildMemoryTools(userID, "")...)
+			tools = append(tools, s.buildBuiltinTools(userID)...)
+			tools = append(tools, s.buildAppTools(userID)...)
+			tools = append(tools, buildSessionInfoTool(session, resolvedModel, &liveUsage))
+			// Inject tofi_notify if connectors are available
+			notifyAppID := ""
+			if agentName, ok := strings.CutPrefix(scope, chat.ScopeAgentPrefix); ok {
+				// For agent scope, resolve the app ID
+				if app, err := s.db.GetAppByName(userID, agentName); err == nil {
+					notifyAppID = app.ID
+				}
+			}
+			tools = connect.InjectNotifyTool(tools, userID, notifyAppID, connect.NotifyDeps{
+				ListConnectorsByApp:    s.db.ListConnectorsByApp,
+				ListConnectors:         s.db.ListConnectors,
+				ListConnectorReceivers: s.db.ListConnectorReceivers,
+			})
+			return tools
+		}(),
 		LiveUsage:  &liveUsage,
 		SandboxDir: sandboxDir,
 		UserDir:    userID,
@@ -494,7 +515,7 @@ func (s *Server) buildChatSystemPrompt(userID, scope string) string {
 	}
 
 	// User main chat: generic assistant prompt
-	return fmt.Sprintf(`You are a knowledgeable AI assistant with access to tools.
+	prompt := fmt.Sprintf(`You are a knowledgeable AI assistant with access to tools.
 Always respond in the same language as the user.
 Provide thorough, well-structured answers with sufficient detail.
 
@@ -524,6 +545,28 @@ You have long-term memory (tofi_save_memory, tofi_recall_memory). Use it to lear
 - **Never make the same mistake twice.**
 
 Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
+
+	return prompt
+}
+
+// appendSystemSkills adds system skill names to the list, avoiding duplicates.
+func appendSystemSkills(skillNames []string, db *storage.DB) []string {
+	sysNames, err := db.ListSystemSkillNames()
+	if err != nil {
+		return skillNames
+	}
+
+	existing := make(map[string]bool, len(skillNames))
+	for _, n := range skillNames {
+		existing[strings.TrimSpace(n)] = true
+	}
+
+	for _, name := range sysNames {
+		if !existing[name] {
+			skillNames = append(skillNames, name)
+		}
+	}
+	return skillNames
 }
 
 // --- POST /api/v1/chat/sessions/{id}/continue ---

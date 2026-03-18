@@ -156,6 +156,25 @@ func (c *apiClient) post(path string, body io.Reader, dest any) error {
 	return nil
 }
 
+// put performs a PUT request with JSON body and decodes response into dest.
+func (c *apiClient) put(path string, body io.Reader, dest any) error {
+	resp, err := c.doRequest("PUT", path, body)
+	if err != nil {
+		return fmt.Errorf("cannot connect to engine: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	if dest != nil {
+		return json.NewDecoder(resp.Body).Decode(dest)
+	}
+	return nil
+}
+
 // patch performs a PATCH request with JSON body and decodes response into dest.
 func (c *apiClient) patch(path string, body io.Reader, dest any) error {
 	resp, err := c.doRequest("PATCH", path, body)

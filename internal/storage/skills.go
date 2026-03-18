@@ -186,6 +186,24 @@ func (db *DB) GetSkillByName(userID, name string) (*SkillRecord, error) {
 	return scanSkillRecord(row)
 }
 
+// ListSystemSkillNames returns the names of all system-scope skills.
+func (db *DB) ListSystemSkillNames() ([]string, error) {
+	rows, err := db.conn.Query(`SELECT DISTINCT name FROM skills WHERE scope = 'system'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 // ListSkills 列出某用户可见的所有 Skills（用户私有 + 公共 Skills）
 // 按 name 去重：同名 Skill 优先显示公共版本
 func (db *DB) ListSkills(userID string) ([]*SkillRecord, error) {

@@ -62,6 +62,15 @@ type AppConnector struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+// AppNotifyTarget links an App to specific receivers for push notifications.
+// Unlike AppConnector (which grants interaction scope), this controls who gets notified
+// when the App completes a run — regardless of their interaction scope.
+type AppNotifyTarget struct {
+	AppID      string `json:"app_id"`
+	ReceiverID int64  `json:"receiver_id"`
+	CreatedAt  string `json:"created_at"`
+}
+
 // --- Telegram Config helpers ---
 
 type TelegramConnectorConfig struct {
@@ -164,6 +173,90 @@ func (db *DB) initAppConnectorsTable() error {
 		FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE
 	);
 	`)
+	return err
+}
+
+func (db *DB) initAppNotifyTargetsTable() error {
+	_, err := db.conn.Exec(`
+	CREATE TABLE IF NOT EXISTS app_notify_targets (
+		app_id TEXT NOT NULL,
+		receiver_id INTEGER NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(app_id, receiver_id),
+		FOREIGN KEY(app_id) REFERENCES apps(id) ON DELETE CASCADE,
+		FOREIGN KEY(receiver_id) REFERENCES connector_receivers(id) ON DELETE CASCADE
+	);
+	`)
+	return err
+}
+
+// ── App Notify Targets CRUD ──
+
+// SetAppNotifyTargets replaces all notify targets for an App.
+func (db *DB) SetAppNotifyTargets(appID string, receiverIDs []int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM app_notify_targets WHERE app_id = ?`, appID); err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO app_notify_targets (app_id, receiver_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, rid := range receiverIDs {
+		if _, err := stmt.Exec(appID, rid); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ListAppNotifyTargets returns all notify target receivers for an App.
+func (db *DB) ListAppNotifyTargets(appID string) ([]*ConnectorReceiver, error) {
+	rows, err := db.conn.Query(`
+		SELECT cr.id, cr.connector_id, cr.identifier, cr.display_name, cr.avatar_url, cr.metadata, cr.verified_at
+		FROM connector_receivers cr
+		JOIN app_notify_targets ant ON ant.receiver_id = cr.id
+		WHERE ant.app_id = ?
+		ORDER BY cr.display_name
+	`, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*ConnectorReceiver
+	for rows.Next() {
+		r := &ConnectorReceiver{}
+		if err := rows.Scan(&r.ID, &r.ConnectorID, &r.Identifier, &r.DisplayName, &r.AvatarURL, &r.Metadata, &r.VerifiedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, nil
+}
+
+// AddAppNotifyTarget adds a single receiver as a notify target for an App.
+func (db *DB) AddAppNotifyTarget(appID string, receiverID int64) error {
+	_, err := db.conn.Exec(
+		`INSERT OR IGNORE INTO app_notify_targets (app_id, receiver_id) VALUES (?, ?)`,
+		appID, receiverID)
+	return err
+}
+
+// RemoveAppNotifyTarget removes a single receiver from an App's notify targets.
+func (db *DB) RemoveAppNotifyTarget(appID string, receiverID int64) error {
+	_, err := db.conn.Exec(
+		`DELETE FROM app_notify_targets WHERE app_id = ? AND receiver_id = ?`,
+		appID, receiverID)
 	return err
 }
 
