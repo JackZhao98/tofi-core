@@ -665,8 +665,14 @@ func (s *Server) handleManagerChat(w http.ResponseWriter, r *http.Request) {
 	}
 	appsJSON, _ := json.Marshal(appsCtx)
 
-	// 3. Load default skills (app-manager + web-search)
+	// 3. Load default skills (app-manager pack + web-search)
 	defaultSkills := []string{"app-manager", "web-search"}
+	// Include sub-skills from the app-manager pack
+	if packSkills, err := s.db.ListSkillsBySourceURL("system://app-manager"); err == nil {
+		for _, ps := range packSkills {
+			defaultSkills = append(defaultSkills, ps.Name)
+		}
+	}
 	var skillInstructions []string
 	var skillTools []mcp.SkillTool
 	secretEnv := make(map[string]string)
@@ -788,19 +794,22 @@ Before making any changes, make sure you UNDERSTAND what the user wants:
 ## Your Capabilities
 - Research: web search, fetch pages
 - Skills: search the marketplace for skills to add to apps
-- App Management: create, update, delete, activate, deactivate, run apps using the app-manager scripts
+- App Management: create, update, delete, activate, deactivate, run apps using tofi_* tools
 
 ## Current Apps
 %s
 
 ## How to Make Changes
-Use the app-manager scripts (via sandbox_exec) to manage apps:
-- python3 skills/app-manager/scripts/manage.py list
-- python3 skills/app-manager/scripts/manage.py get <app_id>
-- python3 skills/app-manager/scripts/manage.py create --name "..." --prompt "..." [--description ...] [--model ...] [--schedule '...'] [--capabilities '...'] [--skills s1,s2]
-- python3 skills/app-manager/scripts/manage.py update <app_id> [--name ...] [--prompt ...]
-- python3 skills/app-manager/scripts/manage.py delete <app_id>
-- python3 skills/app-manager/scripts/manage.py activate/deactivate/run <app_id>
+Use the built-in tofi_* tools to manage apps:
+- tofi_list_apps — list all apps
+- tofi_create_app — create a new app
+- tofi_update_app — update an existing app
+- tofi_delete_app — delete an app
+- tofi_run_app — trigger a manual run
+- tofi_list_app_runs — view run history
+- tofi_activate_app — enable/disable schedule
+- tofi_list_notify_targets — list notification receivers
+- tofi_set_notify_targets — configure notifications
 
 ## Writing App Prompts — You Are the Manager
 
@@ -825,7 +834,7 @@ The --prompt is the ONLY instruction the App Agent receives when it runs. The Ap
 3. Research if needed (web search, skill search)
 4. Call the **present_plan** tool with a structured plan — only include fields relevant to this action
 5. Wait for the user's response (Approve or Deny)
-6. After approval, execute using the app-manager scripts
+6. After approval, execute using the tofi_* tools
 7. Verify with list or get
 
 IMPORTANT:

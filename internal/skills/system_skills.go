@@ -36,17 +36,47 @@ func InstallSystemSkills(db *storage.DB, homeDir string) {
 			continue
 		}
 		name := entry.Name()
-		if err := installOneSystemSkill(db, store, name); err != nil {
-			log.Printf("[system-skills] failed to install %q: %v", name, err)
-		} else {
-			log.Printf("[system-skills] ✓ installed/updated %q", name)
+
+		// Install the top-level skill if it has a SKILL.md
+		skillMDPath := filepath.Join("system-skills", name, "SKILL.md")
+		if _, err := systemSkillsFS.ReadFile(skillMDPath); err == nil {
+			if err := installOneSystemSkill(db, store, name, ""); err != nil {
+				log.Printf("[system-skills] failed to install %q: %v", name, err)
+			} else {
+				log.Printf("[system-skills] ✓ installed/updated %q", name)
+			}
+		}
+
+		// Scan subdirectories for sub-skills (skill pack pattern)
+		subEntries, err := systemSkillsFS.ReadDir(filepath.Join("system-skills", name))
+		if err != nil {
+			continue
+		}
+		packSourceURL := "system://" + name
+		for _, sub := range subEntries {
+			if !sub.IsDir() {
+				continue
+			}
+			subSkillMD := filepath.Join("system-skills", name, sub.Name(), "SKILL.md")
+			if _, err := systemSkillsFS.ReadFile(subSkillMD); err != nil {
+				continue
+			}
+			subPath := filepath.Join(name, sub.Name())
+			if err := installOneSystemSkill(db, store, subPath, packSourceURL); err != nil {
+				log.Printf("[system-skills] failed to install %q: %v", sub.Name(), err)
+			} else {
+				log.Printf("[system-skills] ✓ installed/updated %q (pack: %s)", sub.Name(), name)
+			}
 		}
 	}
 }
 
-func installOneSystemSkill(db *storage.DB, store *LocalStore, name string) error {
+// installOneSystemSkill installs a single system skill from an embedded directory path.
+// dirPath is relative to "system-skills/" (e.g., "web-fetch" or "app-manager/app-create").
+// sourceURL groups sub-skills under a pack (e.g., "system://app-manager"); empty for top-level skills.
+func installOneSystemSkill(db *storage.DB, store *LocalStore, dirPath string, sourceURL string) error {
 	// 1. Read SKILL.md from embedded FS
-	skillMDPath := filepath.Join("system-skills", name, "SKILL.md")
+	skillMDPath := filepath.Join("system-skills", dirPath, "SKILL.md")
 	data, err := systemSkillsFS.ReadFile(skillMDPath)
 	if err != nil {
 		return fmt.Errorf("read SKILL.md: %w", err)
@@ -58,14 +88,17 @@ func installOneSystemSkill(db *storage.DB, store *LocalStore, name string) error
 		return fmt.Errorf("parse SKILL.md: %w", err)
 	}
 
+	// Use the name from SKILL.md frontmatter (not directory name)
+	skillName := skillFile.Manifest.Name
+
 	// 3. Copy scripts to local store
-	skillDir := store.SkillDir(name)
+	skillDir := store.SkillDir(skillName)
 	scriptsDir := filepath.Join(skillDir, "scripts")
 	os.MkdirAll(scriptsDir, 0755)
 
-	embeddedScriptsDir := filepath.Join("system-skills", name, "scripts")
+	embeddedScriptsDir := filepath.Join("system-skills", dirPath, "scripts")
 	if err := copyEmbeddedDir(systemSkillsFS, embeddedScriptsDir, scriptsDir); err != nil {
-		log.Printf("[system-skills] warning: copy scripts for %q: %v", name, err)
+		log.Printf("[system-skills] warning: copy scripts for %q: %v", skillName, err)
 	}
 
 	// Also write SKILL.md to local store
@@ -98,12 +131,13 @@ func installOneSystemSkill(db *storage.DB, store *LocalStore, name string) error
 	}
 
 	record := &storage.SkillRecord{
-		ID:              "system/" + name,
-		Name:            name,
+		ID:              "system/" + skillName,
+		Name:            skillName,
 		Description:     skillFile.Manifest.Description,
 		Version:         version,
 		Scope:           "system",
 		Source:          "builtin",
+		SourceURL:       sourceURL,
 		ManifestJSON:    manifestJSON,
 		Instructions:    skillFile.Body,
 		HasScripts:      hasScripts,
