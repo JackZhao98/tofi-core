@@ -352,7 +352,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		log.Printf("⚠️  [chat:%s] failed to save running state: %v", sessionID[:8], err)
 	}
 
-	// 8. Build AgentConfig — split tools into core (always available) and deferred (on-demand)
+	// 8. Build AgentConfig
 	var liveUsage provider.Usage // real-time usage updated during agent loop
 
 	// Core tools: always available in every chat session
@@ -366,46 +366,55 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	coreTools = append(coreTools, s.buildBuiltinTools(userID)...)
 	coreTools = append(coreTools, buildSessionInfoTool(session, resolvedModel, &liveUsage))
 
-	// Deferred tools: only activated via tofi_tool_search
-	deferredTools := s.buildAppTools(userID)
+	// Bundle app tools with the "apps" skill (activated when AI loads the skill)
+	appTools := s.buildAppTools(userID)
+	for i := range skillTools {
+		if skillTools[i].Name == "apps" {
+			skillTools[i].BundledTools = append(skillTools[i].BundledTools, appTools...)
+			break
+		}
+	}
 
-	// Resolve app ID from agent scope (e.g. "agent:app-daily-ip" → find matching app)
-	notifyAppID := ""
-	if agentName, ok := strings.CutPrefix(scope, chat.ScopeAgentPrefix); ok {
-		// Agent scope format: "app-{id_prefix}" — try to find matching app
-		if appIDPrefix, ok := strings.CutPrefix(agentName, "app-"); ok {
-			// Try exact match first, then prefix match
-			if app, err := s.db.GetApp(appIDPrefix); err == nil {
-				notifyAppID = app.ID
-			} else {
-				// Prefix match: scheduler truncates ID to 8 chars
-				apps, _ := s.db.ListApps(userID)
-				for _, a := range apps {
-					if strings.HasPrefix(a.ID, appIDPrefix) {
-						notifyAppID = a.ID
-						break
+	// Bundle tofi_notify with a notify skill (for interactive chat)
+	// App runs don't need this — the runtime auto-sends notifications after completion
+	if !isAppRun {
+		notifyAppID := ""
+		if agentName, ok := strings.CutPrefix(scope, chat.ScopeAgentPrefix); ok {
+			if appIDPrefix, ok := strings.CutPrefix(agentName, "app-"); ok {
+				if app, err := s.db.GetApp(appIDPrefix); err == nil {
+					notifyAppID = app.ID
+				} else {
+					apps, _ := s.db.ListApps(userID)
+					for _, a := range apps {
+						if strings.HasPrefix(a.ID, appIDPrefix) {
+							notifyAppID = a.ID
+							break
+						}
 					}
 				}
 			}
 		}
+		notifyDeps := connect.NotifyDeps{
+			ListConnectorsByApp:    s.db.ListConnectorsByApp,
+			ListConnectors:         s.db.ListConnectors,
+			ListConnectorReceivers: s.db.ListConnectorReceivers,
+		}
+		notifyTools := connect.InjectNotifyTool(nil, userID, notifyAppID, notifyDeps)
+		// Bundle with a "notify" skill entry
+		skillTools = append(skillTools, mcp.SkillTool{
+			Name:         "notify",
+			Description:  "Send notifications to configured channels (Telegram, Slack, Discord, Email)",
+			Instructions: "Use the tofi_notify tool to send a message to the user's configured notification channels.",
+			BundledTools: notifyTools,
+		})
 	}
-
-	// Inject tofi_notify into deferred tools (for interactive chat use)
-	// App runs don't need this — the runtime auto-sends notifications after completion
-	notifyDeps := connect.NotifyDeps{
-		ListConnectorsByApp:    s.db.ListConnectorsByApp,
-		ListConnectors:         s.db.ListConnectors,
-		ListConnectorReceivers: s.db.ListConnectorReceivers,
-	}
-	deferredTools = connect.InjectNotifyTool(deferredTools, userID, notifyAppID, notifyDeps)
 
 	agentCfg := mcp.AgentConfig{
-		System:        systemPrompt,
-		Messages:      providerMessages,
-		MCPServers:    capMCPServers,
-		SkillTools:    skillTools,
-		ExtraTools:    coreTools,
-		DeferredTools: deferredTools,
+		System:     systemPrompt,
+		Messages:   providerMessages,
+		MCPServers: capMCPServers,
+		SkillTools: skillTools,
+		ExtraTools: coreTools,
 		LiveUsage:  &liveUsage,
 		SandboxDir: sandboxDir,
 		UserDir:    userID,

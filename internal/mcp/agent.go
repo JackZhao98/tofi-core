@@ -28,7 +28,8 @@ type SkillTool struct {
 	Name         string
 	Description  string
 	Instructions string
-	SkillDir     string // Absolute path to skill directory on disk (empty if no scripts)
+	SkillDir     string             // Absolute path to skill directory on disk (empty if no scripts)
+	BundledTools []ExtraBuiltinTool // Tools that come with this skill — activated when skill is loaded
 }
 
 // ExtraBuiltinTool allows registering additional built-in tools with custom handlers
@@ -46,9 +47,8 @@ type AgentConfig struct {
 	Messages      []provider.Message // Optional: full conversation history (overrides Prompt if non-empty)
 	MCPServers    []MCPServerConfig  // Active MCP server connections
 	SessionID     string             // Session/task identifier for streaming callbacks
-	SkillTools    []SkillTool        // Installed skills as callable tools
-	ExtraTools    []ExtraBuiltinTool // Additional built-in tools (search_skills, etc.)
-	DeferredTools []ExtraBuiltinTool // Tools listed by name only; activated via tofi_tool_search
+	SkillTools    []SkillTool        // Installed skills (deferred — loaded on-demand via tofi_load_skill)
+	ExtraTools    []ExtraBuiltinTool // Core built-in tools (always available)
 	SandboxDir    string             // Sandbox directory for shell command execution (optional)
 	UserDir       string             // User persistent directory for installed tools (optional)
 	Executor      executor.Executor  // Sandbox executor (nil = use legacy functions)
@@ -242,10 +242,27 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 
 			loadedSkills[name] = true
 
+			// Activate bundled tools (if any)
+			var activatedTools []string
+			for _, bt := range skill.BundledTools {
+				// Skip if already registered
+				alreadyRegistered := false
+				for _, t := range allTools {
+					if t.Name == bt.Schema.Name {
+						alreadyRegistered = true
+						break
+					}
+				}
+				if !alreadyRegistered {
+					allTools = append(allTools, bt.Schema)
+					extraHandlers[bt.Schema.Name] = bt.Handler
+					activatedTools = append(activatedTools, bt.Schema.Name)
+				}
+			}
+
 			// If skill has scripts, register the run_skill tool dynamically
 			if skill.SkillDir != "" {
 				runToolName := "run_skill__" + sanitizeToolName(name)
-				// Only add if not already registered
 				alreadyRegistered := false
 				for _, t := range allTools {
 					if t.Name == runToolName {
@@ -268,111 +285,15 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 							"required": []string{"input"},
 						},
 					})
+					activatedTools = append(activatedTools, runToolName)
 				}
 			}
 
 			result := fmt.Sprintf("# Skill: %s\n\n%s", name, skill.Instructions)
-			if skill.SkillDir != "" {
-				result += fmt.Sprintf("\n\n---\nThis skill has scripts. Use `run_skill__%s` to execute it, or use `tofi_shell` to run scripts directly from `skills/%s/scripts/`.", sanitizeToolName(name), name)
+			if len(activatedTools) > 0 {
+				result += fmt.Sprintf("\n\n---\nActivated tools: %s\nThese tools are now callable.", strings.Join(activatedTools, ", "))
 			}
 			return result, nil
-		}
-	}
-
-	// Register deferred tools (not sent to LLM until activated via tofi_tool_search)
-	deferredSchemas := make(map[string]provider.Tool)
-	deferredHandlers := make(map[string]func(map[string]interface{}) (string, error))
-	for _, dt := range cfg.DeferredTools {
-		deferredSchemas[dt.Schema.Name] = dt.Schema
-		deferredHandlers[dt.Schema.Name] = dt.Handler
-	}
-
-	if len(deferredSchemas) > 0 {
-		// Build the name→description index for search
-		type deferredEntry struct {
-			Name string
-			Desc string
-		}
-		var deferredIndex []deferredEntry
-		for _, dt := range cfg.DeferredTools {
-			deferredIndex = append(deferredIndex, deferredEntry{dt.Schema.Name, dt.Schema.Description})
-		}
-
-		allTools = append(allTools, provider.Tool{
-			Name: "tofi_tool_search",
-			Description: "Search for and activate additional tools by keyword. " +
-				"Some tools are not loaded by default to keep the context clean. " +
-				"Use this to find tools when you need capabilities beyond the currently available ones. " +
-				"Once activated, the tools become callable on subsequent turns.",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"query": map[string]interface{}{
-						"type":        "string",
-						"description": "Search query — keyword to match against tool names and descriptions",
-					},
-				},
-				"required": []string{"query"},
-			},
-		})
-
-		extraHandlers["tofi_tool_search"] = func(args map[string]interface{}) (string, error) {
-			queryRaw := strings.ToLower(fmt.Sprintf("%v", args["query"]))
-			// Split query into words for flexible matching
-			queryWords := strings.Fields(queryRaw)
-			var activated []string
-			var results []string
-
-			for _, entry := range deferredIndex {
-				// Skip already-activated tools
-				if _, still := deferredSchemas[entry.Name]; !still {
-					continue
-				}
-
-				nameLower := strings.ToLower(entry.Name)
-				descLower := strings.ToLower(entry.Desc)
-				searchText := nameLower + " " + descLower
-
-				// Match if ANY query word is found in name or description
-				matched := false
-				for _, word := range queryWords {
-					if strings.Contains(searchText, word) {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					continue
-				}
-
-				// Activate: move from deferred to active
-				schema := deferredSchemas[entry.Name]
-				handler := deferredHandlers[entry.Name]
-				allTools = append(allTools, schema)
-				extraHandlers[entry.Name] = handler
-				delete(deferredSchemas, entry.Name)
-
-				activated = append(activated, entry.Name)
-				schemaJSON, _ := json.Marshal(schema)
-				results = append(results, string(schemaJSON))
-			}
-
-			if len(activated) == 0 {
-				// List all remaining deferred tools
-				var available []string
-				for _, entry := range deferredIndex {
-					if _, still := deferredSchemas[entry.Name]; still {
-						available = append(available, fmt.Sprintf("- %s: %s", entry.Name, entry.Desc))
-					}
-				}
-				if len(available) == 0 {
-					return "All tools are already activated.", nil
-				}
-				return "No tools matched query \"" + queryRaw + "\". Available deferred tools:\n" + strings.Join(available, "\n"), nil
-			}
-
-			return fmt.Sprintf("Activated %d tool(s): %s\n\nThese tools are now callable. Use them directly.",
-				len(activated), strings.Join(activated, ", ")), nil
 		}
 	}
 
@@ -417,9 +338,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		toolNames = append(toolNames, t.Name)
 	}
 	ctx.Log("[Agent] Registered %d tools: %s", len(allTools), strings.Join(toolNames, ", "))
-	ctx.Log("[Agent] Discovered %d tools across %d servers (+%d skills[deferred], +%d extra, +%d deferred-tools)",
-		len(allTools)-len(cfg.ExtraTools), len(activeClients),
-		len(cfg.SkillTools), len(cfg.ExtraTools), len(deferredSchemas))
+	ctx.Log("[Agent] Tools: %d core, %d skills (deferred)", len(cfg.ExtraTools), len(cfg.SkillTools))
 
 	// 3. Prepare System Prompt
 	if cfg.System == "" {
@@ -433,30 +352,10 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		for _, skill := range cfg.SkillTools {
 			skillLines = append(skillLines, fmt.Sprintf("- %s: %s", skill.Name, skill.Description))
 		}
-		systemPrompt += "\n<available-skills>\n" + strings.Join(skillLines, "\n") + "\n</available-skills>\n"
-	}
-
-	// Append deferred tool names to system prompt so the LLM knows what's available
-	if len(deferredSchemas) > 0 {
-		var deferredNames []string
-		for name := range deferredSchemas {
-			deferredNames = append(deferredNames, name)
-		}
-		systemPrompt += "\n<available-deferred-tools>\n" + strings.Join(deferredNames, "\n") + "\n</available-deferred-tools>\n"
-	}
-
-	// Guidance for on-demand loading (skills + deferred tools)
-	if len(cfg.SkillTools) > 0 || len(deferredSchemas) > 0 {
+		systemPrompt += "\n\n<available-skills>\n" + strings.Join(skillLines, "\n") + "\n</available-skills>\n"
 		systemPrompt += `
-## On-Demand Loading
-You have additional skills and tools that are NOT loaded by default. They are listed above by name.
-
-- **Skills** (<available-skills>): Call tofi_load_skill to get full instructions before using.
-- **Deferred tools** (<available-deferred-tools>): Call tofi_tool_search to activate before using.
-
-**When to load**: Only when the user's request genuinely requires a capability you don't currently have. Use your judgment — if you already have the tools/context needed (e.g., from earlier in the conversation), just act directly. Do NOT load on every message.
-**When NOT to load**: Casual conversation, follow-up questions about something you already handled, or tasks achievable with your current tools.
-**Honesty rule**: Never pretend to perform an action without the corresponding tool. If you need a capability you don't have and can't find it, say so.
+## Skills
+You have skills listed in <available-skills>. Call tofi_load_skill with the skill name to get instructions and activate its tools. Only load when the user's request requires it — not on every message. If you already loaded a skill or have the tools from earlier in the conversation, just use them directly. Never pretend to do something without the right tools.
 `
 	}
 
