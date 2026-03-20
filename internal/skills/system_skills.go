@@ -18,6 +18,7 @@ var systemSkillsFS embed.FS
 
 // InstallSystemSkills scans the embedded system-skills directory and installs/updates
 // each skill into the database and local store. Idempotent — only updates when needed.
+// Also cleans up system skills that no longer exist in the embedded FS.
 func InstallSystemSkills(db *storage.DB, homeDir string) {
 	entries, err := systemSkillsFS.ReadDir("system-skills")
 	if err != nil {
@@ -31,6 +32,9 @@ func InstallSystemSkills(db *storage.DB, homeDir string) {
 		return
 	}
 
+	// Track which skill names we install (for cleanup)
+	installedNames := make(map[string]bool)
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -39,10 +43,14 @@ func InstallSystemSkills(db *storage.DB, homeDir string) {
 
 		// Install the top-level skill if it has a SKILL.md
 		skillMDPath := filepath.Join("system-skills", name, "SKILL.md")
-		if _, err := systemSkillsFS.ReadFile(skillMDPath); err == nil {
+		if data, err := systemSkillsFS.ReadFile(skillMDPath); err == nil {
 			if err := installOneSystemSkill(db, store, name, ""); err != nil {
 				log.Printf("[system-skills] failed to install %q: %v", name, err)
 			} else {
+				// Extract the actual name from SKILL.md frontmatter
+				if sf, err := Parse(data); err == nil {
+					installedNames[sf.Manifest.Name] = true
+				}
 				log.Printf("[system-skills] ✓ installed/updated %q", name)
 			}
 		}
@@ -58,14 +66,34 @@ func InstallSystemSkills(db *storage.DB, homeDir string) {
 				continue
 			}
 			subSkillMD := filepath.Join("system-skills", name, sub.Name(), "SKILL.md")
-			if _, err := systemSkillsFS.ReadFile(subSkillMD); err != nil {
+			subData, err := systemSkillsFS.ReadFile(subSkillMD)
+			if err != nil {
 				continue
 			}
 			subPath := filepath.Join(name, sub.Name())
 			if err := installOneSystemSkill(db, store, subPath, packSourceURL); err != nil {
 				log.Printf("[system-skills] failed to install %q: %v", sub.Name(), err)
 			} else {
+				if sf, err := Parse(subData); err == nil {
+					installedNames[sf.Manifest.Name] = true
+				}
 				log.Printf("[system-skills] ✓ installed/updated %q (pack: %s)", sub.Name(), name)
+			}
+		}
+	}
+
+	// Cleanup: remove system skills from DB that no longer exist in embedded FS
+	existing, err := db.ListSystemSkills()
+	if err != nil {
+		log.Printf("[system-skills] failed to list existing: %v", err)
+		return
+	}
+	for _, rec := range existing {
+		if !installedNames[rec.Name] {
+			if err := db.DeleteSkill(rec.ID, "system"); err != nil {
+				log.Printf("[system-skills] failed to remove stale %q: %v", rec.Name, err)
+			} else {
+				log.Printf("[system-skills] 🗑 removed stale %q (no longer in embedded FS)", rec.Name)
 			}
 		}
 	}
