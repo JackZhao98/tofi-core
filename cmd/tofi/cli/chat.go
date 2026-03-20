@@ -98,6 +98,15 @@ type sessionMessage struct {
 	Content string `json:"Content"`
 }
 
+// thinkingBlock stores a collapsible thinking block.
+type thinkingBlock struct {
+	duration string
+	content  string
+	expanded bool
+}
+
+const thinkingBlockMarker = "%%THINKING_BLOCK_%d%%"
+
 // --- Bubble Tea messages ---
 
 type streamChunkMsg struct{ delta string }
@@ -181,6 +190,10 @@ type chatModel struct {
 	thinkingBuf   strings.Builder // accumulated thinking text
 	thinkingDone  bool            // true after first content chunk arrives
 	thinkingStart time.Time       // when thinking started
+
+	// Collapsible thinking blocks (click to expand/collapse)
+	thinkingBlocks []thinkingBlock // stored thinking blocks
+
 	contextPct        int
 	width             int
 	height            int
@@ -505,6 +518,24 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease {
+			// Check if clicked on a thinking block header line
+			viewContent := m.viewportContent()
+			lines := strings.Split(viewContent, "\n")
+			absLine := m.viewport.YOffset + msg.Y - 1 // -1 for header
+			if absLine >= 0 && absLine < len(lines) {
+				line := lines[absLine]
+				if strings.Contains(line, "💭 thought for") {
+					for i := range m.thinkingBlocks {
+						if strings.Contains(line, m.thinkingBlocks[i].duration) {
+							m.thinkingBlocks[i].expanded = !m.thinkingBlocks[i].expanded
+							m.refreshViewport()
+							return m, nil
+						}
+					}
+				}
+			}
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
@@ -1150,16 +1181,49 @@ func (m *chatModel) renderCompletionList(iw int) []string {
 
 func (m *chatModel) viewportContent() string {
 	base := "\n" + m.content.String()
+
+	// Replace thinking block markers with rendered blocks
+	for i, tb := range m.thinkingBlocks {
+		marker := fmt.Sprintf(thinkingBlockMarker, i)
+		rendered := m.renderThinkingBlock(i, tb)
+		base = strings.Replace(base, marker, rendered, 1)
+	}
+
 	if m.streaming {
 		base += m.renderStreamingBlock()
 	}
 	return base
 }
 
+func (m *chatModel) renderThinkingBlock(idx int, tb thinkingBlock) string {
+	thinkStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6e7681")).
+		Italic(true).
+		PaddingLeft(1)
+
+	if tb.expanded {
+		// Expanded: show header + full content
+		header := thinkStyle.Render(fmt.Sprintf("💭 thought for %s ▼", tb.duration))
+		iw := m.innerWidth() - 2
+		var lines []string
+		for _, line := range strings.Split(tb.content, "\n") {
+			r := []rune(line)
+			if len(r) > iw {
+				r = r[:iw]
+			}
+			lines = append(lines, thinkStyle.Render(string(r)))
+		}
+		return header + "\n" + strings.Join(lines, "\n")
+	}
+
+	// Collapsed: just the header
+	return thinkStyle.Render(fmt.Sprintf("💭 thought for %s ▶", tb.duration))
+}
+
 func (m *chatModel) renderStreamingBlock() string {
 	var out strings.Builder
 
-	// Show thinking block (gray, max 3 lines)
+	// Show thinking block — full content while streaming, collapsed when done
 	if m.thinkingBuf.Len() > 0 {
 		thinkStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6e7681")).
@@ -1169,16 +1233,12 @@ func (m *chatModel) renderStreamingBlock() string {
 		if m.thinkingDone {
 			// Collapsed: show duration only
 			dur := time.Since(m.thinkingStart).Truncate(time.Millisecond)
-			out.WriteString(thinkStyle.Render(fmt.Sprintf("💭 thinking (%s)", dur)) + "\n")
+			out.WriteString(thinkStyle.Render(fmt.Sprintf("💭 thought for %s", dur)) + "\n")
 		} else {
-			// In progress: show last 3 lines of thinking
+			// In progress: show ALL thinking content as gray text
+			iw := m.innerWidth() - 2
 			lines := strings.Split(m.thinkingBuf.String(), "\n")
-			start := len(lines) - 3
-			if start < 0 {
-				start = 0
-			}
-			iw := m.innerWidth() - 2 // padding
-			for _, line := range lines[start:] {
+			for _, line := range lines {
 				r := []rune(line)
 				if len(r) > iw {
 					r = r[:iw]
@@ -1209,15 +1269,16 @@ func (m *chatModel) renderStreamingBlock() string {
 }
 
 func (m *chatModel) finalizeStreamBlock() {
-	// Persist thinking collapsed line if there was thinking
+	// Persist thinking as collapsible block
 	if m.thinkingBuf.Len() > 0 && !m.thinkingStart.IsZero() {
 		dur := time.Since(m.thinkingStart).Truncate(time.Millisecond)
-		thinkLine := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6e7681")).
-			Italic(true).
-			PaddingLeft(1).
-			Render(fmt.Sprintf("💭 thinking (%s)", dur))
-		m.content.WriteString(thinkLine + "\n")
+		idx := len(m.thinkingBlocks)
+		m.thinkingBlocks = append(m.thinkingBlocks, thinkingBlock{
+			duration: dur.String(),
+			content:  m.thinkingBuf.String(),
+		})
+		// Insert marker that will be replaced during rendering
+		m.content.WriteString(fmt.Sprintf(thinkingBlockMarker, idx) + "\n\n")
 		m.thinkingBuf.Reset()
 		m.thinkingStart = time.Time{}
 	}
@@ -1680,7 +1741,28 @@ func (m *chatModel) showRecentMessages(messages []sessionMessage) {
 		return
 	}
 
-	start := len(messages) - 6
+	// Filter to only displayable messages (user + non-empty assistant)
+	type displayMsg struct {
+		role    string
+		content string
+	}
+	var visible []displayMsg
+	for _, msg := range messages {
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+		if msg.Role == "tool" {
+			continue
+		}
+		visible = append(visible, displayMsg{role: msg.Role, content: content})
+	}
+
+	if len(visible) == 0 {
+		return
+	}
+
+	start := len(visible) - 6
 	if start < 0 {
 		start = 0
 	}
@@ -1689,14 +1771,14 @@ func (m *chatModel) showRecentMessages(messages []sessionMessage) {
 		m.appendContent("")
 	}
 
-	for _, msg := range messages[start:] {
-		content := strings.TrimSpace(msg.Content)
+	for _, msg := range visible[start:] {
+		content := msg.content
 		// Collapse multiple blank lines to single newline for compact history display
 		for strings.Contains(content, "\n\n") {
 			content = strings.ReplaceAll(content, "\n\n", "\n")
 		}
 
-		switch msg.Role {
+		switch msg.role {
 		case "user":
 			m.appendContent(m.renderUserMsg(content))
 			m.appendContent("")

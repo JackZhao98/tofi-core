@@ -59,7 +59,6 @@ func convertMessages(msgs []Message) []provider.Message {
 			ToolCallID: msg.CallID,
 			ToolName:   msg.Name,
 		}
-		// Convert tool calls
 		for _, tc := range msg.ToolCalls {
 			pm.ToolCalls = append(pm.ToolCalls, provider.ToolCall{
 				ID:        tc.ID,

@@ -82,12 +82,7 @@ func (s *Server) buildCreateAppTool(userID string) mcp.ExtraBuiltinTool {
 	return mcp.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name: "tofi_create_app",
-			Description: `Create a new App (automated AI task). The prompt is the instruction the AI will execute each run.
-
-⚠️ IMPORTANT: You MUST call tofi_display_app_plan FIRST to show the plan to the user and get their explicit confirmation BEFORE calling this tool. NEVER call tofi_create_app without prior tofi_display_app_plan + user confirmation.
-
-Schedule format is a JSON object string with entries and timezone.
-Skills is an array of skill names to attach.`,
+			Description: `Create a new App (automated AI task). The prompt is the instruction the AI will execute each run. Schedule format is a JSON object string with entries and timezone. Skills is an array of skill names to attach.`,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

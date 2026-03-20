@@ -114,6 +114,12 @@ func (o *openaiResponses) buildPayload(req *ChatRequest, stream bool) map[string
 		payload["stream"] = true
 	}
 
+	// Enable reasoning with summary for models that support it
+	payload["reasoning"] = map[string]interface{}{
+		"effort":  "medium",
+		"summary": "auto",
+	}
+
 	// Convert messages to Responses API input format
 	input := o.convertMessages(req.Messages)
 	if len(input) > 0 {
@@ -356,7 +362,7 @@ func (o *openaiResponses) parseStream(body io.Reader, onDelta func(StreamDelta))
 			}
 
 		case "response.output_item.added":
-			// A new output item — could be function_call
+			// A new output item — could be function_call or reasoning
 			var ev struct {
 				OutputIndex int `json:"output_index"`
 				Item        struct {
@@ -401,6 +407,31 @@ func (o *openaiResponses) parseStream(body io.Reader, onDelta func(StreamDelta))
 								Arguments: ev.Delta,
 							}},
 						})
+					}
+				}
+			}
+
+		case "response.output_item.done":
+			// Check for reasoning item with summary
+			var ev struct {
+				Item json.RawMessage `json:"item"`
+			}
+			if json.Unmarshal([]byte(data), &ev) == nil {
+				var item struct {
+					Type    string `json:"type"`
+					Summary []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"summary"`
+				}
+				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "reasoning" {
+					for _, s := range item.Summary {
+						if s.Text != "" {
+							reasoningBuf.WriteString(s.Text)
+							if onDelta != nil {
+								onDelta(StreamDelta{Reasoning: s.Text})
+							}
+						}
 					}
 				}
 			}

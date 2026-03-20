@@ -511,11 +511,25 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		Content: message,
 	})
 
-	session.AddMessage(chat.Message{
-		Role:    "assistant",
-		Content: agentResult.Content,
-		Tokens:  int(agentResult.TotalUsage.OutputTokens),
-	})
+	// Persist all intermediate messages (assistant + tool calls + tool responses)
+	for _, msg := range agentResult.Messages {
+		chatMsg := chat.Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+		if msg.Role == "tool" {
+			chatMsg.CallID = msg.ToolCallID
+			chatMsg.Name = msg.ToolName
+		}
+		for _, tc := range msg.ToolCalls {
+			chatMsg.ToolCalls = append(chatMsg.ToolCalls, chat.ToolCall{
+				ID:    tc.ID,
+				Name:  tc.Name,
+				Input: tc.Arguments,
+			})
+		}
+		session.AddMessage(chatMsg)
+	}
 
 	// Update usage
 	session.Usage.InputTokens += agentResult.TotalUsage.InputTokens

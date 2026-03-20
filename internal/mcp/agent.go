@@ -79,7 +79,8 @@ type AgentResult struct {
 	TotalCost    float64
 	Model        string
 	LLMCalls     int
-	LoadedSkills []string // Skills that were loaded during this agent loop (for persistence)
+	LoadedSkills []string             // Skills that were loaded during this agent loop (for persistence)
+	Messages     []provider.Message   // All new messages from this turn (assistant + tool calls + tool responses)
 }
 
 // RunAgentLoop executes the autonomous agent loop (ReAct)
@@ -401,6 +402,7 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 	}
 
 	// 4. Start Loop
+	initialMsgCount := len(messages) // track where new messages start
 	maxSteps := 30
 	totalUsage := provider.Usage{}
 	llmCalls := 0
@@ -418,15 +420,34 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 
 		if cfg.OnStreamChunk != nil {
 			// Streaming mode — wrap callback to filter out <think> blocks
-			filter := &thinkStreamFilter{forward: func(delta string) {
-				cfg.OnStreamChunk(cfg.SessionID, delta)
-			}}
+			firstThinkTag := true
+			filter := &thinkStreamFilter{
+				forward: func(delta string) {
+					cfg.OnStreamChunk(cfg.SessionID, delta)
+				},
+				onThinking: func(delta string) {
+					if firstThinkTag {
+						ctx.Log("[Agent] Received <think> tag stream")
+						firstThinkTag = false
+					}
+					if cfg.OnThinkingChunk != nil {
+						cfg.OnThinkingChunk(cfg.SessionID, delta)
+					}
+				},
+			}
+			firstReasoning := true
 			resp, err = cfg.Provider.ChatStream(context.Background(), req, func(delta provider.StreamDelta) {
 				if delta.Content != "" {
 					filter.Write(delta.Content)
 				}
-				if delta.Reasoning != "" && cfg.OnThinkingChunk != nil {
-					cfg.OnThinkingChunk(cfg.SessionID, delta.Reasoning)
+				if delta.Reasoning != "" {
+					if firstReasoning {
+						ctx.Log("[Agent] Received reasoning/thinking stream")
+						firstReasoning = false
+					}
+					if cfg.OnThinkingChunk != nil {
+						cfg.OnThinkingChunk(cfg.SessionID, delta.Reasoning)
+					}
 				}
 			})
 		} else {
@@ -478,6 +499,7 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 					Model:        cfg.Model,
 					LLMCalls:     llmCalls,
 					LoadedSkills: mapKeys(loadedSkills),
+					Messages:     messages[initialMsgCount:],
 				}, nil
 			}
 
@@ -847,6 +869,7 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 			Model:        cfg.Model,
 			LLMCalls:     llmCalls,
 			LoadedSkills: mapKeys(loadedSkills),
+			Messages:     messages[initialMsgCount:],
 		}, nil
 	}
 
@@ -912,11 +935,13 @@ func stripThinkTags(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// thinkStreamFilter wraps a streaming callback to suppress <think> blocks in real-time.
+// thinkStreamFilter wraps a streaming callback to suppress <think> blocks in real-time,
+// redirecting thinking content to onThinking instead.
 type thinkStreamFilter struct {
-	forward func(string)
-	buf     strings.Builder
-	inside  bool
+	forward    func(string)
+	onThinking func(string) // called with content inside <think> blocks
+	buf        strings.Builder
+	inside     bool
 }
 
 func (f *thinkStreamFilter) Write(delta string) {
@@ -927,23 +952,35 @@ func (f *thinkStreamFilter) Write(delta string) {
 		if f.inside {
 			end := strings.Index(text, "</think>")
 			if end == -1 {
-				// Still inside think block, consume all and wait
+				// Still inside think block
+				// Check for partial closing tag at end (e.g., "</thi")
+				holdback := partialTagSuffix(text, "</think>")
+				toForward := text[:len(text)-len(holdback)]
+				if toForward != "" && f.onThinking != nil {
+					f.onThinking(toForward)
+				}
 				f.buf.Reset()
-				f.buf.WriteString(text)
+				f.buf.WriteString(holdback)
 				return
 			}
-			// Skip past </think>
+			// Forward thinking content before </think>
+			if end > 0 && f.onThinking != nil {
+				f.onThinking(text[:end])
+			}
 			text = text[end+len("</think>"):]
 			f.inside = false
 		}
 
 		start := strings.Index(text, "<think>")
 		if start == -1 {
-			// No think tag, forward everything
-			if text != "" {
-				f.forward(text)
+			// No think tag — but check for partial opening tag at end (e.g., "<thi")
+			holdback := partialTagSuffix(text, "<think>")
+			toForward := text[:len(text)-len(holdback)]
+			if toForward != "" {
+				f.forward(toForward)
 			}
 			f.buf.Reset()
+			f.buf.WriteString(holdback)
 			return
 		}
 
@@ -954,6 +991,18 @@ func (f *thinkStreamFilter) Write(delta string) {
 		text = text[start+len("<think>"):]
 		f.inside = true
 	}
+}
+
+// partialTagSuffix checks if text ends with a partial prefix of tag.
+// e.g., text="hello<thi", tag="<think>" → returns "<thi"
+func partialTagSuffix(text, tag string) string {
+	for i := 1; i < len(tag); i++ {
+		suffix := tag[:i]
+		if strings.HasSuffix(text, suffix) {
+			return suffix
+		}
+	}
+	return ""
 }
 
 // ---------------- Helpers ----------------

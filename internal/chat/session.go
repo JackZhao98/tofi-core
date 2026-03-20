@@ -66,14 +66,14 @@ type Usage struct {
 
 // Message represents a single message in a chat session.
 type Message struct {
-	XMLName    xml.Name    `xml:"msg"`
-	Role       string      `xml:"role,attr"`
-	Timestamp  string      `xml:"ts,attr,omitempty"`
-	Tokens     int         `xml:"tokens,attr,omitempty"`
-	CallID     string      `xml:"call_id,attr,omitempty"` // for tool response messages
-	Name       string      `xml:"name,attr,omitempty"`    // tool name for tool responses
-	Content    string      `xml:",chardata"`
-	ToolCalls  []ToolCall  `xml:"tool_calls>call,omitempty"`
+	XMLName   xml.Name   `xml:"msg"`
+	Role      string     `xml:"role,attr"`
+	Timestamp string     `xml:"ts,attr,omitempty"`
+	Tokens    int        `xml:"tokens,attr,omitempty"`
+	CallID    string     `xml:"call_id,attr,omitempty"` // for tool response messages
+	Name      string     `xml:"name,attr,omitempty"`    // tool name for tool responses
+	Content   string     `xml:",chardata"`
+	ToolCalls []ToolCall `xml:"-"` // custom marshal — omit empty wrapper
 }
 
 // ToolCall represents an LLM-initiated tool invocation within an assistant message.
@@ -82,6 +82,100 @@ type ToolCall struct {
 	ID      string   `xml:"id,attr"`
 	Name    string   `xml:"name,attr"`
 	Input   string   `xml:"input"`
+}
+
+// toolCallsWrapper is used for XML marshal/unmarshal of tool_calls.
+type toolCallsWrapper struct {
+	XMLName xml.Name   `xml:"tool_calls"`
+	Calls   []ToolCall `xml:"call"`
+}
+
+// MarshalXML customizes Message XML output to omit empty <tool_calls/>.
+func (m Message) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	start.Name = xml.Name{Local: "msg"}
+	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "role"}, Value: m.Role})
+	if m.Timestamp != "" {
+		start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "ts"}, Value: m.Timestamp})
+	}
+	if m.Tokens > 0 {
+		start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "tokens"}, Value: fmt.Sprintf("%d", m.Tokens)})
+	}
+	if m.CallID != "" {
+		start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "call_id"}, Value: m.CallID})
+	}
+	if m.Name != "" {
+		start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "name"}, Value: m.Name})
+	}
+
+	if err := e.EncodeToken(start); err != nil {
+		return err
+	}
+
+	// Content as chardata
+	if m.Content != "" {
+		if err := e.EncodeToken(xml.CharData(m.Content)); err != nil {
+			return err
+		}
+	}
+
+	// Only output <tool_calls> if there are actual calls
+	if len(m.ToolCalls) > 0 {
+		if err := e.Encode(toolCallsWrapper{Calls: m.ToolCalls}); err != nil {
+			return err
+		}
+	}
+
+	return e.EncodeToken(start.End())
+}
+
+// UnmarshalXML customizes Message XML input to handle tool_calls.
+func (m *Message) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	for _, attr := range start.Attr {
+		switch attr.Name.Local {
+		case "role":
+			m.Role = attr.Value
+		case "ts":
+			m.Timestamp = attr.Value
+		case "tokens":
+			fmt.Sscanf(attr.Value, "%d", &m.Tokens)
+		case "call_id":
+			m.CallID = attr.Value
+		case "name":
+			m.Name = attr.Value
+		}
+	}
+
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			m.Content += string(t)
+		case xml.StartElement:
+			if t.Name.Local == "tool_calls" {
+				var w toolCallsWrapper
+				if err := d.DecodeElement(&w, &t); err != nil {
+					return err
+				}
+				m.ToolCalls = w.Calls
+			} else {
+				if err := d.Skip(); err != nil {
+					return err
+				}
+			}
+		case xml.EndElement:
+			// Trim whitespace-only content
+			trimmed := strings.TrimSpace(m.Content)
+			if trimmed == "" {
+				m.Content = ""
+			} else {
+				m.Content = trimmed
+			}
+			return nil
+		}
+	}
 }
 
 // NewSessionID 生成新的 session ID
