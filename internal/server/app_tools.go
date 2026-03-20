@@ -565,14 +565,31 @@ func (s *Server) buildListNotifyTargetsTool(userID string) mcp.ExtraBuiltinTool 
 					return "", fmt.Errorf("failed to list targets: %w", err)
 				}
 
-				if len(targets) == 0 {
-					return fmt.Sprintf("App '%s' has no notify targets configured.", app.Name), nil
+				if len(targets) > 0 {
+					var out strings.Builder
+					out.WriteString(fmt.Sprintf("Notify targets for '%s':\n", app.Name))
+					for _, t := range targets {
+						out.WriteString(fmt.Sprintf("- %s (ID: %d, connector: %s)\n", t.DisplayName, t.ID, t.ConnectorID[:8]))
+					}
+					return out.String(), nil
+				}
+
+				// No app-specific targets — check global connectors (platform auto-delivers to these)
+				connectors, err := s.db.ListConnectors(userID)
+				if err != nil || len(connectors) == 0 {
+					return fmt.Sprintf("App '%s' has no notify targets configured, and no global connectors available.", app.Name), nil
 				}
 
 				var out strings.Builder
-				out.WriteString(fmt.Sprintf("Notify targets for '%s':\n", app.Name))
-				for _, t := range targets {
-					out.WriteString(fmt.Sprintf("- %s (ID: %d, connector: %s)\n", t.DisplayName, t.ID, t.ConnectorID[:8]))
+				out.WriteString(fmt.Sprintf("App '%s' has no app-specific targets, but the platform will auto-deliver to global connectors:\n", app.Name))
+				for _, c := range connectors {
+					if !c.Enabled {
+						continue
+					}
+					receivers, _ := s.db.ListConnectorReceivers(c.ID)
+					for _, r := range receivers {
+						out.WriteString(fmt.Sprintf("- %s via %s (global)\n", r.DisplayName, c.Type))
+					}
 				}
 				return out.String(), nil
 			}

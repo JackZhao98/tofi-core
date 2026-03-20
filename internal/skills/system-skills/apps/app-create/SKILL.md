@@ -35,9 +35,7 @@ From the user's description, determine:
   The prompt should be 200-500 words. Think of it as writing a "soul" for this AI agent. A lazy one-liner prompt is UNACCEPTABLE.
 
 - **model**: call `tofi_list_models` to get available models, then pick one matching the task complexity
-- **skills**:
-  1. First check user's installed skills (they are already loaded in context)
-  2. If no matching skill exists, suggest the user install one or describe what capability is needed
+- **skills**: Only include skills the app AI needs for its TASK (e.g., web-search for fetching data). **NEVER include "notify"** — notifications are handled by the platform runtime, not by the app AI.
 - **schedule** (if timed):
   1. Call `tofi_get_time` (no args) to get the user's local timezone — use it as default, do NOT ask the user for timezone
   2. **Infer the best time from context.** If the user says "每天早上", pick 08:00. If "每天晚上", pick 20:00. If "工作日", pick weekdays. If the user doesn't specify a time at all, pick a sensible default (e.g., 09:00 for daily reports, 08:00 for morning tasks). Never ask the user to confirm the time separately — just include it in the Step 3 summary.
