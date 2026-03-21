@@ -40,6 +40,7 @@ type ExtraBuiltinTool struct {
 
 // AgentConfig holds the configuration required to run an autonomous agent
 type AgentConfig struct {
+	Ctx           context.Context    // Optional: cancellation context (nil = context.Background())
 	Provider      provider.Provider  // LLM provider (handles all API format differences)
 	Model         string             // Model name (for context window, cost calculation)
 	System        string
@@ -402,12 +403,30 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 	}
 
 	// 4. Start Loop
+	loopCtx := cfg.Ctx
+	if loopCtx == nil {
+		loopCtx = context.Background()
+	}
 	initialMsgCount := len(messages) // track where new messages start
 	maxSteps := 30
 	totalUsage := provider.Usage{}
 	llmCalls := 0
 
 	for step := 1; step <= maxSteps; step++ {
+		// Check for cancellation before starting a new LLM call
+		if loopCtx.Err() != nil {
+			ctx.Log("[Agent] Cancelled by client.")
+			return &AgentResult{
+				Content:      "",
+				TotalUsage:   totalUsage,
+				TotalCost:    provider.CalculateCost(cfg.Model, totalUsage),
+				Model:        cfg.Model,
+				LLMCalls:     llmCalls,
+				LoadedSkills: mapKeys(loadedSkills),
+				Messages:     messages[initialMsgCount:],
+			}, nil
+		}
+
 		req := &provider.ChatRequest{
 			Model:    cfg.Model,
 			System:   systemPrompt,
@@ -436,7 +455,7 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 				},
 			}
 			firstReasoning := true
-			resp, err = cfg.Provider.ChatStream(context.Background(), req, func(delta provider.StreamDelta) {
+			resp, err = cfg.Provider.ChatStream(loopCtx, req, func(delta provider.StreamDelta) {
 				if delta.Content != "" {
 					filter.Write(delta.Content)
 				}
@@ -452,10 +471,28 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 			})
 		} else {
 			// Non-streaming mode
-			resp, err = cfg.Provider.Chat(context.Background(), req)
+			resp, err = cfg.Provider.Chat(loopCtx, req)
 		}
 
 		if err != nil {
+			// If cancelled by client (ESC), return partial results instead of error
+			if loopCtx.Err() != nil {
+				ctx.Log("[Agent] Cancelled by client.")
+				lastContent := ""
+				if resp != nil {
+					lastContent = resp.Content
+					totalUsage.Add(resp.Usage)
+				}
+				return &AgentResult{
+					Content:      lastContent,
+					TotalUsage:   totalUsage,
+					TotalCost:    provider.CalculateCost(cfg.Model, totalUsage),
+					Model:        cfg.Model,
+					LLMCalls:     llmCalls + 1,
+					LoadedSkills: mapKeys(loadedSkills),
+					Messages:     messages[initialMsgCount:],
+				}, nil
+			}
 			return nil, fmt.Errorf("LLM call failed: %v", err)
 		}
 

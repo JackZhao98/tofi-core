@@ -2220,13 +2220,15 @@ func (m *chatModel) streamChatMessage(ctx context.Context, message string) {
 		}
 	}
 
-	if doneMsg.model == "" && fullContent.Len() == 0 {
-		m.sendMsg(streamErrorMsg{err: "stream ended unexpectedly"})
-		return
-	}
+	// If stream was cancelled (ESC) or ended without a done event,
+	// still send a done message with whatever content we received.
 	if doneMsg.model == "" {
+		if fullContent.Len() == 0 && ctx.Err() == nil {
+			m.sendMsg(streamErrorMsg{err: "stream ended unexpectedly"})
+			return
+		}
 		doneMsg.result = fullContent.String()
-		doneMsg.model = "unknown"
+		doneMsg.model = "(cancelled)"
 	}
 	m.sendMsg(doneMsg)
 }

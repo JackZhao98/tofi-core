@@ -41,6 +41,7 @@ type MessageHandler func(msg IncomingMessage)
 // ExecuteOptions 允许调用方自定义 agent 回调行为。
 // nil 表示使用默认的 SSE/onEvent 回调。
 type ExecuteOptions struct {
+	Ctx              context.Context // optional: cancels agent loop on client disconnect
 	OnStreamChunk    func(sessionID, delta string)
 	OnToolCall       func(toolName, input, output string, durationMs int64)
 	OnContextCompact func(summary string, originalTokens, compactedTokens int)

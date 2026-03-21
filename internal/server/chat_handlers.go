@@ -249,12 +249,18 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: connected\ndata: %s\n\n", connData)
 	flusher.Flush()
 
-	// 4. Execute via shared method with SSE-based callbacks
+	// 4. Execute via shared method with SSE-based callbacks.
+	// Use request context so that client disconnect (ESC) cancels the agent loop.
+	reqCtx := r.Context()
 	onEvent := func(eventType string, data any) {
+		// Skip sending if client already disconnected
+		if reqCtx.Err() != nil {
+			return
+		}
 		sendSSEEvent(w, flusher, eventType, data)
 	}
 
-	result, err := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, nil)
+	result, err := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, &bridge.ExecuteOptions{Ctx: reqCtx})
 	if err != nil {
 		sendSSEEvent(w, flusher, "error", map[string]string{"error": err.Error()})
 		return
@@ -434,6 +440,11 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		UserDir:         userID,
 		Executor:        s.executor,
 		SecretEnv:       secretEnv,
+	}
+
+	// Thread cancellation context
+	if opts != nil && opts.Ctx != nil {
+		agentCfg.Ctx = opts.Ctx
 	}
 
 	// Configure agent callbacks
