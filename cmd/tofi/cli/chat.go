@@ -140,12 +140,12 @@ type streamDoneMsg struct {
 	outputTokens int
 	cost         float64
 	contextPct   int
+	cancelled    bool
 }
 type streamErrorMsg struct{ err string }
 type streamCompactMsg struct{}
 type ctrlCResetMsg struct{}
-type titlePollMsg struct{}      // poll server for AI-generated title
-type titleAnimTickMsg struct{}  // typewriter animation tick
+type titlePollMsg struct{} // poll server for AI-generated title
 type resumeDoneMsg struct{ title string } // restore header after "Resuming" flash
 
 // --- Slash command definitions ---
@@ -194,13 +194,9 @@ type chatModel struct {
 	scope        string
 	model        string
 	skills       []string
-	sessionTitle     string // displayed in header: "New Chat" → AI-generated title
-	isNewSession     bool   // true until first AI response title is set
-	titleAnimating   bool   // typewriter animation in progress
-	titleTarget      string // target title to animate to
-	titleAnimIdx     int    // current char index in animation
-	titlePollCount   int    // retry counter for title polling
-	titleInitial     string // initial truncated title (to detect AI update)
+	sessionTitle   string // displayed in header: "New Chat" → AI-generated title
+	isNewSession   bool   // true until first AI response title is set
+	titlePollCount int    // retry counter for title polling
 	resumingTitle    string // non-empty = header shows "Resuming · title" temporarily
 
 	// Thinking/reasoning display
@@ -609,13 +605,17 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalOutputTokens += msg.outputTokens
 		m.totalCost += msg.cost
 		m.contextPct = msg.contextPct
-		if msg.model != "" && msg.model != "unknown" {
+		if msg.model != "" {
 			m.model = msg.model
 		}
 
 		totalTok := msg.inputTokens + msg.outputTokens
+		displayModel := msg.model
+		if msg.cancelled {
+			displayModel = "(cancelled)"
+		}
 		m.appendContent(subtitleStyle.Render(fmt.Sprintf(" %s · %d tokens · $%.4f",
-			msg.model, totalTok, msg.cost)))
+			displayModel, totalTok, msg.cost)))
 		m.appendContent("") // single blank line after turn
 
 		// After first AI response on new session, poll for AI-generated title
@@ -649,45 +649,14 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.titlePollCount > 10 {
 			return m, nil // give up
 		}
-		// Poll server for AI-generated title
 		var resp struct{ Title string `json:"Title"` }
 		if err := m.client.get("/api/v1/chat/sessions/"+m.sessionID, &resp); err == nil && resp.Title != "" {
-			// Compare with what's currently displayed ("New Chat" or truncated text)
 			if resp.Title != m.sessionTitle {
-				// Check if this is just the truncated version (not AI-generated yet)
-				if m.titleInitial == "" {
-					m.titleInitial = resp.Title // first value seen = truncated
-				}
-				// If different from initial (truncated) OR first poll already has AI title
-				// (detected by: title is shorter than truncated, or totally different)
-				isAITitle := resp.Title != m.titleInitial || m.titlePollCount >= 2
-				if isAITitle {
-					m.titleTarget = resp.Title
-					m.titleAnimIdx = 0
-					m.titleAnimating = true
-					m.sessionTitle = ""
-					return m, tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return titleAnimTickMsg{} })
-				}
-				// First poll: just set the truncated title, keep polling for AI title
 				m.sessionTitle = resp.Title
+				return m, nil // title updated, stop polling
 			}
 		}
 		return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return titlePollMsg{} })
-
-	case titleAnimTickMsg:
-		if !m.titleAnimating {
-			return m, nil
-		}
-		titleRunes := []rune(m.titleTarget)
-		m.titleAnimIdx++
-		if m.titleAnimIdx >= len(titleRunes) {
-			// Animation complete
-			m.sessionTitle = m.titleTarget
-			m.titleAnimating = false
-			return m, nil
-		}
-		m.sessionTitle = string(titleRunes[:m.titleAnimIdx])
-		return m, tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return titleAnimTickMsg{} })
 	}
 
 	if !m.streaming {
@@ -1906,9 +1875,6 @@ func (m *chatModel) handleSlashCommand(input string) {
 		m.totalCost = 0
 		m.contextPct = 0
 		m.resumingTitle = ""
-		m.titleAnimating = false
-		m.titleTarget = ""
-		m.titleInitial = ""
 		m.titlePollCount = 0
 		m.content.Reset()
 		if err := m.createNewSession(); err != nil {
@@ -2237,7 +2203,7 @@ func (m *chatModel) streamChatMessage(ctx context.Context, message string) {
 			return
 		}
 		doneMsg.result = fullContent.String()
-		doneMsg.model = "(cancelled)"
+		doneMsg.cancelled = true
 	}
 	m.sendMsg(doneMsg)
 }
