@@ -159,7 +159,7 @@ func (m *engineModel) executeAction(action string) tea.Cmd {
 				}
 				return engineActionDoneMsg{msg: "Engine started"}
 			case "stop":
-				if err := daemon.Stop(homeDir, false); err != nil {
+				if err := daemon.Stop(homeDir, true); err != nil {
 					return engineActionErrMsg{err: err}
 				}
 				return engineActionDoneMsg{msg: "Engine stopped"}
