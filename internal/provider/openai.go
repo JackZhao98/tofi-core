@@ -114,11 +114,14 @@ func (o *openaiResponses) buildPayload(req *ChatRequest, stream bool) map[string
 		payload["stream"] = true
 	}
 
-	// Enable reasoning with summary for models that support it
+	// Enable reasoning with summary for models that support it.
+	// include: ["reasoning.encrypted_content"] is critical — without it,
+	// OpenAI often returns empty summary arrays.
 	payload["reasoning"] = map[string]interface{}{
 		"effort":  "medium",
 		"summary": "auto",
 	}
+	payload["include"] = []string{"reasoning.encrypted_content"}
 
 	// Convert messages to Responses API input format
 	input := o.convertMessages(req.Messages)
