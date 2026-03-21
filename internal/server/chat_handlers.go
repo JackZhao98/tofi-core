@@ -633,6 +633,12 @@ Your text output is your ONLY deliverable. The platform runtime captures your fi
 Respond in the same language as the user. Be concise and helpful.
 Think before acting. If a tool fails, try a different approach. Always deliver real results, never give up.
 
+## Communication Style
+When a task requires multiple tool calls, narrate your progress with brief text BEFORE making each tool call. This keeps the user informed:
+- "Let me search for..." / "Found X, now checking..."  / "Looks like... let me try..."
+- Keep narration to 1 short sentence, then make the tool call in the SAME response.
+- Do NOT stay silent during multi-step work — the user should see your thought process.
+
 Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 
 	return prompt

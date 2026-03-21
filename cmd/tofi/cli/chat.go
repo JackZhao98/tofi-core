@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 	"github.com/spf13/cobra"
 )
 
@@ -550,7 +551,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					for i := range m.thinkingBlocks {
 						if strings.Contains(plain, m.thinkingBlocks[i].duration) {
 							m.thinkingBlocks[i].expanded = !m.thinkingBlocks[i].expanded
-							m.refreshViewport()
+							m.refreshViewportKeepScroll()
 							return m, nil
 						}
 					}
@@ -1253,15 +1254,14 @@ func (m *chatModel) renderStreamingBlock() string {
 			dur := time.Since(m.thinkingStart).Truncate(time.Millisecond)
 			out.WriteString(thinkStyle.Render(fmt.Sprintf("💭 thought for %s", dur)) + "\n\n")
 		} else {
-			// In progress: show ALL thinking content as gray text
+			// In progress: show ALL thinking content as gray text, word-wrapped
 			iw := m.innerWidth() - 2
 			lines := strings.Split(m.thinkingBuf.String(), "\n")
 			for _, line := range lines {
-				r := []rune(line)
-				if len(r) > iw {
-					r = r[:iw]
+				wrapped := wordwrap.String(line, iw)
+				for _, wl := range strings.Split(wrapped, "\n") {
+					out.WriteString(thinkStyle.Render(wl) + "\n")
 				}
-				out.WriteString(thinkStyle.Render(string(r)) + "\n")
 			}
 		}
 	}
@@ -1321,6 +1321,15 @@ func (m *chatModel) refreshViewport() {
 	}
 	m.viewport.SetContent(m.viewportContent())
 	m.viewport.GotoBottom()
+}
+
+func (m *chatModel) refreshViewportKeepScroll() {
+	if !m.ready {
+		return
+	}
+	yOffset := m.viewport.YOffset
+	m.viewport.SetContent(m.viewportContent())
+	m.viewport.SetYOffset(yOffset)
 }
 
 // --- Rendering helpers ---
