@@ -60,3 +60,74 @@ jobs:
             tofi-linux-amd64/tofi-linux-amd64
             tofi-darwin-arm64/tofi-darwin-arm64
           generate_release_notes: true
+
+  deploy:
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tofi-linux-arm64
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            echo "=== Deploying Tofi $(date) ==="
+
+            # Stop current daemon
+            cd ~/tofi/tofi-core
+            ./tofi stop 2>/dev/null || true
+
+            # Backup current binary
+            [ -f tofi ] && cp tofi tofi.bak
+
+            echo "=== Waiting for new binary ==="
+
+      - name: Upload binary to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          source: tofi-linux-arm64
+          target: /tmp/tofi-deploy/
+
+      - name: Start new version
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            cd ~/tofi/tofi-core
+
+            # Replace binary
+            mv /tmp/tofi-deploy/tofi-linux-arm64 ./tofi
+            chmod +x ./tofi
+            rm -rf /tmp/tofi-deploy
+
+            # Start daemon
+            ./tofi start
+
+            # Verify
+            sleep 2
+            if ./tofi status 2>/dev/null | grep -q "running"; then
+              echo "=== Deploy SUCCESS: $(./tofi version 2>/dev/null || echo 'unknown') ==="
+            else
+              echo "=== Deploy FAILED — rolling back ==="
+              [ -f tofi.bak ] && mv tofi.bak tofi && ./tofi start
+              exit 1
+            fi
+
+            # Cleanup backup
+            rm -f tofi.bak
