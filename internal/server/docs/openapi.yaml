@@ -7,16 +7,24 @@ info:
     or on-demand, with results delivered to your preferred channels.
 
     ## Authentication
-    All endpoints require a Bearer token in the Authorization header:
+    All endpoints (except login) require a Bearer token in the Authorization header:
     ```
     Authorization: Bearer <your-jwt-token>
     ```
 
     ## Quick Start
-    1. Get your JWT token from your Tofi admin
+    1. Login to get your token: `POST /api/v1/auth/login`
     2. List your apps: `GET /api/v1/apps`
     3. Trigger a run: `POST /api/v1/apps/{id}/run`
     4. Check the result: `GET /api/v1/apps/{id}/runs/{runId}`
+
+    ## Login Example
+    ```bash
+    curl -X POST https://your-domain.com/api/v1/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"username": "your-username", "password": "your-password"}'
+    ```
+    Response: `{"token": "eyJ...", "username": "your-username", "role": "user"}`
 
 servers:
   - url: http://localhost:8321
@@ -28,6 +36,54 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/v1/auth/login:
+    post:
+      summary: Login
+      description: |
+        Authenticate with username and password to receive a JWT token.
+        Use this token in the Authorization header for all other endpoints.
+        No authentication required for this endpoint.
+      operationId: login
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+            example:
+              username: "alice"
+              password: "your-password"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT token (valid for 365 days)
+                  username:
+                    type: string
+                  role:
+                    type: string
+                    enum: [admin, user]
+              example:
+                token: "eyJhbGciOiJIUzI1NiIs..."
+                username: "alice"
+                role: "user"
+        '401':
+          description: Invalid username or password
+
   /api/v1/apps:
     get:
       summary: List Apps
@@ -208,7 +264,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: JWT token obtained from your Tofi admin
+      description: JWT token obtained via POST /api/v1/auth/login
 
   parameters:
     AppId:
