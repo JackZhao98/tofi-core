@@ -96,6 +96,11 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 
+	// 迁移明文 AI Key 到加密存储（启动时自动，一次性）
+	if err := db.MigrateAIKeysToSecrets(); err != nil {
+		log.Printf("⚠️  AI key migration warning: %v", err)
+	}
+
 	// 设置默认并发数
 	if config.MaxConcurrentWorkflows <= 0 {
 		config.MaxConcurrentWorkflows = 10
@@ -392,6 +397,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/settings/enabled-models", s.AuthMiddleware(s.handleGetEnabledModels))
 	mux.HandleFunc("POST /api/v1/settings/enabled-models", s.AuthMiddleware(s.handleSetEnabledModels))
 	mux.HandleFunc("GET /api/v1/models", s.AuthMiddleware(s.handleListModels))
+
+	// User-facing AI Key management
+	mux.HandleFunc("PUT /api/v1/user/settings/ai-key", s.AuthMiddleware(s.handleUserSetAIKey))
+	mux.HandleFunc("GET /api/v1/user/settings/ai-keys", s.AuthMiddleware(s.handleUserListAIKeys))
+	mux.HandleFunc("DELETE /api/v1/user/settings/ai-key/{provider}", s.AuthMiddleware(s.handleUserDeleteAIKey))
+
+	// Admin: allow_user_keys toggle
+	mux.HandleFunc("PUT /api/v1/admin/settings/allow-user-keys", s.AdminMiddleware(s.handleSetAllowUserKeys))
 
 	// Connectors — 统一多渠道 API
 	mux.HandleFunc("GET /api/v1/connectors", s.AuthMiddleware(s.handleListConnectors))

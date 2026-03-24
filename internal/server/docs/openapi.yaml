@@ -229,6 +229,80 @@ paths:
                   total:
                     type: integer
 
+  /api/v1/user/settings/ai-key:
+    put:
+      summary: Set AI Key
+      description: |
+        Set your own AI provider API key. Keys are encrypted with AES-256-GCM.
+        Admin can disable this feature via `allow_user_keys` setting.
+      operationId: userSetAIKey
+      tags: [Settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, api_key]
+              properties:
+                provider:
+                  type: string
+                  enum: [openai, anthropic, gemini, deepseek, groq, openrouter]
+                api_key:
+                  type: string
+            example:
+              provider: "anthropic"
+              api_key: "sk-ant-..."
+      responses:
+        '200':
+          description: Key saved
+        '403':
+          description: User keys disabled by admin
+
+  /api/v1/user/settings/ai-keys:
+    get:
+      summary: List AI Keys
+      description: Returns your configured AI keys (masked). Also shows whether user keys are enabled.
+      operationId: userListAIKeys
+      tags: [Settings]
+      responses:
+        '200':
+          description: AI key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider:
+                          type: string
+                        masked_key:
+                          type: string
+                        updated_at:
+                          type: string
+                  allow_user_keys:
+                    type: boolean
+
+  /api/v1/user/settings/ai-key/{provider}:
+    delete:
+      summary: Delete AI Key
+      description: Remove your API key for a specific provider.
+      operationId: userDeleteAIKey
+      tags: [Settings]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Key deleted
+
   /api/v1/apps:
     get:
       summary: List Apps

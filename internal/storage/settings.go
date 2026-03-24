@@ -2,7 +2,13 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
+	"log"
 	"time"
+
+	"tofi-core/internal/crypto"
+
+	"github.com/google/uuid"
 )
 
 // SettingRecord 系统/用户级设置
@@ -86,34 +92,59 @@ func (db *DB) ListSettings(scope string) ([]*SettingRecord, error) {
 	return records, nil
 }
 
-// --- 便捷方法: AI API Key ---
+// --- 便捷方法: AI API Key (加密存储在 secrets 表) ---
 
 // AI Key 存储约定:
-//   key = "ai_key_{provider}"   (如 ai_key_anthropic, ai_key_openai)
-//   scope = "system"            (系统默认 Key)
-//   scope = "{userID}"          (用户自定义 Key)
+//   secrets 表: user = scope ("system" 或 userID), name = "ai_key_{provider}"
+//   encrypted_value = AES-256-GCM 加密后的 API Key
 
-// GetAIKey 获取 AI API Key（用户级优先，回退系统级）
+// GetAIKey 获取指定 scope 的 AI API Key（解密返回明文）
 func (db *DB) GetAIKey(provider, userID string) (string, error) {
-	key := "ai_key_" + provider
-	return db.GetSetting(key, userID)
+	name := "ai_key_" + provider
+
+	// 优先用户级
+	if userID != "" {
+		secret, err := db.GetSecret(userID, name)
+		if err == nil {
+			plaintext, err := crypto.Decrypt(secret.EncryptedValue)
+			if err != nil {
+				return "", fmt.Errorf("failed to decrypt AI key: %w", err)
+			}
+			return plaintext, nil
+		}
+	}
+	// 回退系统级
+	secret, err := db.GetSecret("system", name)
+	if err != nil {
+		return "", sql.ErrNoRows
+	}
+	plaintext, err := crypto.Decrypt(secret.EncryptedValue)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt AI key: %w", err)
+	}
+	return plaintext, nil
 }
 
-// SetAIKey 设置 AI API Key
+// SetAIKey 设置 AI API Key（加密后存入 secrets 表）
 func (db *DB) SetAIKey(provider, scope, apiKey string) error {
-	key := "ai_key_" + provider
-	return db.SetSetting(key, scope, apiKey)
+	name := "ai_key_" + provider
+	encrypted, err := crypto.Encrypt(apiKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt AI key: %w", err)
+	}
+	id := uuid.New().String()
+	return db.SaveSecret(id, scope, name, encrypted)
 }
 
 // DeleteAIKey 删除 AI API Key
 func (db *DB) DeleteAIKey(provider, scope string) error {
-	key := "ai_key_" + provider
-	return db.DeleteSetting(key, scope)
+	name := "ai_key_" + provider
+	return db.DeleteSecret(scope, name)
 }
 
-// ListAIKeys 列出所有 AI Key 配置（不返回完整 key，仅前后各 4 位）
+// ListAIKeys 列出所有 AI Key 配置（不返回完整 key，仅掩码）
 func (db *DB) ListAIKeys(scope string) ([]map[string]string, error) {
-	query := `SELECT key, value, updated_at FROM settings WHERE scope = ? AND key LIKE 'ai_key_%' ORDER BY key`
+	query := `SELECT name, encrypted_value, updated_at FROM secrets WHERE user = ? AND name LIKE 'ai_key_%' ORDER BY name`
 	rows, err := db.conn.Query(query, scope)
 	if err != nil {
 		return nil, err
@@ -122,18 +153,27 @@ func (db *DB) ListAIKeys(scope string) ([]map[string]string, error) {
 
 	var results []map[string]string
 	for rows.Next() {
-		var key, value, updatedAt string
-		if err := rows.Scan(&key, &value, &updatedAt); err != nil {
+		var name, encValue string
+		var updatedAt sql.NullString
+		if err := rows.Scan(&name, &encValue, &updatedAt); err != nil {
 			continue
 		}
-		// 提取 provider 名称
-		provider := key[7:] // 去掉 "ai_key_" 前缀
-		// 掩码处理
-		masked := maskAPIKey(value)
+		// 提取 provider 名称: "ai_key_anthropic" → "anthropic"
+		provider := name[7:]
+		// 解密后掩码
+		plaintext, err := crypto.Decrypt(encValue)
+		masked := "****"
+		if err == nil {
+			masked = maskAPIKey(plaintext)
+		}
+		ts := ""
+		if updatedAt.Valid {
+			ts = updatedAt.String
+		}
 		results = append(results, map[string]string{
 			"provider":   provider,
 			"masked_key": masked,
-			"updated_at": updatedAt,
+			"updated_at": ts,
 		})
 	}
 	return results, nil
@@ -149,16 +189,86 @@ func maskAPIKey(key string) string {
 
 // ResolveAIKey 解析 AI Key（优先级：用户 > 系统 > 报错）
 func (db *DB) ResolveAIKey(provider, userID string) (string, error) {
-	apiKey, err := db.GetAIKey(provider, userID)
-	if err == nil && apiKey != "" {
-		return apiKey, nil
+	name := "ai_key_" + provider
+	// 用户级
+	if userID != "" {
+		secret, err := db.GetSecret(userID, name)
+		if err == nil {
+			plaintext, err := crypto.Decrypt(secret.EncryptedValue)
+			if err == nil && plaintext != "" {
+				return plaintext, nil
+			}
+		}
 	}
-	// 如果用户级没有，尝试系统级
-	if err == sql.ErrNoRows || apiKey == "" {
-		apiKey, err = db.GetAIKey(provider, "")
-		if err == nil && apiKey != "" {
-			return apiKey, nil
+	// 系统级
+	secret, err := db.GetSecret("system", name)
+	if err == nil {
+		plaintext, err := crypto.Decrypt(secret.EncryptedValue)
+		if err == nil && plaintext != "" {
+			return plaintext, nil
 		}
 	}
 	return "", sql.ErrNoRows
+}
+
+// --- Admin 开关 ---
+
+// AllowUserKeys 返回是否允许用户自带 API Key（默认 true）
+func (db *DB) AllowUserKeys() bool {
+	val, err := db.GetSetting("allow_user_keys", "")
+	if err != nil || val == "" {
+		return true // 默认允许
+	}
+	return val == "true"
+}
+
+// SetAllowUserKeys 设置是否允许用户自带 API Key
+func (db *DB) SetAllowUserKeys(allow bool) error {
+	val := "false"
+	if allow {
+		val = "true"
+	}
+	return db.SetSetting("allow_user_keys", "system", val)
+}
+
+// --- 数据迁移: settings 明文 → secrets 加密 ---
+
+// MigrateAIKeysToSecrets 将 settings 表中的明文 AI Key 迁移到 secrets 表（加密存储）
+func (db *DB) MigrateAIKeysToSecrets() error {
+	query := `SELECT key, scope, value FROM settings WHERE key LIKE 'ai_key_%'`
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil // 表可能不存在，忽略
+	}
+	defer rows.Close()
+
+	var migrations []struct{ key, scope, value string }
+	for rows.Next() {
+		var k, s, v string
+		if err := rows.Scan(&k, &s, &v); err != nil {
+			continue
+		}
+		migrations = append(migrations, struct{ key, scope, value string }{k, s, v})
+	}
+
+	if len(migrations) == 0 {
+		return nil
+	}
+
+	log.Printf("🔐 Migrating %d AI key(s) from plaintext to encrypted storage...", len(migrations))
+
+	for _, m := range migrations {
+		provider := m.key[7:] // "ai_key_anthropic" → "anthropic"
+		if err := db.SetAIKey(provider, m.scope, m.value); err != nil {
+			log.Printf("⚠️  Failed to migrate AI key %s (scope=%s): %v", m.key, m.scope, err)
+			continue
+		}
+		// 删除 settings 表中的明文记录
+		if err := db.DeleteSetting(m.key, m.scope); err != nil {
+			log.Printf("⚠️  Failed to delete plaintext AI key %s: %v", m.key, err)
+		}
+	}
+
+	log.Printf("✅ AI key migration complete")
+	return nil
 }

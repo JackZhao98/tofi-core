@@ -969,9 +969,10 @@ func (s *Server) handleListAIKeys(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSetAIKey POST /api/v1/settings/ai-keys — 设置 AI Key
+// handleSetAIKey POST /api/v1/settings/ai-keys — 设置 AI Key（内部，支持 scope 参数）
 func (s *Server) handleSetAIKey(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
+	role, _ := r.Context().Value(RoleContextKey).(string)
 
 	var req struct {
 		Provider string `json:"provider"` // anthropic, openai, gemini
@@ -991,7 +992,18 @@ func (s *Server) handleSetAIKey(w http.ResponseWriter, r *http.Request) {
 
 	scope := userID
 	if req.Scope == "system" {
+		// 只有 admin 能设置系统级 key
+		if role != "admin" {
+			http.Error(w, "only admin can set system-level API keys", http.StatusForbidden)
+			return
+		}
 		scope = "system"
+	} else {
+		// 非 admin 用户检查 allow_user_keys 开关
+		if role != "admin" && !s.db.AllowUserKeys() {
+			http.Error(w, "user API keys are disabled by admin", http.StatusForbidden)
+			return
+		}
 	}
 
 	if err := s.db.SetAIKey(req.Provider, scope, req.APIKey); err != nil {
@@ -1010,11 +1022,18 @@ func (s *Server) handleSetAIKey(w http.ResponseWriter, r *http.Request) {
 // handleDeleteAIKey DELETE /api/v1/settings/ai-keys/{provider} — 删除 AI Key
 func (s *Server) handleDeleteAIKey(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
+	role, _ := r.Context().Value(RoleContextKey).(string)
 	provider := r.PathValue("provider")
 
 	scope := r.URL.Query().Get("scope")
 	if scope == "" || scope == "user" {
 		scope = userID
+	}
+
+	// 只有 admin 能删除系统级 key
+	if scope == "system" && role != "admin" {
+		http.Error(w, "only admin can delete system-level API keys", http.StatusForbidden)
+		return
 	}
 
 	if err := s.db.DeleteAIKey(provider, scope); err != nil {
@@ -1023,6 +1042,96 @@ func (s *Server) handleDeleteAIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- 用户端 AI Key API ---
+
+// handleUserSetAIKey PUT /api/v1/user/settings/ai-key — 用户设置自己的 AI Key
+func (s *Server) handleUserSetAIKey(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	// 检查 admin 开关
+	if !s.db.AllowUserKeys() {
+		http.Error(w, "user API keys are disabled by admin", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Provider string `json:"provider"`
+		APIKey   string `json:"api_key"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Provider == "" || req.APIKey == "" {
+		http.Error(w, "provider and api_key are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.SetAIKey(req.Provider, userID, req.APIKey); err != nil {
+		http.Error(w, fmt.Sprintf("failed to save: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":   "ok",
+		"provider": req.Provider,
+	})
+}
+
+// handleUserListAIKeys GET /api/v1/user/settings/ai-keys — 用户查看自己的 AI Key（脱敏）
+func (s *Server) handleUserListAIKeys(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	keys, _ := s.db.ListAIKeys(userID)
+	if keys == nil {
+		keys = []map[string]string{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"keys":            keys,
+		"allow_user_keys": s.db.AllowUserKeys(),
+	})
+}
+
+// handleUserDeleteAIKey DELETE /api/v1/user/settings/ai-key/{provider} — 用户删除自己的 AI Key
+func (s *Server) handleUserDeleteAIKey(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+	provider := r.PathValue("provider")
+
+	if err := s.db.DeleteAIKey(provider, userID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetAllowUserKeys PUT /api/v1/admin/settings/allow-user-keys — Admin 设置开关
+func (s *Server) handleSetAllowUserKeys(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Allow bool `json:"allow"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.SetAllowUserKeys(req.Allow); err != nil {
+		http.Error(w, fmt.Sprintf("failed to save: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":          "ok",
+		"allow_user_keys": req.Allow,
+	})
 }
 
 // handleListModels GET /api/v1/models — 列出所有已知模型
