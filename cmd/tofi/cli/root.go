@@ -66,10 +66,19 @@ func renderTUIBox(section string, content string) string {
 
 // tuiSelectedRow is the shared highlight style for TUI list selection
 // Usage: tuiSelectedRow.Render("► " + label)
+// IMPORTANT: Do NOT nest subtitleStyle inside tuiSelectedRow — inner foreground
+// colors won't be overridden. Use tuiSelectedDesc for description text instead.
 var tuiSelectedRow = lipgloss.NewStyle().
 	Background(lipgloss.Color("#ff7b72")).
 	Foreground(lipgloss.Color("#0d1117")).
 	Bold(true)
+
+// tuiSelectedDesc styles description text within a selected row.
+// Slightly muted white on red background — readable but visually secondary.
+var tuiSelectedDesc = lipgloss.NewStyle().
+	Background(lipgloss.Color("#ff7b72")).
+	Foreground(lipgloss.Color("#cdd9e5")).
+	Bold(false)
 
 // --- Shared TUI navigation types ---
 

@@ -55,10 +55,11 @@ func (m *appModel) viewCreateMode() string {
 	var s strings.Builder
 	s.WriteString("How would you like to create an app?\n\n")
 	for i, mode := range createModes {
-		line := fmt.Sprintf("%-20s %s", mode.label, subtitleStyle.Render(mode.desc))
 		if i == m.cursor {
+			line := fmt.Sprintf("%-20s %s", mode.label, tuiSelectedDesc.Render(mode.desc))
 			s.WriteString(tuiSelectedRow.Render("► "+line+" ") + "\n")
 		} else {
+			line := fmt.Sprintf("%-20s %s", mode.label, subtitleStyle.Render(mode.desc))
 			s.WriteString("  " + line + "\n")
 		}
 	}
@@ -411,10 +412,11 @@ func (m *appModel) viewCreate() string {
 			s.WriteString(subtitleStyle.Render("Loading models...") + "\n")
 		} else {
 			for i, mod := range m.models {
-				label := fmt.Sprintf("%-30s %s", mod.Name, subtitleStyle.Render(mod.Provider))
 				if i == m.cursor {
+					label := fmt.Sprintf("%-30s %s", mod.Name, tuiSelectedDesc.Render(mod.Provider))
 					s.WriteString(tuiSelectedRow.Render("► "+label+" ") + "\n")
 				} else {
+					label := fmt.Sprintf("%-30s %s", mod.Name, subtitleStyle.Render(mod.Provider))
 					s.WriteString("  " + label + "\n")
 				}
 			}
@@ -431,13 +433,17 @@ func (m *appModel) viewCreate() string {
 				if m.skillChecked[sk.Name] {
 					check = "✓"
 				}
-				label := fmt.Sprintf("%s %-25s %s", check, sk.Name, subtitleStyle.Render(sk.Description))
-				if len(label) > 60 {
-					label = label[:57] + "..."
-				}
 				if i == m.cursor {
+					label := fmt.Sprintf("%s %-25s %s", check, sk.Name, tuiSelectedDesc.Render(sk.Description))
+					if len([]rune(label)) > 60 {
+						label = string([]rune(label)[:57]) + "..."
+					}
 					s.WriteString(tuiSelectedRow.Render("► "+label+" ") + "\n")
 				} else {
+					label := fmt.Sprintf("%s %-25s %s", check, sk.Name, subtitleStyle.Render(sk.Description))
+					if len(label) > 60 {
+						label = label[:57] + "..."
+					}
 					s.WriteString("  " + label + "\n")
 				}
 			}

@@ -616,7 +616,7 @@ func (m cfgModel) viewMenu(s *strings.Builder) {
 
 	for i, item := range cfgMenuItems {
 		if i == m.cursor {
-			s.WriteString(tuiSelectedRow.Render("► "+item.display+"   "+item.description+" ") + "\n")
+			s.WriteString(tuiSelectedRow.Render("► "+item.display+"   "+tuiSelectedDesc.Render(item.description)+" ") + "\n")
 		} else {
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f6fc"))
 			s.WriteString("  " + nameStyle.Render(item.display) + "   " + subtitleStyle.Render(item.description) + "\n")
@@ -770,7 +770,7 @@ func (m cfgModel) viewModels(s *strings.Builder) {
 				if !item.hasKey {
 					hint = "set up key"
 				}
-				s.WriteString(tuiSelectedRow.Render("► "+provLabel+"   "+hint+" ") + "\n")
+				s.WriteString(tuiSelectedRow.Render("► "+provLabel+"   "+tuiSelectedDesc.Render(hint)+" ") + "\n")
 			} else {
 				if item.hasKey {
 					s.WriteString("  " + subtitleStyle.Render(provLabel) + "\n")
@@ -846,7 +846,7 @@ func (m cfgModel) viewAutoStart(s *strings.Builder) {
 
 	for i, opt := range options {
 		if i == m.cursor {
-			s.WriteString(tuiSelectedRow.Render("► "+opt.label+"   "+opt.desc+" ") + "\n")
+			s.WriteString(tuiSelectedRow.Render("► "+opt.label+"   "+tuiSelectedDesc.Render(opt.desc)+" ") + "\n")
 		} else {
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f6fc"))
 			s.WriteString("  " + nameStyle.Render(opt.label) + "   " + subtitleStyle.Render(opt.desc) + "\n")

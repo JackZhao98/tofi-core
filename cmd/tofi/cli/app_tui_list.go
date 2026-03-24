@@ -92,11 +92,11 @@ func (m *appModel) viewList() string {
 			model = model[:15] + "..."
 		}
 
-		line := fmt.Sprintf("%s %-20s %s", dotStyle.Render(dot), name, subtitleStyle.Render(model))
-
 		if i == m.cursor {
+			line := fmt.Sprintf("%s %-20s %s", dotStyle.Render(dot), name, tuiSelectedDesc.Render(model))
 			s.WriteString(tuiSelectedRow.Render("► "+line+" ") + "\n")
 		} else {
+			line := fmt.Sprintf("%s %-20s %s", dotStyle.Render(dot), name, subtitleStyle.Render(model))
 			s.WriteString("  " + line + "\n")
 		}
 
@@ -222,10 +222,11 @@ func (m *appModel) viewDetail() string {
 
 	// Actions
 	for i, act := range m.actions {
-		line := fmt.Sprintf("%-16s %s", act.label, subtitleStyle.Render(act.desc))
 		if i == m.cursor {
+			line := fmt.Sprintf("%-16s %s", act.label, tuiSelectedDesc.Render(act.desc))
 			s.WriteString(tuiSelectedRow.Render("► "+line+" ") + "\n")
 		} else {
+			line := fmt.Sprintf("%-16s %s", act.label, subtitleStyle.Render(act.desc))
 			s.WriteString("  " + line + "\n")
 		}
 	}
@@ -329,11 +330,12 @@ func (m *appModel) viewSessions() string {
 
 		ts := formatTimeShort(sess.UpdatedAt)
 		meta := fmt.Sprintf("%d msgs  $%.4f", sess.MessageCount, sess.TotalCost)
-		line := fmt.Sprintf("%-12s %-30s %s", subtitleStyle.Render(ts), title, subtitleStyle.Render(meta))
 
 		if i == m.cursor {
+			line := fmt.Sprintf("%-12s %-30s %s", tuiSelectedDesc.Render(ts), title, tuiSelectedDesc.Render(meta))
 			s.WriteString(tuiSelectedRow.Render("► "+line+" ") + "\n")
 		} else {
+			line := fmt.Sprintf("%-12s %-30s %s", subtitleStyle.Render(ts), title, subtitleStyle.Render(meta))
 			s.WriteString("  " + line + "\n")
 		}
 	}
