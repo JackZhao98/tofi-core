@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"tofi-core/internal/models"
 	"tofi-core/internal/storage"
 )
 
@@ -119,18 +120,16 @@ func installOneSystemSkill(db *storage.DB, store *LocalStore, dirPath string, so
 	// Use the name from SKILL.md frontmatter (not directory name)
 	skillName := skillFile.Manifest.Name
 
-	// 3. Copy scripts to local store
-	skillDir := store.SkillDir(skillName)
-	scriptsDir := filepath.Join(skillDir, "scripts")
-	os.MkdirAll(scriptsDir, 0755)
-
+	// 3. Copy only scripts to local store (SKILL.md stays in embed FS, not written to disk)
 	embeddedScriptsDir := filepath.Join("system-skills", dirPath, "scripts")
-	if err := copyEmbeddedDir(systemSkillsFS, embeddedScriptsDir, scriptsDir); err != nil {
-		log.Printf("[system-skills] warning: copy scripts for %q: %v", skillName, err)
+	if scriptEntries, err := systemSkillsFS.ReadDir(embeddedScriptsDir); err == nil && len(scriptEntries) > 0 {
+		skillDir := store.SkillDir(skillName)
+		scriptsDir := filepath.Join(skillDir, "scripts")
+		os.MkdirAll(scriptsDir, 0755)
+		if err := copyEmbeddedDir(systemSkillsFS, embeddedScriptsDir, scriptsDir); err != nil {
+			log.Printf("[system-skills] warning: copy scripts for %q: %v", skillName, err)
+		}
 	}
-
-	// Also write SKILL.md to local store
-	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), data, 0644)
 
 	// 4. Check if scripts exist
 	hasScripts := false
@@ -174,6 +173,94 @@ func installOneSystemSkill(db *storage.DB, store *LocalStore, dirPath string, so
 	}
 
 	return db.SaveSkill(record)
+}
+
+// --- Filesystem-first loading (no DB) ---
+
+// ListSystemSkillNames returns all system skill names by scanning the embedded FS.
+func ListSystemSkillNames() []string {
+	result := loadAllSystemSkillsInternal()
+	names := make([]string, 0, len(result))
+	for name := range result {
+		names = append(names, name)
+	}
+	return names
+}
+
+// LoadAllSystemSkills returns all system skills parsed from the embedded FS.
+// Keys are manifest names (from SKILL.md frontmatter).
+func LoadAllSystemSkills() map[string]*models.SkillFile {
+	return loadAllSystemSkillsInternal()
+}
+
+func loadAllSystemSkillsInternal() map[string]*models.SkillFile {
+	result := make(map[string]*models.SkillFile)
+
+	entries, err := systemSkillsFS.ReadDir("system-skills")
+	if err != nil {
+		return result
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirName := entry.Name()
+
+		// Top-level skill
+		skillMDPath := filepath.Join("system-skills", dirName, "SKILL.md")
+		if data, err := systemSkillsFS.ReadFile(skillMDPath); err == nil {
+			if sf, err := Parse(data); err == nil {
+				// Set Dir for scripts resolution
+				sf.Dir = filepath.Join("system-skills", dirName)
+				// Check for scripts in embed FS
+				scriptsDir := filepath.Join("system-skills", dirName, "scripts")
+				if scriptEntries, err := systemSkillsFS.ReadDir(scriptsDir); err == nil {
+					for _, se := range scriptEntries {
+						if !se.IsDir() {
+							sf.ScriptDirs = append(sf.ScriptDirs, se.Name())
+						}
+					}
+				}
+				result[sf.Manifest.Name] = sf
+			}
+		}
+
+		// Sub-skills (skill pack)
+		subEntries, err := systemSkillsFS.ReadDir(filepath.Join("system-skills", dirName))
+		if err != nil {
+			continue
+		}
+		for _, sub := range subEntries {
+			if !sub.IsDir() {
+				continue
+			}
+			subSkillMD := filepath.Join("system-skills", dirName, sub.Name(), "SKILL.md")
+			if data, err := systemSkillsFS.ReadFile(subSkillMD); err == nil {
+				if sf, err := Parse(data); err == nil {
+					sf.Dir = filepath.Join("system-skills", dirName, sub.Name())
+					scriptsDir := filepath.Join(sf.Dir, "scripts")
+					if scriptEntries, err := systemSkillsFS.ReadDir(scriptsDir); err == nil {
+						for _, se := range scriptEntries {
+							if !se.IsDir() {
+								sf.ScriptDirs = append(sf.ScriptDirs, se.Name())
+							}
+						}
+					}
+					result[sf.Manifest.Name] = sf
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// SystemSkillScriptsDir returns the on-disk path where system skill scripts are copied.
+// Scripts need to be on disk for shell execution.
+func SystemSkillScriptsDir(homeDir, skillName string) string {
+	store := NewLocalStore(homeDir)
+	return filepath.Join(store.SkillDir(skillName), "scripts")
 }
 
 // copyEmbeddedDir copies files from an embedded FS directory to a real directory.

@@ -2,22 +2,35 @@ package skills
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
 	"tofi-core/internal/models"
 )
 
+// SkillInfo describes a skill visible to a user.
+type SkillInfo struct {
+	Name    string // skill directory name
+	Scope   string // "global", "user", or "system"
+	Version string
+	Desc    string
+	Source  string // "GitHub", "Local", "Built-in"
+	Dir     string // absolute path to the skill directory
+}
+
 // LocalStore 管理本地文件系统中的技能目录
-// 技能存储在 {homeDir}/.tofi/skills/ 下
+// Global skills: {homeDir}/.tofi/skills/
+// User skills:   {homeDir}/.tofi/users/{uid}/skills/
 type LocalStore struct {
-	baseDir string // e.g. /home/user/.tofi/skills
+	homeDir string // e.g. /home/user (OS home)
+	baseDir string // e.g. /home/user/.tofi/skills (global)
 }
 
 // NewLocalStore 创建本地技能存储
 func NewLocalStore(homeDir string) *LocalStore {
 	dir := filepath.Join(homeDir, ".tofi", "skills")
-	return &LocalStore{baseDir: dir}
+	return &LocalStore{homeDir: homeDir, baseDir: dir}
 }
 
 // EnsureDir 确保技能目录存在
@@ -56,7 +69,7 @@ func (s *LocalStore) List() ([]*models.SkillFile, error) {
 		skill, err := ParseDir(skillDir)
 		if err != nil {
 			// 跳过无效的技能目录，但记录警告
-			fmt.Printf("[skills] warning: skipping invalid skill directory %s: %v\n", entry.Name(), err)
+			log.Printf("[skills] warning: skipping invalid skill directory %s: %v", entry.Name(), err)
 			continue
 		}
 		skills = append(skills, skill)
@@ -109,4 +122,159 @@ func (s *LocalStore) SaveLocal(name, content string) error {
 	}
 
 	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0644)
+}
+
+// --- User-scope operations ---
+
+// UserSkillDir returns the skills directory for a specific user.
+func (s *LocalStore) UserSkillDir(userID string) string {
+	return filepath.Join(s.homeDir, ".tofi", "users", userID, "skills")
+}
+
+// ActivateGlobalSkill creates a symlink from user's skills dir to the global copy.
+func (s *LocalStore) ActivateGlobalSkill(userID, skillName string) error {
+	userDir := s.UserSkillDir(userID)
+	if err := os.MkdirAll(userDir, 0755); err != nil {
+		return fmt.Errorf("create user skills dir: %w", err)
+	}
+
+	link := filepath.Join(userDir, skillName)
+
+	// If already exists (symlink or real dir), skip
+	if _, err := os.Lstat(link); err == nil {
+		return nil
+	}
+
+	target := filepath.Join(s.baseDir, skillName)
+	return os.Symlink(target, link)
+}
+
+// DeactivateSkill removes a user's skill (symlink or real dir) and runs GC on global.
+func (s *LocalStore) DeactivateSkill(userID, skillName string) error {
+	userPath := filepath.Join(s.UserSkillDir(userID), skillName)
+
+	// Check if it's a symlink (global) before removing
+	fi, err := os.Lstat(userPath)
+	if err != nil {
+		return fmt.Errorf("skill %q not found for user: %w", skillName, err)
+	}
+	isSymlink := fi.Mode()&os.ModeSymlink != 0
+
+	if err := os.RemoveAll(userPath); err != nil {
+		return fmt.Errorf("remove skill: %w", err)
+	}
+
+	// GC: if it was a global symlink, check if anyone else still uses it
+	if isSymlink {
+		return s.gcGlobalSkill(skillName)
+	}
+	return nil
+}
+
+// gcGlobalSkill checks if any user still links to a global skill.
+// If no users reference it, deletes the global copy.
+func (s *LocalStore) gcGlobalSkill(skillName string) error {
+	globalPath := filepath.Join(s.baseDir, skillName)
+	if _, err := os.Stat(globalPath); os.IsNotExist(err) {
+		return nil // already gone
+	}
+
+	usersDir := filepath.Join(s.homeDir, ".tofi", "users")
+	entries, err := os.ReadDir(usersDir)
+	if err != nil {
+		// No users dir = no references
+		return os.RemoveAll(globalPath)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		link := filepath.Join(usersDir, entry.Name(), "skills", skillName)
+		if _, err := os.Lstat(link); err == nil {
+			return nil // someone still uses it
+		}
+	}
+
+	// No users reference it → delete global copy
+	return os.RemoveAll(globalPath)
+}
+
+// ListUserSkills returns all skills visible to a user (symlinks + real dirs).
+func (s *LocalStore) ListUserSkills(userID string) ([]SkillInfo, error) {
+	userDir := s.UserSkillDir(userID)
+	if err := os.MkdirAll(userDir, 0755); err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(userDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var skills []SkillInfo
+	for _, entry := range entries {
+		name := entry.Name()
+		fullPath := filepath.Join(userDir, name)
+
+		info := SkillInfo{Name: name, Dir: fullPath}
+
+		// Determine scope by checking if symlink
+		fi, err := os.Lstat(fullPath)
+		if err != nil {
+			continue
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			info.Scope = "global"
+			// Resolve symlink to get actual dir
+			resolved, err := os.Readlink(fullPath)
+			if err == nil {
+				if !filepath.IsAbs(resolved) {
+					resolved = filepath.Join(userDir, resolved)
+				}
+				info.Dir = resolved
+			}
+		} else {
+			info.Scope = "user"
+		}
+
+		// Parse SKILL.md for metadata
+		skill, err := ParseDir(info.Dir)
+		if err != nil {
+			info.Desc = "(invalid SKILL.md)"
+			skills = append(skills, info)
+			continue
+		}
+
+		info.Version = skill.Manifest.Version
+		info.Desc = skill.Manifest.Description
+		if info.Version == "" {
+			info.Version = "1.0"
+		}
+
+		skills = append(skills, info)
+	}
+
+	return skills, nil
+}
+
+// LoadSkill loads a single user skill from the filesystem by parsing its SKILL.md.
+func (s *LocalStore) LoadSkill(userID, skillName string) (*models.SkillFile, error) {
+	skillDir := filepath.Join(s.UserSkillDir(userID), skillName)
+	resolved, err := filepath.EvalSymlinks(skillDir)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDir(resolved)
+}
+
+// SaveUserSkill copies a skill directory into a user's private skills dir.
+func (s *LocalStore) SaveUserSkill(userID, skillName, srcDir string) error {
+	userDir := s.UserSkillDir(userID)
+	if err := os.MkdirAll(userDir, 0755); err != nil {
+		return err
+	}
+
+	destDir := filepath.Join(userDir, skillName)
+	return copyDir(srcDir, destDir)
 }

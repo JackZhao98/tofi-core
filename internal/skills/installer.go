@@ -152,7 +152,39 @@ type InstallResult struct {
 	Source *ParsedSource       // 解析后的来源
 }
 
-// Install 从 source 字符串安装技能
+// InstallForUser installs skills from source to global dir, then creates symlinks for the user.
+func (si *SkillInstaller) InstallForUser(source, userID string, selectedNames []string) (*InstallResult, error) {
+	result, err := si.Install(source)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to selected names if provided
+	if len(selectedNames) > 0 {
+		selected := make(map[string]bool, len(selectedNames))
+		for _, n := range selectedNames {
+			selected[n] = true
+		}
+		var filtered []*models.SkillFile
+		for _, s := range result.Skills {
+			if selected[s.Manifest.Name] {
+				filtered = append(filtered, s)
+			}
+		}
+		result.Skills = filtered
+	}
+
+	// Create symlinks for the user
+	for _, skill := range result.Skills {
+		if err := si.store.ActivateGlobalSkill(userID, skill.Manifest.Name); err != nil {
+			log.Printf("[skills] warning: failed to activate %s for user %s: %v", skill.Manifest.Name, userID, err)
+		}
+	}
+
+	return result, nil
+}
+
+// Install 从 source 字符串安装技能到 global dir
 // 支持格式: owner/repo, owner/repo@skill, Git URL, 本地路径
 func (si *SkillInstaller) Install(source string) (*InstallResult, error) {
 	// 1. 解析来源
