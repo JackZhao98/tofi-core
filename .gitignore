@@ -5,6 +5,7 @@
 .tofi/
 
 docs/
+!internal/server/docs/
 
 # Workflows (user-defined, not tracked)
 workflows/

@@ -427,6 +427,21 @@ func (db *DB) UpdateAppRunResult(id, status, sessionID, result string) error {
 	}
 }
 
+func (db *DB) GetAppRun(appID, runID string) (*AppRunRecord, error) {
+	query := `SELECT id, app_id, scheduled_at, status, COALESCE(trigger_type,'scheduled'), COALESCE(kanban_card_id,''), COALESCE(session_id,''), COALESCE(result,''),
+		user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
+		FROM app_runs WHERE id = ? AND app_id = ?`
+	var r AppRunRecord
+	err := db.conn.QueryRow(query, runID, appID).Scan(
+		&r.ID, &r.AppID, &r.ScheduledAt, &r.Status, &r.Trigger, &r.KanbanCardID, &r.SessionID, &r.Result,
+		&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 func (db *DB) CancelPendingAppRuns(appID string) (int, error) {
 	result, err := db.conn.Exec(`UPDATE app_runs SET status = 'cancelled' WHERE app_id = ? AND status = 'pending'`, appID)
 	if err != nil {

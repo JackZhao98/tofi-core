@@ -1,0 +1,294 @@
+openapi: 3.0.3
+info:
+  title: Tofi API
+  version: 0.1.0
+  description: |
+    Tofi is an AI App Engine. Create AI-powered apps that run on a schedule
+    or on-demand, with results delivered to your preferred channels.
+
+    ## Authentication
+    All endpoints require a Bearer token in the Authorization header:
+    ```
+    Authorization: Bearer <your-jwt-token>
+    ```
+
+    ## Quick Start
+    1. Get your JWT token from your Tofi admin
+    2. List your apps: `GET /api/v1/apps`
+    3. Trigger a run: `POST /api/v1/apps/{id}/run`
+    4. Check the result: `GET /api/v1/apps/{id}/runs/{runId}`
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://your-domain.com
+    description: Production
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/apps:
+    get:
+      summary: List Apps
+      description: Returns all apps belonging to the authenticated user.
+      operationId: listApps
+      tags: [Apps]
+      responses:
+        '200':
+          description: Array of apps
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/App'
+              example:
+                - id: "daily-stock-briefing"
+                  name: "Daily Stock Briefing"
+                  description: "AI-generated stock market summary"
+                  model: "claude-sonnet-4-20250514"
+                  is_active: true
+                  created_at: "2026-03-23 10:00:00"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/apps/{id}:
+    get:
+      summary: Get App
+      description: Returns details of a single app.
+      operationId: getApp
+      tags: [Apps]
+      parameters:
+        - $ref: '#/components/parameters/AppId'
+      responses:
+        '200':
+          description: App details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/App'
+        '404':
+          description: App not found
+
+  /api/v1/apps/{id}/run:
+    post:
+      summary: Trigger App Run
+      description: |
+        Manually triggers an app run. The run executes asynchronously in the background.
+        Returns immediately with a run record containing the `id` (job ID) that you can
+        use to poll for status and results.
+
+        Optionally pass a `prompt` in the request body to override the app's configured
+        prompt for this run only.
+      operationId: triggerAppRun
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/AppId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+            examples:
+              withoutPrompt:
+                summary: Use app's default prompt
+                value: {}
+              withPrompt:
+                summary: Override prompt for this run
+                value:
+                  prompt: "Focus on NVDA and TSLA only, include after-hours trading data"
+      responses:
+        '201':
+          description: Run created and dispatched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+              example:
+                id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                app_id: "daily-stock-briefing"
+                status: "running"
+                trigger: "manual"
+                created_at: "2026-03-23 14:30:00"
+                started_at: "2026-03-23 14:30:00"
+        '400':
+          description: App has no prompt configured
+        '404':
+          description: App not found
+
+  /api/v1/apps/{id}/runs:
+    get:
+      summary: List App Runs
+      description: Returns run history for an app, ordered by most recent first.
+      operationId: listAppRuns
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/AppId'
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [pending, running, done, failed, cancelled, skipped]
+        - name: limit
+          in: query
+          description: Maximum number of runs to return (default 50)
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Array of runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Run'
+        '404':
+          description: App not found
+
+  /api/v1/apps/{id}/runs/{runId}:
+    get:
+      summary: Get Run Status & Result
+      description: |
+        Returns the current status and result of a specific run.
+        Poll this endpoint to check if an async run has completed.
+
+        **Status flow:** `running` → `done` (success) or `failed` (error)
+
+        When `status` is `done`, the `result` field contains the AI-generated output.
+      operationId: getAppRun
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/AppId'
+        - name: runId
+          in: path
+          required: true
+          description: Run ID (returned by trigger endpoint)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run details with status and result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+              examples:
+                running:
+                  summary: Run still in progress
+                  value:
+                    id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    app_id: "daily-stock-briefing"
+                    status: "running"
+                    trigger: "manual"
+                    result: ""
+                    created_at: "2026-03-23 14:30:00"
+                    started_at: "2026-03-23 14:30:00"
+                done:
+                  summary: Run completed with result
+                  value:
+                    id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    app_id: "daily-stock-briefing"
+                    status: "done"
+                    trigger: "manual"
+                    result: "## Stock Market Summary\n\n**AAPL** (+1.2%): Strong earnings beat..."
+                    created_at: "2026-03-23 14:30:00"
+                    started_at: "2026-03-23 14:30:00"
+                    completed_at: "2026-03-23 14:31:15"
+        '404':
+          description: Run not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from your Tofi admin
+
+  parameters:
+    AppId:
+      name: id
+      in: path
+      required: true
+      description: App ID
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid Authorization header
+
+  schemas:
+    App:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique app identifier (kebab-case)
+        name:
+          type: string
+          description: Display name
+        description:
+          type: string
+        model:
+          type: string
+          description: LLM model used (e.g. claude-sonnet-4-20250514)
+        is_active:
+          type: boolean
+          description: Whether scheduled runs are enabled
+        skills:
+          type: string
+          description: JSON array of skill names
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RunRequest:
+      type: object
+      properties:
+        prompt:
+          type: string
+          description: Optional prompt override for this run only. If omitted, the app's configured prompt is used.
+
+    Run:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique run ID (UUID) — use this to poll for status
+        app_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, done, failed, cancelled, skipped]
+          description: |
+            - `pending`: Queued, waiting to execute
+            - `running`: Currently executing
+            - `done`: Completed successfully (check `result`)
+            - `failed`: Execution failed
+            - `cancelled`: Cancelled before execution
+            - `skipped`: Skipped by user
+        trigger:
+          type: string
+          enum: [manual, scheduled]
+          description: How this run was initiated
+        result:
+          type: string
+          description: AI-generated output (populated when status is `done`)
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time

@@ -119,7 +119,7 @@ func (as *AppScheduler) pollAndDispatch() {
 				log.Printf("[app-scheduler] Failed to mark run %s as running: %v", r.ID[:8], err)
 				continue
 			}
-			go as.dispatchRun(r)
+			go as.dispatchRun(r, "")
 		}
 	}
 
@@ -128,7 +128,8 @@ func (as *AppScheduler) pollAndDispatch() {
 }
 
 // DispatchManualRun creates an app_run record with trigger=manual and dispatches it immediately.
-func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string) (*storage.AppRunRecord, error) {
+// If promptOverride is non-empty, it replaces the app's configured prompt for this run only.
+func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string, promptOverride string) (*storage.AppRunRecord, error) {
 	run := &storage.AppRunRecord{
 		ID:          uuid.New().String(),
 		AppID:       app.ID,
@@ -143,11 +144,11 @@ func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string)
 	// Mark running (started_at)
 	as.server.db.UpdateAppRunStatus(run.ID, "running", "")
 
-	go as.dispatchRun(run)
+	go as.dispatchRun(run, promptOverride)
 	return run, nil
 }
 
-func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord) {
+func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride string) {
 	log.Printf("[app-run:%s] Dispatching %s run for app %s", run.ID[:8], run.Trigger, run.AppID[:8])
 
 	app, err := as.server.db.GetApp(run.AppID)
@@ -158,6 +159,9 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord) {
 	}
 
 	prompt := apps.ResolveFromJSON(app.Prompt, app.Parameters, app.ParameterDefs)
+	if promptOverride != "" {
+		prompt = promptOverride
+	}
 
 	// Create a Chat Session for this app run
 	scope := chat.AgentScope("app-" + app.ID[:8])

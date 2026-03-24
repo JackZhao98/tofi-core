@@ -377,6 +377,7 @@ func (s *Server) handleDeactivateApp(w http.ResponseWriter, r *http.Request) {
 
 // handleRunAppNow POST /api/v1/apps/{id}/run
 // All runs go through the Dispatcher — manual trigger creates an app_run and dispatches immediately.
+// Accepts optional JSON body: {"prompt": "override prompt for this run"}
 func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -392,7 +393,18 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := s.appScheduler.DispatchManualRun(app, userID)
+	// Parse optional prompt override from request body
+	var promptOverride string
+	if r.Body != nil && r.ContentLength > 0 {
+		var req struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			promptOverride = req.Prompt
+		}
+	}
+
+	run, err := s.appScheduler.DispatchManualRun(app, userID, promptOverride)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to run app: %v", err), http.StatusInternalServerError)
 		return
@@ -434,6 +446,28 @@ func (s *Server) handleListAppRuns(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(runs)
+}
+
+// handleGetAppRun GET /api/v1/apps/{id}/runs/{runId}
+func (s *Server) handleGetAppRun(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+	appID := r.PathValue("id")
+	runID := r.PathValue("runId")
+
+	app, err := s.db.GetApp(appID)
+	if err != nil || app.UserID != userID {
+		http.Error(w, "app not found", http.StatusNotFound)
+		return
+	}
+
+	run, err := s.db.GetAppRun(appID, runID)
+	if err != nil {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(run)
 }
 
 // handleParseSchedule POST /api/v1/apps/parse-schedule

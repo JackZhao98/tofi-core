@@ -457,6 +457,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/apps/{id}/deactivate", s.AuthMiddleware(s.handleDeactivateApp))
 	mux.HandleFunc("POST /api/v1/apps/{id}/run", s.AuthMiddleware(s.handleRunAppNow))
 	mux.HandleFunc("GET /api/v1/apps/{id}/runs", s.AuthMiddleware(s.handleListAppRuns))
+	mux.HandleFunc("GET /api/v1/apps/{id}/runs/{runId}", s.AuthMiddleware(s.handleGetAppRun))
 
 	// Schedules
 	mux.HandleFunc("GET /api/v1/schedules/upcoming", s.AuthMiddleware(s.handleGetUpcomingRuns))
@@ -471,6 +472,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/workflows", s.AdminMiddleware(s.handleAdminListWorkflows))
 	mux.HandleFunc("GET /api/v1/admin/secrets", s.AdminMiddleware(s.handleAdminListSecrets))
 	mux.HandleFunc("DELETE /api/v1/admin/secrets/{id}", s.AdminMiddleware(s.handleAdminDeleteSecret))
+
+	// API Documentation
+	s.registerDocsRoutes(mux)
 
 	// 配置 Server（应用 CORS 中间件）
 	srv := &http.Server{
