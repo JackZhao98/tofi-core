@@ -70,46 +70,32 @@ jobs:
         with:
           name: tofi-linux-arm64
 
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
-          script: |
-            set -e
-            echo "=== Deploying Tofi $(date) ==="
-
-            # Stop current daemon
-            cd ~/tofi/tofi-core
-            ./tofi stop 2>/dev/null || true
-
-            # Backup current binary
-            [ -f tofi ] && cp tofi tofi.bak
-
-            echo "=== Waiting for new binary ==="
-
       - name: Upload binary to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
           source: tofi-linux-arm64
           target: /tmp/tofi-deploy/
 
-      - name: Start new version
+      - name: Deploy and restart
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
           script: |
             set -e
-            cd ~/tofi/tofi-core
+            cd ~/server
+            echo "=== Deploying Tofi $(date) ==="
+
+            # Backup current binary
+            [ -f tofi ] && cp tofi tofi.bak
+
+            # Stop daemon
+            ./tofi stop 2>/dev/null || true
+            sleep 1
 
             # Replace binary
             mv /tmp/tofi-deploy/tofi-linux-arm64 ./tofi
@@ -121,13 +107,14 @@ jobs:
 
             # Verify
             sleep 2
-            if ./tofi status 2>/dev/null | grep -q "running"; then
-              echo "=== Deploy SUCCESS: $(./tofi version 2>/dev/null || echo 'unknown') ==="
+            if curl -sf http://localhost:8321/health > /dev/null; then
+              echo "=== Deploy SUCCESS ==="
+              curl -s http://localhost:8321/health | head -1
             else
               echo "=== Deploy FAILED — rolling back ==="
+              ./tofi stop 2>/dev/null || true
               [ -f tofi.bak ] && mv tofi.bak tofi && ./tofi start
               exit 1
             fi
 
-            # Cleanup backup
             rm -f tofi.bak
