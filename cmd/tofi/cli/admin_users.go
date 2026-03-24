@@ -193,37 +193,30 @@ func (m *usersModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "esc":
 		m.view = usersViewList
 		return m, nil
-	case "tab":
-		m.createFocus = (m.createFocus + 1) % 3
-		m.createUser.Blur()
-		m.createPass.Blur()
-		if m.createFocus == 0 {
-			m.createUser.Focus()
-		} else if m.createFocus == 1 {
-			m.createPass.Focus()
-		}
-		return m, nil
 	case "enter":
+		switch m.createFocus {
+		case 0: // Username → next
+			m.createFocus = 1
+			m.createUser.Blur()
+			m.createPass.Focus()
+			return m, nil
+		case 1: // Password → next
+			m.createFocus = 2
+			m.createPass.Blur()
+			return m, nil
+		case 2: // Role → submit
+			return m, m.submitCreate()
+		}
+	case "tab", "shift+tab":
 		if m.createFocus == 2 {
-			// Toggle role
+			// Toggle role when focused on role field
 			if m.createRole == "user" {
 				m.createRole = "admin"
 			} else {
 				m.createRole = "user"
 			}
-			return m, nil
 		}
-		if m.createFocus < 2 {
-			m.createFocus++
-			m.createUser.Blur()
-			m.createPass.Blur()
-			if m.createFocus == 1 {
-				m.createPass.Focus()
-			}
-			return m, nil
-		}
-	case "ctrl+s":
-		return m, m.submitCreate()
+		return m, nil
 	}
 
 	// Pass character input to focused textinput
@@ -347,7 +340,7 @@ func (m *usersModel) viewCreate() string {
 		errLine = "\n" + errorStyle.Render("  ✗ "+m.errMsg)
 	}
 
-	footer := subtitleStyle.Render("Tab next field · Enter toggle role · Ctrl+S save · Esc cancel")
+	footer := subtitleStyle.Render("Enter next/submit · Tab toggle role · Esc cancel")
 	content := fields + errLine + "\n\n" + footer
 
 	return "\n" + renderTUIBox("Create User", content) + "\n"
