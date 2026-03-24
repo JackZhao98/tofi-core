@@ -25,16 +25,18 @@ func clearScreen() {
 // --- Main Menu TUI ---
 
 type menuItem struct {
-	id   string
-	name string
-	desc string
+	id      string
+	name    string
+	desc    string
+	divider bool // true = render a blank line before this item
 }
 
 var mainMenuItems = []menuItem{
-	{"chat", "Chat", "Interactive AI conversation"},
-	{"apps", "Apps", "Manage AI applications"},
-	{"settings", "Settings", "Keys, models, connections"},
-	{"engine", "Engine", "Status, start, stop, restart"},
+	{"chat", "Chat", "Interactive AI conversation", false},
+	{"apps", "Apps", "Manage AI applications", false},
+	{"skills", "Skills", "Install, create, manage skills", false},
+	{"settings", "Settings", "Keys, models, connections", true},
+	{"engine", "Engine", "Status, start, stop, restart", false},
 }
 
 // --- Model ---
@@ -95,10 +97,14 @@ func (m *mainMenuModel) View() string {
 
 	var items string
 	for i, item := range mainMenuItems {
-		label := fmt.Sprintf("%-16s %s", item.name, subtitleStyle.Render(item.desc))
+		if item.divider {
+			items += "\n"
+		}
 		if i == m.cursor {
+			label := fmt.Sprintf("%-16s %s", item.name, tuiSelectedDesc.Render(item.desc))
 			items += tuiSelectedRow.Render("► "+label) + "\n"
 		} else {
+			label := fmt.Sprintf("%-16s %s", item.name, subtitleStyle.Render(item.desc))
 			items += "  " + label + "\n"
 		}
 	}
@@ -151,6 +157,8 @@ func runSection(cmd *cobra.Command, section string) (tuiExitReason, error) {
 		return runChatSection(cmd, nil)
 	case "apps":
 		return runAppSection(cmd)
+	case "skills":
+		return runSkillSection(cmd)
 	case "settings":
 		return runSettingsLoop(cmd)
 	case "engine":
@@ -228,10 +236,11 @@ func (m *settingsMenuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *settingsMenuModel) View() string {
 	var items string
 	for i, item := range settingsMenuItems {
-		label := fmt.Sprintf("%-16s %s", item.name, subtitleStyle.Render(item.desc))
 		if i == m.cursor {
+			label := fmt.Sprintf("%-16s %s", item.name, tuiSelectedDesc.Render(item.desc))
 			items += tuiSelectedRow.Render("► "+label) + "\n"
 		} else {
+			label := fmt.Sprintf("%-16s %s", item.name, subtitleStyle.Render(item.desc))
 			items += "  " + label + "\n"
 		}
 	}
