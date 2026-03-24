@@ -191,8 +191,9 @@ type chatModel struct {
 	sessionID    string
 	scope        string
 	model        string
-	skills       []string
-	sessionTitle   string // displayed in header: "New Chat" → AI-generated title
+	skills         []string
+	disabledSkills []string // user skills disabled for this session only
+	sessionTitle   string   // displayed in header: "New Chat" → AI-generated title
 	isNewSession   bool   // true until first AI response title is set
 	titlePollCount int    // retry counter for title polling
 	resumingTitle    string // non-empty = header shows "Resuming · title" temporarily
@@ -804,15 +805,6 @@ func (m *chatModel) renderStatusBar(iw int) string {
 			Render(fmt.Sprintf("↑%s ↓%s · $%.4f", inText, outText, m.totalCost)))
 	}
 
-	// Skills
-	if len(m.skills) > 0 {
-		badges = append(badges, lipgloss.NewStyle().
-			Background(lipgloss.Color("#238636")).
-			Foreground(lipgloss.Color("#ffffff")).
-			Padding(0, 1).
-			Render(strings.Join(m.skills, ",")))
-	}
-
 	// Model
 	if m.model != "" {
 		badges = append(badges, lipgloss.NewStyle().
@@ -1032,17 +1024,18 @@ func (m *chatModel) renderSelectList(iw int, maxLines int) []string {
 			if isChecked {
 				indicator = " ✓ "
 			}
-			plain := indicator + item.label
+			nameText := indicator + item.label
+			metaText := ""
 			if item.meta != "" {
-				plain += "  " + item.meta
+				metaText = "  " + item.meta
 			}
-			plainW := lipgloss.Width(plain)
+			plainW := lipgloss.Width(nameText + metaText)
 			pad := max(0, iw-plainW)
-			line = lipgloss.NewStyle().
+			rowStyle := lipgloss.NewStyle().
 				Background(lipgloss.Color("#ff7b72")).
-				Foreground(lipgloss.Color("#ffffff")).
-				Bold(true).
-				Render(plain + strings.Repeat(" ", pad))
+				Bold(true)
+			line = rowStyle.Foreground(lipgloss.Color("#ffffff")).Render(nameText) +
+				rowStyle.Foreground(lipgloss.Color("#cdd9e5")).Bold(false).Render(metaText+strings.Repeat(" ", pad))
 		} else {
 			indicator := subtitleStyle.Render(" ○ ")
 			if isChecked {
@@ -1790,9 +1783,7 @@ func (m *chatModel) handleSlashCommand(input string) {
 		m.appendContent(" " + accentStyle.Render("/status") + subtitleStyle.Render("            Session info and usage"))
 		m.appendContent(" " + accentStyle.Render("/model <name>") + subtitleStyle.Render("     Switch model"))
 		m.appendContent(" " + accentStyle.Render("/model") + subtitleStyle.Render("             Show current model"))
-		m.appendContent(" " + accentStyle.Render("/skills <s1,s2>") + subtitleStyle.Render("   Enable skills"))
-		m.appendContent(" " + accentStyle.Render("/skills off") + subtitleStyle.Render("        Disable all skills"))
-		m.appendContent(" " + accentStyle.Render("/skills") + subtitleStyle.Render("            Show active skills"))
+		m.appendContent(" " + accentStyle.Render("/skills") + subtitleStyle.Render("            View & manage skills"))
 		m.appendContent(" " + accentStyle.Render("/new") + subtitleStyle.Render("               Start new session"))
 		m.appendContent(" " + accentStyle.Render("/resume") + subtitleStyle.Render("            Resume a past session"))
 		m.appendContent(" " + accentStyle.Render("/resume <id>") + subtitleStyle.Render("      Resume session by ID"))
@@ -1818,9 +1809,6 @@ func (m *chatModel) handleSlashCommand(input string) {
 			}
 			m.appendContent("  " + subtitleStyle.Render("Context: ") + lipgloss.NewStyle().Foreground(lipgloss.Color(ctxColor)).Render(fmt.Sprintf("%d%%", m.contextPct)))
 		}
-		if len(m.skills) > 0 {
-			m.appendContent("  " + subtitleStyle.Render("Skills:  ") + accentStyle.Render(strings.Join(m.skills, ", ")))
-		}
 		m.appendContent("")
 
 	case "/model":
@@ -1834,30 +1822,7 @@ func (m *chatModel) handleSlashCommand(input string) {
 		}
 
 	case "/skills":
-		if len(parts) > 1 {
-			if parts[1] == "off" || parts[1] == "none" || parts[1] == "clear" {
-				m.skills = nil
-				m.patchSession(map[string]any{"skills": []string{}})
-				m.appendContent(m.renderSuccess("All skills disabled"))
-			} else {
-				m.skills = nil
-				for _, s := range strings.Split(parts[1], ",") {
-					s = strings.TrimSpace(s)
-					if s != "" {
-						m.skills = append(m.skills, s)
-					}
-				}
-				m.patchSession(map[string]any{"skills": m.skills})
-				m.appendContent(m.renderSuccess("Skills: " + accentStyle.Render(strings.Join(m.skills, ", "))))
-			}
-		} else {
-			if len(m.skills) > 0 {
-				m.appendContent(m.renderInfo("Active: " + accentStyle.Render(strings.Join(m.skills, ", ")) +
-					subtitleStyle.Render("  (/skills off to disable)")))
-				m.appendContent("")
-			}
-			m.fetchAndShowSkills()
-		}
+		m.fetchAndShowSkills()
 		m.appendContent("")
 
 	case "/new":
@@ -2039,50 +2004,100 @@ func (m *chatModel) fetchAndShowSkills() {
 		Scope       string `json:"scope"`
 	}
 
-	var skills []apiSkill
-	if err := m.client.get("/api/v1/skills", &skills); err != nil {
+	var allSkills []apiSkill
+	if err := m.client.get("/api/v1/skills", &allSkills); err != nil {
 		m.appendContent(m.renderInfo("(could not fetch skills: " + err.Error() + ")"))
 		return
 	}
 
-	if len(skills) == 0 {
+	if len(allSkills) == 0 {
 		m.appendContent(m.renderInfo("No skills installed."))
 		return
 	}
 
-	// Build items for multi-select
-	items := make([]selectItem, 0, len(skills))
-	for _, sk := range skills {
-		meta := sk.Description
+	// Separate system vs user skills
+	var systemSkills, userSkills []apiSkill
+	for _, sk := range allSkills {
 		if sk.Scope == "system" {
-			meta = "(built-in) " + meta
-		}
-		d := []rune(meta)
-		if len(d) > 45 {
-			meta = string(d[:42]) + "..."
-		}
-		items = append(items, selectItem{id: sk.Name, label: sk.Name, meta: meta})
-	}
-
-	// Pre-select currently active skills
-	preSelected := make(map[string]bool)
-	for _, s := range m.skills {
-		preSelected[s] = true
-	}
-
-	m.enterMultiSelectMode("Select Skills (Space toggle, Enter confirm)", items, preSelected, func(selected []selectItem) {
-		m.skills = nil
-		for _, item := range selected {
-			m.skills = append(m.skills, item.id)
-		}
-		m.patchSession(map[string]any{"skills": m.skills})
-		if len(m.skills) > 0 {
-			m.appendContent(m.renderSuccess("Skills: " + accentStyle.Render(strings.Join(m.skills, ", "))))
+			systemSkills = append(systemSkills, sk)
 		} else {
-			m.appendContent(m.renderSuccess("All skills disabled"))
+			userSkills = append(userSkills, sk)
+		}
+	}
+
+	// Build disabled set from m.disabledSkills (per-session toggles, user skills only)
+	disabled := make(map[string]bool)
+	for _, name := range m.disabledSkills {
+		disabled[name] = true
+	}
+
+	// Display system skills (always active, read-only)
+	if len(systemSkills) > 0 {
+		m.appendContent(subtitleStyle.Render("  System Skills (always active)"))
+		for _, sk := range systemSkills {
+			desc := sk.Description
+			d := []rune(desc)
+			if len(d) > 40 {
+				desc = string(d[:37]) + "..."
+			}
+			m.appendContent(fmt.Sprintf("    ✓ %-18s %s", accentStyle.Render(sk.Name), subtitleStyle.Render(desc)))
 		}
 		m.appendContent("")
-	})
+	}
+
+	// User skills — toggleable per-session, default all enabled
+	if len(userSkills) > 0 {
+		items := make([]selectItem, 0, len(userSkills))
+		for _, sk := range userSkills {
+			desc := sk.Description
+			d := []rune(desc)
+			if len(d) > 45 {
+				desc = string(d[:42]) + "..."
+			}
+			items = append(items, selectItem{id: sk.Name, label: sk.Name, meta: desc})
+		}
+
+		// Pre-select: all user skills ON unless explicitly disabled in this session
+		preSelected := make(map[string]bool)
+		for _, sk := range userSkills {
+			if !disabled[sk.Name] {
+				preSelected[sk.Name] = true
+			}
+		}
+
+		m.enterMultiSelectMode("Your Skills (Space toggle, Enter confirm)", items, preSelected, func(selected []selectItem) {
+			// Compute which user skills are now disabled
+			selectedSet := make(map[string]bool)
+			for _, item := range selected {
+				selectedSet[item.id] = true
+			}
+			m.disabledSkills = nil
+			for _, sk := range userSkills {
+				if !selectedSet[sk.Name] {
+					m.disabledSkills = append(m.disabledSkills, sk.Name)
+				}
+			}
+
+			// Rebuild m.skills: all system + enabled user skills
+			m.skills = nil
+			for _, sk := range systemSkills {
+				m.skills = append(m.skills, sk.Name)
+			}
+			for _, item := range selected {
+				m.skills = append(m.skills, item.id)
+			}
+			m.patchSession(map[string]any{"skills": m.skills})
+
+			if len(m.disabledSkills) > 0 {
+				m.appendContent(m.renderSuccess("Disabled for this session: " + subtitleStyle.Render(strings.Join(m.disabledSkills, ", "))))
+			} else {
+				m.appendContent(m.renderSuccess("All skills active"))
+			}
+			m.appendContent("")
+		})
+	} else {
+		m.appendContent(subtitleStyle.Render("  No user skills installed."))
+	}
 }
 
 // --- SSE streaming via Session API ---
