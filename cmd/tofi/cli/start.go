@@ -125,16 +125,12 @@ func runForeground() error {
 	daemon.WritePID(homeDir, os.Getpid())
 	defer daemon.RemovePID(homeDir)
 
-	mode := os.Getenv("TOFI_MODE")
-	if mode == "" {
-		mode = "self-hosted"
-	}
+	server.SetBuildInfo(Version, GitCommit, BuildTime)
 
 	cfg := server.Config{
 		Port:                   startPort,
 		HomeDir:                homeDir,
 		MaxConcurrentWorkflows: startWorkers,
-		Mode:                   mode,
 	}
 
 	srv, err := server.NewServer(cfg)

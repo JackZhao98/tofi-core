@@ -23,14 +23,10 @@ import (
 	"tofi-core/internal/workspace"
 )
 
-// DeployMode constant
-const ModeSelfHosted = "self-hosted"
-
 type Config struct {
 	Port                   int
 	HomeDir                string
-	MaxConcurrentWorkflows int    // 最大并发工作流数（默认 10）
-	Mode                   string // "self-hosted" (default) or "saas"
+	MaxConcurrentWorkflows int // 最大并发工作流数（默认 10）
 }
 
 // HoldSignal is sent through a hold channel to resume a paused agent
@@ -80,9 +76,6 @@ type Server struct {
 	accessToken string
 }
 
-// IsSelfHosted returns true if running in self-hosted (local) mode.
-func (s *Server) IsSelfHosted() bool { return s.config.Mode == ModeSelfHosted }
-
 func NewServer(config Config) (*Server, error) {
 	// 初始化 JWT Auth
 	InitAuth()
@@ -102,15 +95,6 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Normalize deploy mode
-	if config.Mode == "" {
-		config.Mode = ModeSelfHosted
-	}
-	if config.Mode != ModeSelfHosted {
-		config.Mode = ModeSelfHosted
-	}
-	log.Printf("🏷️  Deploy mode: %s", config.Mode)
 
 	// 设置默认并发数
 	if config.MaxConcurrentWorkflows <= 0 {
@@ -465,15 +449,54 @@ func (s *Server) Start() error {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	serverStartedAt = time.Now()
 	log.Printf("🚀 Tofi Server listening on port %d", s.config.Port)
 	return srv.ListenAndServe()
 }
 
+// Build info — set by main package at startup via SetBuildInfo().
+var (
+	buildVersion   = "dev"
+	buildTime      = "unknown"
+	buildCommit    = "unknown"
+	serverStartedAt time.Time
+)
+
+// SetBuildInfo sets version metadata from ldflags (called once at startup).
+func SetBuildInfo(version, commit, built string) {
+	buildVersion = version
+	buildCommit = commit
+	buildTime = built
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	uptime := time.Since(serverStartedAt).Truncate(time.Second)
+
+	// Worker pool stats
+	s.workerPool.mu.RLock()
+	running := s.workerPool.runningCount
+	queued := s.workerPool.queuedCount
+	s.workerPool.mu.RUnlock()
+
+	// Count apps
+	totalApps, _ := s.db.CountAllApps()
+	activeApps, _ := s.db.CountActiveApps()
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-		"mode":   s.config.Mode,
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"version": buildVersion,
+		"commit":  buildCommit,
+		"uptime":  uptime.String(),
+		"workers": map[string]any{
+			"max":     s.config.MaxConcurrentWorkflows,
+			"running": running,
+			"queued":  queued,
+		},
+		"apps": map[string]int{
+			"total":  totalApps,
+			"active": activeApps,
+		},
 	})
 }
 

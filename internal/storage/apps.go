@@ -303,6 +303,20 @@ func (db *DB) ListActiveApps() ([]*AppRecord, error) {
 	return scanAppRecords(rows)
 }
 
+// ── App counts (for health check) ──
+
+func (db *DB) CountAllApps() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM apps").Scan(&count)
+	return count, err
+}
+
+func (db *DB) CountActiveApps() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM apps WHERE is_active = 1").Scan(&count)
+	return count, err
+}
+
 // ── App Run CRUD ──
 
 func (db *DB) CreateAppRun(run *AppRunRecord) error {
