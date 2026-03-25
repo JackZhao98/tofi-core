@@ -253,6 +253,10 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  api_keys table creation: %v", err)
 	}
 
+	if err := db.initRefreshTokensTable(); err != nil {
+		log.Printf("⚠️  refresh_tokens table creation: %v", err)
+	}
+
 	return db, nil
 }
 

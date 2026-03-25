@@ -38,7 +38,7 @@ func GenerateToken(username string, role string) (string, error) {
 		"role": role,
 		"iss":  "tofi-engine",
 		"iat":  time.Now().Unix(),
-		"exp":  time.Now().Add(365 * 24 * time.Hour).Unix(),
+		"exp":  time.Now().Add(7 * 24 * time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)

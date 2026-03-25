@@ -246,6 +246,9 @@ func (s *Server) Start() error {
 	// 启动 app run log/session TTL 清理
 	s.startAppRunCleanup()
 
+	// 启动 refresh token 清理
+	s.startRefreshTokenCleanup()
+
 	// 启动 rate limiter 清理
 	rateLimitStop := make(chan struct{})
 	go s.rateLimiter.StartCleanup(rateLimitStop)
@@ -323,6 +326,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/auth/setup_status", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/v1/auth/setup", s.handleSetupAdmin)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleRefreshToken)
 
 	// Webhook 触发端点（公开，不需要认证）
 	mux.HandleFunc("POST /api/v1/hooks/{token}", s.handleWebhookTrigger)
@@ -426,6 +430,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("PUT /api/v1/user/settings/ai-key", s.AuthMiddleware(s.handleUserSetAIKey))
 	mux.HandleFunc("GET /api/v1/user/settings/ai-keys", s.AuthMiddleware(s.handleUserListAIKeys))
 	mux.HandleFunc("DELETE /api/v1/user/settings/ai-key/{provider}", s.AuthMiddleware(s.handleUserDeleteAIKey))
+
+	// Token revocation
+	mux.HandleFunc("POST /api/v1/auth/revoke", s.AuthMiddleware(s.handleRevokeTokens))
+	mux.HandleFunc("DELETE /api/v1/admin/users/{id}/tokens", s.AdminMiddleware(s.handleAdminRevokeUserTokens))
 
 	// Spend cap management
 	mux.HandleFunc("PUT /api/v1/user/settings/spend-cap", s.AuthMiddleware(s.handleSetUserSpendCap))

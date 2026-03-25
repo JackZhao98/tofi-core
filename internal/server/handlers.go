@@ -200,11 +200,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Issue refresh token
+	refreshToken, err := s.issueRefreshToken(user.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"token":    token,
-		"username": user.Username,
-		"role":     user.Role,
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"token":         token,
+		"refresh_token": refreshToken,
+		"expires_in":    int(7 * 24 * time.Hour / time.Second), // 604800
+		"username":      user.Username,
+		"role":          user.Role,
 	})
 }
 
