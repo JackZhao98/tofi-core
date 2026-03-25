@@ -66,6 +66,13 @@ func (w *Workspace) AgentDir(userID, agentName string) string {
 	return filepath.Join(w.AgentsDir(userID), agentName)
 }
 
+// PlansDir returns the plans directory for a user.
+func (w *Workspace) PlansDir(userID string) string {
+	dir := filepath.Join(w.UserDir(userID), "plans")
+	os.MkdirAll(dir, 0755)
+	return dir
+}
+
 // SkillsDir returns the user's installed skills directory.
 func (w *Workspace) SkillsDir(userID string) string {
 	dir := filepath.Join(w.UserDir(userID), "skills")

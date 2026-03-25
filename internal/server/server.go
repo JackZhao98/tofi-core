@@ -227,6 +227,9 @@ func (s *Server) Start() error {
 	// 启动 preview session 清理 goroutine
 	go s.cleanupPreviewSessions()
 
+	// 启动 plan 文件 TTL 清理
+	s.startPlanCleanup()
+
 	// 启动 App 调度器（DB-poll based）
 	s.appScheduler = NewAppScheduler(s)
 	if err := s.appScheduler.Start(); err != nil {
@@ -424,6 +427,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("DELETE /api/v1/apps/{id}/connectors/{cid}", s.AuthMiddleware(s.handleUnlinkAppConnector))
 
 	// App 管理路由
+	mux.HandleFunc("POST /api/v1/apps/plan", s.AuthMiddleware(s.handlePlanApp))
+	mux.HandleFunc("GET /api/v1/apps/plans/{planId}", s.AuthMiddleware(s.handleGetPlan))
+	mux.HandleFunc("POST /api/v1/apps/plans/{planId}/approve", s.AuthMiddleware(s.handleApprovePlan))
+	mux.HandleFunc("DELETE /api/v1/apps/plans/{planId}", s.AuthMiddleware(s.handleDeletePlan))
 	mux.HandleFunc("POST /api/v1/apps/parse-schedule", s.AuthMiddleware(s.handleParseSchedule))
 	mux.HandleFunc("POST /api/v1/apps/manager/chat", s.AuthMiddleware(s.handleManagerChat))
 	mux.HandleFunc("GET /api/v1/apps", s.AuthMiddleware(s.handleListApps))
