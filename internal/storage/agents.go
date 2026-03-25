@@ -1,12 +1,8 @@
 package storage
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
-	"time"
-
-	"github.com/google/uuid"
 )
 
 // AgentRecord represents a pre-configured Agent (a "pre-orchestrated Wish")
@@ -26,20 +22,6 @@ type AgentRecord struct {
 	UserID           string `json:"user_id"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
-}
-
-// AgentRunRecord represents a single scheduled run (appointment)
-type AgentRunRecord struct {
-	ID           string `json:"id"`
-	AgentID      string `json:"agent_id"`
-	ScheduledAt  string `json:"scheduled_at"`
-	Status       string `json:"status"` // pending / running / done / failed / cancelled
-	KanbanCardID string `json:"kanban_card_id"`
-	Result       string `json:"result"`
-	UserID       string `json:"user_id"`
-	CreatedAt    string `json:"created_at"`
-	StartedAt    string `json:"started_at,omitempty"`
-	CompletedAt  string `json:"completed_at,omitempty"`
 }
 
 func (db *DB) initAgentsTable() error {
@@ -64,27 +46,6 @@ func (db *DB) initAgentsTable() error {
 	`
 	if _, err := db.conn.Exec(agentsQuery); err != nil {
 		return fmt.Errorf("create agents table: %w", err)
-	}
-
-	runsQuery := `
-	CREATE TABLE IF NOT EXISTS agent_runs (
-		id TEXT PRIMARY KEY,
-		agent_id TEXT NOT NULL,
-		scheduled_at DATETIME NOT NULL,
-		status TEXT DEFAULT 'pending',
-		kanban_card_id TEXT DEFAULT '',
-		result TEXT DEFAULT '',
-		user_id TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		started_at DATETIME,
-		completed_at DATETIME,
-		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
-	);
-	CREATE INDEX IF NOT EXISTS idx_agent_runs_pending ON agent_runs(status, scheduled_at);
-	CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent_id);
-	`
-	if _, err := db.conn.Exec(runsQuery); err != nil {
-		return fmt.Errorf("create agent_runs table: %w", err)
 	}
 
 	// Migration: add capabilities column
@@ -184,7 +145,6 @@ func (db *DB) UpdateAgent(agent *AgentRecord) error {
 }
 
 func (db *DB) DeleteAgent(id, userID string) error {
-	// Delete agent (agent_runs cascade via FK)
 	result, err := db.conn.Exec(`DELETE FROM agents WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
 		return err
@@ -234,155 +194,6 @@ func (db *DB) ListActiveAgents() ([]*AgentRecord, error) {
 		agents = append(agents, &a)
 	}
 	return agents, nil
-}
-
-// ── Agent Run CRUD ──
-
-func (db *DB) CreateAgentRun(run *AgentRunRecord) error {
-	if run.ID == "" {
-		run.ID = uuid.New().String()
-	}
-	query := `INSERT INTO agent_runs (id, agent_id, scheduled_at, status, kanban_card_id, result, user_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-	_, err := db.conn.Exec(query, run.ID, run.AgentID, run.ScheduledAt, run.Status, run.KanbanCardID, run.Result, run.UserID)
-	return err
-}
-
-func (db *DB) ListAgentRuns(agentID string, status string, limit int) ([]*AgentRunRecord, error) {
-	var query string
-	var args []interface{}
-
-	if status != "" {
-		query = `SELECT id, agent_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
-			user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
-			FROM agent_runs WHERE agent_id = ? AND status = ? ORDER BY scheduled_at ASC LIMIT ?`
-		args = []interface{}{agentID, status, limit}
-	} else {
-		query = `SELECT id, agent_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
-			user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
-			FROM agent_runs WHERE agent_id = ? ORDER BY scheduled_at DESC LIMIT ?`
-		args = []interface{}{agentID, limit}
-	}
-
-	rows, err := db.conn.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var runs []*AgentRunRecord
-	for rows.Next() {
-		var r AgentRunRecord
-		if err := rows.Scan(&r.ID, &r.AgentID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
-			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
-			return nil, err
-		}
-		runs = append(runs, &r)
-	}
-	return runs, nil
-}
-
-// GetAllPendingRuns returns all pending runs (for scheduler startup)
-func (db *DB) GetAllPendingRuns() ([]*AgentRunRecord, error) {
-	query := `SELECT id, agent_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
-		user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
-		FROM agent_runs WHERE status = 'pending' ORDER BY scheduled_at ASC`
-	rows, err := db.conn.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var runs []*AgentRunRecord
-	for rows.Next() {
-		var r AgentRunRecord
-		if err := rows.Scan(&r.ID, &r.AgentID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
-			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
-			return nil, err
-		}
-		runs = append(runs, &r)
-	}
-	return runs, nil
-}
-
-// GetPendingRunsDue returns pending runs whose scheduled_at <= before
-func (db *DB) GetPendingRunsDue(before time.Time) ([]*AgentRunRecord, error) {
-	query := `SELECT id, agent_id, scheduled_at, status, COALESCE(kanban_card_id,''), COALESCE(result,''),
-		user_id, created_at, COALESCE(started_at,''), COALESCE(completed_at,'')
-		FROM agent_runs WHERE status = 'pending' AND scheduled_at <= ? ORDER BY scheduled_at ASC`
-	rows, err := db.conn.Query(query, before.UTC().Format("2006-01-02 15:04:05"))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var runs []*AgentRunRecord
-	for rows.Next() {
-		var r AgentRunRecord
-		if err := rows.Scan(&r.ID, &r.AgentID, &r.ScheduledAt, &r.Status, &r.KanbanCardID, &r.Result,
-			&r.UserID, &r.CreatedAt, &r.StartedAt, &r.CompletedAt); err != nil {
-			return nil, err
-		}
-		runs = append(runs, &r)
-	}
-	return runs, nil
-}
-
-func (db *DB) CountPendingRuns(agentID string) (int, error) {
-	var count int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM agent_runs WHERE agent_id = ? AND status = 'pending'`, agentID).Scan(&count)
-	return count, err
-}
-
-func (db *DB) UpdateAgentRunStatus(id, status, kanbanCardID string) error {
-	var query string
-	switch status {
-	case "running":
-		query = `UPDATE agent_runs SET status = ?, started_at = CURRENT_TIMESTAMP WHERE id = ?`
-		_, err := db.conn.Exec(query, status, id)
-		return err
-	case "done", "failed":
-		query = `UPDATE agent_runs SET status = ?, kanban_card_id = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`
-		_, err := db.conn.Exec(query, status, kanbanCardID, id)
-		return err
-	default:
-		query = `UPDATE agent_runs SET status = ? WHERE id = ?`
-		_, err := db.conn.Exec(query, status, id)
-		return err
-	}
-}
-
-// CancelPendingRuns cancels all pending runs for an agent
-func (db *DB) CancelPendingRuns(agentID string) (int, error) {
-	result, err := db.conn.Exec(`UPDATE agent_runs SET status = 'cancelled' WHERE agent_id = ? AND status = 'pending'`, agentID)
-	if err != nil {
-		return 0, err
-	}
-	rows, _ := result.RowsAffected()
-	return int(rows), nil
-}
-
-// GetLastScheduledTime returns the latest scheduled_at for an agent's pending/done runs
-func (db *DB) GetLastScheduledTime(agentID string) (time.Time, error) {
-	var ts sql.NullString
-	err := db.conn.QueryRow(
-		`SELECT MAX(scheduled_at) FROM agent_runs WHERE agent_id = ? AND status IN ('pending','running','done')`,
-		agentID,
-	).Scan(&ts)
-	if err != nil || !ts.Valid {
-		return time.Now(), nil
-	}
-	t, err := time.Parse("2006-01-02 15:04:05", ts.String)
-	if err != nil {
-		return time.Now(), nil
-	}
-	return t, nil
-}
-
-// DeleteAgentRuns deletes all runs for an agent
-func (db *DB) DeleteAgentRuns(agentID string) error {
-	_, err := db.conn.Exec(`DELETE FROM agent_runs WHERE agent_id = ?`, agentID)
-	return err
 }
 
 // helper

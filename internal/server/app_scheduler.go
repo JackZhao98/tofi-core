@@ -118,7 +118,7 @@ func (as *AppScheduler) pollAndDispatch() {
 	} else {
 		for _, r := range runs {
 			// Mark running immediately to prevent double-dispatch on next poll
-			if err := as.server.db.UpdateAppRunStatus(r.ID, "running", ""); err != nil {
+			if err := as.server.db.UpdateAppRunStatus(r.ID, "running"); err != nil {
 				log.Printf("[app-scheduler] Failed to mark run %s as running: %v", r.ID[:8], err)
 				continue
 			}
@@ -145,7 +145,7 @@ func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string,
 		return nil, fmt.Errorf("create app_run: %w", err)
 	}
 	// Mark running (started_at)
-	as.server.db.UpdateAppRunStatus(run.ID, "running", "")
+	as.server.db.UpdateAppRunStatus(run.ID, "running")
 
 	go as.dispatchRun(run, promptOverride)
 	return run, nil
@@ -157,7 +157,7 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 	app, err := as.server.db.GetApp(run.AppID)
 	if err != nil {
 		log.Printf("[app-run:%s] App %s not found: %v", run.ID[:8], run.AppID[:8], err)
-		as.server.db.UpdateAppRunStatus(run.ID, "failed", "")
+		as.server.db.UpdateAppRunStatus(run.ID, "failed")
 		return
 	}
 
@@ -186,7 +186,7 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 
 	if err := as.server.chatStore.Save(run.UserID, scope, session); err != nil {
 		log.Printf("[app-run:%s] Failed to create chat session: %v", run.ID[:8], err)
-		as.server.db.UpdateAppRunStatus(run.ID, "failed", "")
+		as.server.db.UpdateAppRunStatus(run.ID, "failed")
 		return
 	}
 

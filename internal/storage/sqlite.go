@@ -220,7 +220,6 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  apps table creation (may already exist): %v", err)
 	}
 	db.migrateAgentsToApps()
-	db.migrateKanbanAppID()
 
 	// 创建 telegram_receivers 表 (legacy, kept for migration)
 	if err := db.initTelegramReceiversTable(); err != nil {
