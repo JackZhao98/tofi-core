@@ -241,28 +241,6 @@ func executeInSandboxInternal(parentCtx context.Context, sandboxPath, homeDir, c
 	return strings.TrimRight(output, "\n"), nil
 }
 
-// ─── Legacy compatibility wrappers ──────────────────────────
-
-// CreateSandbox creates an isolated directory for command execution (legacy).
-func CreateSandbox(homeDir, cardID string) (string, error) {
-	return NewDirectExecutor(homeDir).CreateSandbox(SandboxConfig{
-		HomeDir: homeDir,
-		CardID:  cardID,
-	})
-}
-
-// ExecuteInSandbox runs a command in the sandbox (legacy).
-func ExecuteInSandbox(parentCtx context.Context, sandboxPath, command string, timeoutSec int) (string, error) {
-	// Infer homeDir from sandboxPath
-	homeDir := filepath.Dir(filepath.Dir(sandboxPath))
-	return executeInSandboxInternal(parentCtx, sandboxPath, homeDir, command, timeoutSec, nil)
-}
-
-// CleanupSandbox removes the sandbox directory (legacy).
-func CleanupSandbox(sandboxPath string) {
-	NewDirectExecutor("").Cleanup(sandboxPath)
-}
-
 // fixUnbalancedQuotes removes trailing unmatched double quotes from commands.
 // LLMs sometimes generate commands with an extra trailing " (e.g. `--flag value"`),
 // which causes sh to fail with "Unterminated quoted string".

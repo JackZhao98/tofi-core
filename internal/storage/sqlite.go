@@ -221,11 +221,6 @@ func InitDB(homeDir string) (*DB, error) {
 	}
 	db.migrateAgentsToApps()
 
-	// 创建 telegram_receivers 表 (legacy, kept for migration)
-	if err := db.initTelegramReceiversTable(); err != nil {
-		log.Printf("⚠️  telegram_receivers table creation (may already exist): %v", err)
-	}
-
 	// 创建新 connector 表
 	if err := db.initConnectorsTable(); err != nil {
 		log.Printf("⚠️  connectors table creation (may already exist): %v", err)

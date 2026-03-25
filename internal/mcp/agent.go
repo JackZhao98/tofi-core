@@ -659,7 +659,7 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 					}
 				} else {
 					// Legacy fallback (no user directory support)
-					output, err := executor.ExecuteInSandbox(context.Background(), cfg.SandboxDir, command, timeout)
+					output, err := executor.NewDirectExecutor("").Execute(context.Background(), cfg.SandboxDir, "", command, timeout, nil)
 					if err != nil {
 						resultMsg = fmt.Sprintf("Command error: %v\nOutput: %s", err, output)
 					} else {

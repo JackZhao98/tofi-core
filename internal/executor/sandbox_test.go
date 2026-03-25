@@ -350,13 +350,15 @@ func TestValidateCommand_DevNull(t *testing.T) {
 
 func TestExecuteInSandbox_Echo(t *testing.T) {
 	// S10: echo hello → "hello"
-	sandbox, err := CreateSandbox(t.TempDir(), "test-echo")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-echo"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "echo hello", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "echo hello", 10, nil)
 	if err != nil {
 		t.Fatalf("S10 FAIL: echo failed: %v", err)
 	}
@@ -367,13 +369,15 @@ func TestExecuteInSandbox_Echo(t *testing.T) {
 
 func TestExecuteInSandbox_HomeIsolation(t *testing.T) {
 	// S8: $HOME 应该返回沙箱路径
-	sandbox, err := CreateSandbox(t.TempDir(), "test-home")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-home"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "echo $HOME", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "echo $HOME", 10, nil)
 	if err != nil {
 		t.Fatalf("S8 FAIL: echo $HOME failed: %v", err)
 	}
@@ -384,13 +388,15 @@ func TestExecuteInSandbox_HomeIsolation(t *testing.T) {
 
 func TestExecuteInSandbox_Timeout(t *testing.T) {
 	// S7: 超时杀死 — sleep 999 with 2s timeout
-	sandbox, err := CreateSandbox(t.TempDir(), "test-timeout")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-timeout"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	_, err = ExecuteInSandbox(context.Background(), sandbox, "sleep 999", 2)
+	_, err = exec.Execute(context.Background(), sandbox, "", "sleep 999", 2, nil)
 	if err == nil {
 		t.Fatal("S7 FAIL: sleep 999 should have timed out")
 	}
@@ -401,14 +407,16 @@ func TestExecuteInSandbox_Timeout(t *testing.T) {
 
 func TestExecuteInSandbox_OutputTruncation(t *testing.T) {
 	// S9: 输出截断 — 超过 1MB 的输出应被截断
-	sandbox, err := CreateSandbox(t.TempDir(), "test-trunc")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-trunc"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
 	// Generate 2MB of output
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "yes | head -c 2000000", 30)
+	output, err := exec.Execute(context.Background(), sandbox, "", "yes | head -c 2000000", 30, nil)
 	if err != nil {
 		// Command may fail due to broken pipe, that's ok
 		// Just check output size
@@ -421,13 +429,15 @@ func TestExecuteInSandbox_OutputTruncation(t *testing.T) {
 
 func TestExecuteInSandbox_WorkingDirectory(t *testing.T) {
 	// 工作目录应该是沙箱路径 (macOS: /var → /private/var symlink)
-	sandbox, err := CreateSandbox(t.TempDir(), "test-pwd")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-pwd"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "pwd", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "pwd", 10, nil)
 	if err != nil {
 		t.Fatalf("pwd failed: %v", err)
 	}
@@ -441,13 +451,15 @@ func TestExecuteInSandbox_WorkingDirectory(t *testing.T) {
 
 func TestExecuteInSandbox_FileCreation(t *testing.T) {
 	// 沙箱内可以创建和读取文件
-	sandbox, err := CreateSandbox(t.TempDir(), "test-file")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-file"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "echo 'test content' > myfile.txt && cat myfile.txt", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "echo 'test content' > myfile.txt && cat myfile.txt", 10, nil)
 	if err != nil {
 		t.Fatalf("file ops failed: %v", err)
 	}
@@ -458,13 +470,15 @@ func TestExecuteInSandbox_FileCreation(t *testing.T) {
 
 func TestExecuteInSandbox_TmpDir(t *testing.T) {
 	// TMPDIR 应该指向沙箱内的 tmp/
-	sandbox, err := CreateSandbox(t.TempDir(), "test-tmp")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-tmp"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "echo $TMPDIR", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "echo $TMPDIR", 10, nil)
 	if err != nil {
 		t.Fatalf("echo TMPDIR failed: %v", err)
 	}
@@ -476,13 +490,15 @@ func TestExecuteInSandbox_TmpDir(t *testing.T) {
 
 func TestExecuteInSandbox_FailedCommand(t *testing.T) {
 	// 失败的命令应返回错误
-	sandbox, err := CreateSandbox(t.TempDir(), "test-fail")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-fail"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	_, err = ExecuteInSandbox(context.Background(), sandbox, "exit 1", 10)
+	_, err = exec.Execute(context.Background(), sandbox, "", "exit 1", 10, nil)
 	if err == nil {
 		t.Error("exit 1 should return error")
 	}
@@ -490,13 +506,15 @@ func TestExecuteInSandbox_FailedCommand(t *testing.T) {
 
 func TestExecuteInSandbox_StderrCapture(t *testing.T) {
 	// stderr 应被捕获
-	sandbox, err := CreateSandbox(t.TempDir(), "test-stderr")
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-stderr"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
-	output, _ := ExecuteInSandbox(context.Background(), sandbox, "echo error_msg >&2", 10)
+	output, _ := exec.Execute(context.Background(), sandbox, "", "echo error_msg >&2", 10, nil)
 	if !strings.Contains(output, "error_msg") {
 		t.Errorf("stderr not captured, got %q", output)
 	}
@@ -508,7 +526,8 @@ func TestExecuteInSandbox_StderrCapture(t *testing.T) {
 
 func TestCreateSandbox(t *testing.T) {
 	tmpDir := t.TempDir()
-	sandbox, err := CreateSandbox(tmpDir, "card-123")
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "card-123"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
@@ -529,24 +548,26 @@ func TestCreateSandbox(t *testing.T) {
 }
 
 func TestCleanupSandbox_Safety(t *testing.T) {
-	// CleanupSandbox 不应删除非沙箱路径
-	CleanupSandbox("") // should not panic
-	CleanupSandbox("/home/user") // should not delete (no /sandbox/)
-	CleanupSandbox("/tmp/random") // should not delete (no /sandbox/)
+	// Cleanup 不应删除非沙箱路径
+	exec := NewDirectExecutor("")
+	exec.Cleanup("")            // should not panic
+	exec.Cleanup("/home/user")  // should not delete (no /sandbox/)
+	exec.Cleanup("/tmp/random") // should not delete (no /sandbox/)
 }
 
 func TestCleanupSandbox_Works(t *testing.T) {
 	tmpDir := t.TempDir()
-	sandbox, err := CreateSandbox(tmpDir, "card-cleanup")
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "card-cleanup"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
 
 	// 创建一些文件
-	ExecuteInSandbox(context.Background(), sandbox, "echo test > file.txt", 10)
+	exec.Execute(context.Background(), sandbox, "", "echo test > file.txt", 10, nil)
 
 	// 清理
-	CleanupSandbox(sandbox)
+	exec.Cleanup(sandbox)
 
 	// 验证已删除
 	if _, err := execStatCheck(sandbox); err == nil {

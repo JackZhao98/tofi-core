@@ -314,7 +314,7 @@ func (db *DB) migrateOldTelegramToConnectors() {
 	// 检查是否有旧数据
 	rows, err := db.conn.Query(
 		`SELECT DISTINCT scope FROM settings WHERE key = ?`,
-		keyTelegramBotToken,
+		"connector_telegram_bot_token",
 	)
 	if err != nil {
 		return
@@ -337,40 +337,73 @@ func (db *DB) migrateOldTelegramToConnectors() {
 			continue
 		}
 
-		// 读取旧配置
-		oldCfg, err := db.GetTelegramConfig(userID)
+		// Read old telegram config from settings table
+		settingsRows, err := db.conn.Query(
+			`SELECT key, value FROM settings WHERE scope = ? AND key LIKE 'connector_telegram_%'`,
+			userID,
+		)
 		if err != nil {
+			continue
+		}
+		var botToken, botName, botUsername, botPhoto string
+		var enabled bool
+		for settingsRows.Next() {
+			var key, value string
+			settingsRows.Scan(&key, &value)
+			switch key {
+			case "connector_telegram_bot_token":
+				botToken = value
+			case "connector_telegram_enabled":
+				enabled = value == "true"
+			case "connector_telegram_bot_name":
+				botName = value
+			case "connector_telegram_bot_username":
+				botUsername = value
+			case "connector_telegram_bot_photo":
+				botPhoto = value
+			}
+		}
+		settingsRows.Close()
+		if botToken == "" {
 			continue
 		}
 
 		// 创建新 connector
 		cfg := TelegramConnectorConfig{
-			BotToken:    oldCfg.BotToken,
-			BotName:     oldCfg.BotName,
-			BotUsername:  oldCfg.BotUsername,
-			BotPhoto:    oldCfg.BotPhoto,
+			BotToken:   botToken,
+			BotName:    botName,
+			BotUsername: botUsername,
+			BotPhoto:   botPhoto,
 		}
 		cfgJSON, _ := json.Marshal(cfg)
 
 		connID := uuid.New().String()
 		_, err = db.conn.Exec(
 			`INSERT INTO connectors (id, user_id, scope, type, config, enabled) VALUES (?, ?, 'global:*', 'telegram', ?, ?)`,
-			connID, userID, string(cfgJSON), oldCfg.Enabled,
+			connID, userID, string(cfgJSON), enabled,
 		)
 		if err != nil {
 			continue
 		}
 
 		// 迁移 receivers
-		oldReceivers, _ := db.ListTelegramReceivers(userID)
-		for _, r := range oldReceivers {
-			meta := TelegramReceiverMeta{ChatID: r.ChatID, Username: r.Username}
-			metaJSON, _ := json.Marshal(meta)
-			db.conn.Exec(
-				`INSERT OR IGNORE INTO connector_receivers (connector_id, identifier, display_name, avatar_url, metadata, verified_at)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				connID, r.ChatID, r.DisplayName, r.AvatarURL, string(metaJSON), r.ConnectedAt,
-			)
+		recvRows, _ := db.conn.Query(
+			`SELECT chat_id, display_name, username, avatar_url, connected_at FROM telegram_receivers WHERE user_id = ?`,
+			userID,
+		)
+		if recvRows != nil {
+			for recvRows.Next() {
+				var chatID, displayName, username, avatarURL, connectedAt string
+				recvRows.Scan(&chatID, &displayName, &username, &avatarURL, &connectedAt)
+				meta := TelegramReceiverMeta{ChatID: chatID, Username: username}
+				metaJSON, _ := json.Marshal(meta)
+				db.conn.Exec(
+					`INSERT OR IGNORE INTO connector_receivers (connector_id, identifier, display_name, avatar_url, metadata, verified_at)
+					 VALUES (?, ?, ?, ?, ?, ?)`,
+					connID, chatID, displayName, avatarURL, string(metaJSON), connectedAt,
+				)
+			}
+			recvRows.Close()
 		}
 	}
 }

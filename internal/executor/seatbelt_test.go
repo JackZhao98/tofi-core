@@ -51,15 +51,16 @@ func TestSeatbelt_BlocksSensitiveFileRead(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	sandbox, err := CreateSandbox(tmpDir, "test-seatbelt-read")
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-seatbelt-read"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
 	home := getUserHome()
 	// Try to read ~/.ssh — should be blocked by seatbelt
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "ls "+home+"/.ssh/ 2>&1", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "ls "+home+"/.ssh/ 2>&1", 10, nil)
 	if err == nil && !strings.Contains(output, "Operation not permitted") && !strings.Contains(output, "No such file") {
 		t.Errorf("reading ~/.ssh should be blocked by seatbelt, got output: %q", output)
 	}
@@ -71,14 +72,15 @@ func TestSeatbelt_AllowsLegitimateCommands(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	sandbox, err := CreateSandbox(tmpDir, "test-seatbelt-ok")
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-seatbelt-ok"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
 	// echo should work
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "echo hello", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "", "echo hello", 10, nil)
 	if err != nil {
 		t.Fatalf("echo should work under seatbelt: %v", err)
 	}
@@ -87,7 +89,7 @@ func TestSeatbelt_AllowsLegitimateCommands(t *testing.T) {
 	}
 
 	// python3 should work
-	output, err = ExecuteInSandbox(context.Background(), sandbox, "python3 -c 'print(42)'", 10)
+	output, err = exec.Execute(context.Background(), sandbox, "", "python3 -c 'print(42)'", 10, nil)
 	if err != nil {
 		t.Fatalf("python3 should work under seatbelt: %v", err)
 	}
@@ -102,15 +104,16 @@ func TestSeatbelt_BlocksNetworkBind(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	sandbox, err := CreateSandbox(tmpDir, "test-seatbelt-bind")
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-seatbelt-bind"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
 	// Try to bind a port — should be blocked
-	output, err := ExecuteInSandbox(context.Background(), sandbox,
-		"python3 -c \"import socket; s=socket.socket(); s.bind(('127.0.0.1', 19999))\" 2>&1", 10)
+	output, err := exec.Execute(context.Background(), sandbox, "",
+		"python3 -c \"import socket; s=socket.socket(); s.bind(('127.0.0.1', 19999))\" 2>&1", 10, nil)
 	if err == nil && !strings.Contains(output, "Permission denied") && !strings.Contains(output, "Operation not permitted") {
 		t.Errorf("binding port should be blocked by seatbelt, got: %q", output)
 	}
@@ -122,14 +125,15 @@ func TestSeatbelt_AllowsOutboundNetwork(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	sandbox, err := CreateSandbox(tmpDir, "test-seatbelt-net")
+	exec := NewDirectExecutor(tmpDir)
+	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-seatbelt-net"})
 	if err != nil {
 		t.Fatalf("CreateSandbox failed: %v", err)
 	}
-	defer CleanupSandbox(sandbox)
+	defer exec.Cleanup(sandbox)
 
 	// Outbound curl should still work (Agent needs API access)
-	output, err := ExecuteInSandbox(context.Background(), sandbox, "curl -s -o /dev/null -w '%{http_code}' https://httpbin.org/get", 15)
+	output, err := exec.Execute(context.Background(), sandbox, "", "curl -s -o /dev/null -w '%{http_code}' https://httpbin.org/get", 15, nil)
 	if err != nil {
 		t.Logf("curl failed (may be network issue): %v", err)
 		t.Skip("network not available")

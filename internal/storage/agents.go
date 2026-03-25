@@ -59,39 +59,7 @@ func (db *DB) initAgentsTable() error {
 	return nil
 }
 
-// ── Agent CRUD ──
-
-func (db *DB) CreateAgent(agent *AgentRecord) error {
-	if agent.Capabilities == "" {
-		agent.Capabilities = "{}"
-	}
-	query := `INSERT INTO agents (id, name, description, prompt, system_prompt, model, skills, schedule_rules, capabilities, buffer_size, renewal_threshold, is_active, user_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-	_, err := db.conn.Exec(query,
-		agent.ID, agent.Name, agent.Description, agent.Prompt, agent.SystemPrompt,
-		agent.Model, agent.Skills, agent.ScheduleRules, agent.Capabilities,
-		agent.BufferSize, agent.RenewalThreshold, boolToInt(agent.IsActive), agent.UserID,
-	)
-	return err
-}
-
-func (db *DB) GetAgent(id string) (*AgentRecord, error) {
-	query := `SELECT id, name, COALESCE(description,''), COALESCE(prompt,''), COALESCE(system_prompt,''),
-		COALESCE(model,''), COALESCE(skills,'[]'), COALESCE(schedule_rules,'[]'), COALESCE(capabilities,'{}'),
-		buffer_size, renewal_threshold, is_active, user_id, created_at, updated_at
-		FROM agents WHERE id = ?`
-	row := db.conn.QueryRow(query, id)
-	var a AgentRecord
-	var isActive int
-	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.Prompt, &a.SystemPrompt,
-		&a.Model, &a.Skills, &a.ScheduleRules, &a.Capabilities,
-		&a.BufferSize, &a.RenewalThreshold, &isActive, &a.UserID, &a.CreatedAt, &a.UpdatedAt,
-	); err != nil {
-		return nil, err
-	}
-	a.IsActive = isActive != 0
-	return &a, nil
-}
+// ── Agent Operations ──
 
 func (db *DB) ListAgents(userID string) ([]*AgentRecord, error) {
 	query := `SELECT id, name, COALESCE(description,''), COALESCE(prompt,''), COALESCE(system_prompt,''),
@@ -120,30 +88,6 @@ func (db *DB) ListAgents(userID string) ([]*AgentRecord, error) {
 	return agents, nil
 }
 
-func (db *DB) UpdateAgent(agent *AgentRecord) error {
-	if agent.Capabilities == "" {
-		agent.Capabilities = "{}"
-	}
-	query := `UPDATE agents SET name = ?, description = ?, prompt = ?, system_prompt = ?,
-		model = ?, skills = ?, schedule_rules = ?, capabilities = ?, buffer_size = ?, renewal_threshold = ?,
-		is_active = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND user_id = ?`
-	result, err := db.conn.Exec(query,
-		agent.Name, agent.Description, agent.Prompt, agent.SystemPrompt,
-		agent.Model, agent.Skills, agent.ScheduleRules, agent.Capabilities,
-		agent.BufferSize, agent.RenewalThreshold, boolToInt(agent.IsActive),
-		agent.ID, agent.UserID,
-	)
-	if err != nil {
-		return err
-	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("agent not found or not owned by user")
-	}
-	return nil
-}
-
 func (db *DB) DeleteAgent(id, userID string) error {
 	result, err := db.conn.Exec(`DELETE FROM agents WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
@@ -154,46 +98,6 @@ func (db *DB) DeleteAgent(id, userID string) error {
 		return fmt.Errorf("agent not found or not owned by user")
 	}
 	return nil
-}
-
-func (db *DB) SetAgentActive(id, userID string, active bool) error {
-	result, err := db.conn.Exec(`UPDATE agents SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
-		boolToInt(active), id, userID)
-	if err != nil {
-		return err
-	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("agent not found or not owned by user")
-	}
-	return nil
-}
-
-func (db *DB) ListActiveAgents() ([]*AgentRecord, error) {
-	query := `SELECT id, name, COALESCE(description,''), COALESCE(prompt,''), COALESCE(system_prompt,''),
-		COALESCE(model,''), COALESCE(skills,'[]'), COALESCE(schedule_rules,'[]'), COALESCE(capabilities,'{}'),
-		buffer_size, renewal_threshold, is_active, user_id, created_at, updated_at
-		FROM agents WHERE is_active = 1`
-	rows, err := db.conn.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var agents []*AgentRecord
-	for rows.Next() {
-		var a AgentRecord
-		var isActive int
-		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.Prompt, &a.SystemPrompt,
-			&a.Model, &a.Skills, &a.ScheduleRules, &a.Capabilities,
-			&a.BufferSize, &a.RenewalThreshold, &isActive, &a.UserID, &a.CreatedAt, &a.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		a.IsActive = isActive != 0
-		agents = append(agents, &a)
-	}
-	return agents, nil
 }
 
 // helper
