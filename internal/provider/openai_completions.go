@@ -11,24 +11,24 @@ import (
 	"time"
 )
 
-// openaiLegacy implements Provider using the OpenAI Chat Completions API.
+// openaiChatCompletions implements Provider using the OpenAI Chat Completions API.
 // Used for OpenAI-compatible providers (Ollama, Groq, OpenRouter, DeepSeek, etc.).
-type openaiLegacy struct {
+type openaiChatCompletions struct {
 	apiKey  string
 	baseURL string
 }
 
-func newOpenAILegacy(apiKey string, cfg *providerConfig) (Provider, error) {
+func newOpenAIChatCompletions(apiKey string, cfg *providerConfig) (Provider, error) {
 	baseURL := "https://api.openai.com/v1"
 	if cfg.BaseURL != "" {
 		baseURL = cfg.BaseURL
 	}
 	// API key may be empty for local providers like Ollama
-	return &openaiLegacy{apiKey: apiKey, baseURL: baseURL}, nil
+	return &openaiChatCompletions{apiKey: apiKey, baseURL: baseURL}, nil
 }
 
 // Chat sends a non-streaming Chat Completions request.
-func (o *openaiLegacy) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+func (o *openaiChatCompletions) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	payload := o.buildPayload(req, false)
 	body, err := o.doRequest(ctx, payload)
 	if err != nil {
@@ -38,7 +38,7 @@ func (o *openaiLegacy) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 }
 
 // ChatStream sends a streaming Chat Completions request.
-func (o *openaiLegacy) ChatStream(ctx context.Context, req *ChatRequest, onDelta func(StreamDelta)) (*ChatResponse, error) {
+func (o *openaiChatCompletions) ChatStream(ctx context.Context, req *ChatRequest, onDelta func(StreamDelta)) (*ChatResponse, error) {
 	payload := o.buildPayload(req, true)
 
 	jsonData, err := json.Marshal(payload)
@@ -71,7 +71,7 @@ func (o *openaiLegacy) ChatStream(ctx context.Context, req *ChatRequest, onDelta
 }
 
 // buildPayload constructs a Chat Completions request.
-func (o *openaiLegacy) buildPayload(req *ChatRequest, stream bool) map[string]interface{} {
+func (o *openaiChatCompletions) buildPayload(req *ChatRequest, stream bool) map[string]interface{} {
 	// Build messages array
 	var messages []map[string]interface{}
 
@@ -166,7 +166,7 @@ func (o *openaiLegacy) buildPayload(req *ChatRequest, stream bool) map[string]in
 }
 
 // doRequest sends a non-streaming POST.
-func (o *openaiLegacy) doRequest(ctx context.Context, payload map[string]interface{}) (string, error) {
+func (o *openaiChatCompletions) doRequest(ctx context.Context, payload map[string]interface{}) (string, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
@@ -201,7 +201,7 @@ func (o *openaiLegacy) doRequest(ctx context.Context, payload map[string]interfa
 }
 
 // parseResponse parses a Chat Completions response.
-func (o *openaiLegacy) parseResponse(body string) (*ChatResponse, error) {
+func (o *openaiChatCompletions) parseResponse(body string) (*ChatResponse, error) {
 	var resp struct {
 		Choices []struct {
 			Message struct {
@@ -250,7 +250,7 @@ func (o *openaiLegacy) parseResponse(body string) (*ChatResponse, error) {
 }
 
 // parseStream parses Chat Completions streaming response.
-func (o *openaiLegacy) parseStream(body io.Reader, onDelta func(StreamDelta)) (*ChatResponse, error) {
+func (o *openaiChatCompletions) parseStream(body io.Reader, onDelta func(StreamDelta)) (*ChatResponse, error) {
 	result := &ChatResponse{}
 	var contentBuf strings.Builder
 	var reasoningBuf strings.Builder

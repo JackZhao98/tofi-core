@@ -111,7 +111,7 @@ func WithBaseURL(url string) Option {
 //
 // Supported provider names:
 //   - "openai" — OpenAI Responses API (primary)
-//   - "openai_legacy" — OpenAI Chat Completions (explicit legacy)
+//   - "openai_completions" — OpenAI Chat Completions API (explicit)
 //   - "anthropic", "claude" — Anthropic Claude Messages API
 //   - "gemini" — Google Gemini API
 //   - "deepseek", "groq", "openrouter", "together", "ollama" — OpenAI-compatible (Chat Completions)
@@ -124,8 +124,8 @@ func New(providerName, apiKey string, opts ...Option) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "openai":
 		return newOpenAIResponses(apiKey, cfg)
-	case "openai_legacy":
-		return newOpenAILegacy(apiKey, cfg)
+	case "openai_completions", "openai_legacy":
+		return newOpenAIChatCompletions(apiKey, cfg)
 	case "anthropic", "claude":
 		return newAnthropic(apiKey, cfg)
 	case "gemini":
@@ -134,31 +134,31 @@ func New(providerName, apiKey string, opts ...Option) (Provider, error) {
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://api.deepseek.com/v1"
 		}
-		return newOpenAILegacy(apiKey, cfg)
+		return newOpenAIChatCompletions(apiKey, cfg)
 	case "groq":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://api.groq.com/openai/v1"
 		}
-		return newOpenAILegacy(apiKey, cfg)
+		return newOpenAIChatCompletions(apiKey, cfg)
 	case "openrouter":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://openrouter.ai/api/v1"
 		}
-		return newOpenAILegacy(apiKey, cfg)
+		return newOpenAIChatCompletions(apiKey, cfg)
 	case "together":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://api.together.xyz/v1"
 		}
-		return newOpenAILegacy(apiKey, cfg)
+		return newOpenAIChatCompletions(apiKey, cfg)
 	case "ollama":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "http://localhost:11434/v1"
 		}
-		return newOpenAILegacy(apiKey, cfg)
+		return newOpenAIChatCompletions(apiKey, cfg)
 	default:
 		// Assume OpenAI-compatible for unknown providers
 		if cfg.BaseURL != "" {
-			return newOpenAILegacy(apiKey, cfg)
+			return newOpenAIChatCompletions(apiKey, cfg)
 		}
 		return nil, fmt.Errorf("unknown provider: %s (set a custom endpoint with WithBaseURL)", providerName)
 	}

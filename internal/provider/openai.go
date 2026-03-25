@@ -18,7 +18,7 @@ import (
 type openaiResponses struct {
 	apiKey  string
 	baseURL string
-	legacy  *openaiLegacy // Chat Completions fallback for tool-related errors
+	legacy  *openaiChatCompletions // Chat Completions fallback for tool-related errors
 }
 
 func newOpenAIResponses(apiKey string, cfg *providerConfig) (Provider, error) {
@@ -30,7 +30,7 @@ func newOpenAIResponses(apiKey string, cfg *providerConfig) (Provider, error) {
 		baseURL = cfg.BaseURL
 	}
 	// Create a Chat Completions fallback for when Responses API has tool issues
-	legacy := &openaiLegacy{apiKey: apiKey, baseURL: baseURL}
+	legacy := &openaiChatCompletions{apiKey: apiKey, baseURL: baseURL}
 	return &openaiResponses{apiKey: apiKey, baseURL: baseURL, legacy: legacy}, nil
 }
 
