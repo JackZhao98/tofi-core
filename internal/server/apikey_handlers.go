@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -28,9 +30,13 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate key: tofi-sk-{32 hex chars}
-	tokenBody, keyHash := storage.GenerateSecureToken(16) // 16 bytes = 32 hex chars
+	// Hash the FULL key (including prefix) so auth lookup matches
+	tokenBody, _ := storage.GenerateSecureToken(16) // 16 bytes = 32 hex chars
 	fullKey := "tofi-sk-" + tokenBody
 	prefix := fullKey[:16] // "tofi-sk-" + first 8 hex chars
+	// Hash the full key (auth.go hashes the full Bearer token)
+	h := sha256.Sum256([]byte(fullKey))
+	keyHash := hex.EncodeToString(h[:])
 
 	id := uuid.New().String()
 
