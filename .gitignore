@@ -25,3 +25,8 @@ workflows/
 Thumbs.db
 
 __pycache__/
+
+# Claude Code / AI agent configs
+.claude/
+.agents/
+AGENTS.md
