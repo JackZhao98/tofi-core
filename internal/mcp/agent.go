@@ -292,8 +292,22 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				}
 			}
 
-			// If skill has scripts, register the run_skill tool dynamically
+			// If skill has scripts, create sandbox symlink + register the run_skill tool
 			if skill.SkillDir != "" {
+				// Create symlink NOW so tofi_shell can find scripts at skills/{name}/
+				if cfg.SandboxDir != "" {
+					symlinkDir := filepath.Join(cfg.SandboxDir, "skills")
+					os.MkdirAll(symlinkDir, 0755)
+					link := filepath.Join(symlinkDir, name)
+					if _, err := os.Lstat(link); os.IsNotExist(err) {
+						if err := os.Symlink(skill.SkillDir, link); err != nil {
+							ctx.Log("[Skill:%s] Warning: failed to symlink scripts: %v", name, err)
+						} else {
+							ctx.Log("[Skill:%s] Symlinked scripts: skills/%s/ → %s", name, name, skill.SkillDir)
+						}
+					}
+				}
+
 				runToolName := "run_skill__" + sanitizeToolName(name)
 				alreadyRegistered := false
 				for _, t := range allTools {

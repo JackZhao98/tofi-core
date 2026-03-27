@@ -23,8 +23,17 @@ import urllib.parse
 import urllib.request
 
 
+def _strip_search_operators(query):
+    """Strip Brave-specific search operators that DDGS doesn't support."""
+    import re
+    # Remove site:, intitle:, inbody:, filetype:, lang:, loc: operators
+    query = re.sub(r'\b(site|intitle|inbody|filetype|lang|loc):\S+', '', query)
+    return ' '.join(query.split())  # normalize whitespace
+
+
 def ddgs_search(query, count=5, region="wt-wt"):
     """Fallback search using DuckDuckGo (no API key needed)."""
+    query = _strip_search_operators(query)
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:

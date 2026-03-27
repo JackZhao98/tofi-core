@@ -23,8 +23,16 @@ import urllib.parse
 import urllib.request
 
 
+def _strip_search_operators(query):
+    """Strip Brave-specific search operators that DDGS doesn't support."""
+    import re
+    query = re.sub(r'\b(site|intitle|inbody|filetype|lang|loc):\S+', '', query)
+    return ' '.join(query.split())
+
+
 def ddgs_news(query, count=10):
     """Fallback news search using DuckDuckGo."""
+    query = _strip_search_operators(query)
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
