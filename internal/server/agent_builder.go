@@ -119,6 +119,7 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]mcp.Skil
 				Name:         sf.Manifest.Name,
 				Description:  sf.Manifest.Description,
 				Instructions: sf.Body,
+				DirectTools:  sf.Manifest.Tools,
 			}
 			if len(sf.ScriptDirs) > 0 {
 				// Scripts are copied to disk by InstallSystemSkills()
@@ -137,6 +138,7 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]mcp.Skil
 				Name:         sf.Manifest.Name,
 				Description:  sf.Manifest.Description,
 				Instructions: sf.Body,
+				DirectTools:  sf.Manifest.Tools,
 			}
 			if len(sf.ScriptDirs) > 0 {
 				st.SkillDir = sf.Dir

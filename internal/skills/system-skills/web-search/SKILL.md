@@ -1,53 +1,69 @@
 ---
 name: web-search
 description: Search the web for real-time information using Brave Search or DuckDuckGo fallback
-version: "3.1"
+version: "4.0"
 required_secrets: ["BRAVE_API_KEY"]
+tools:
+  - name: web_search
+    description: "Search the web and return page content from top results. Default choice for general queries."
+    script: "scripts/search.py"
+    params:
+      query:
+        type: string
+        description: "Search query"
+        required: true
+      count:
+        type: integer
+        description: "Number of sources (default 5, max 20)"
+      tokens:
+        type: integer
+        description: "Max tokens per source (default 8192, max 32768)"
+      freshness:
+        type: string
+        description: "Time filter: pd/pw/pm/py or YYYY-MM-DDtoYYYY-MM-DD"
+      search_lang:
+        type: string
+        description: "Content language (default: en)"
+      result_filter:
+        type: string
+        description: "Filter types: discussions, faq, infobox, news, web, locations"
+  - name: web_news
+    description: "Search recent news articles with dates and sources. Use for breaking events and time-sensitive queries."
+    script: "scripts/news.py"
+    params:
+      query:
+        type: string
+        description: "News search query"
+        required: true
+      count:
+        type: integer
+        description: "Number of results (default 5)"
+      freshness:
+        type: string
+        description: "Time filter (default: pw)"
+      search_lang:
+        type: string
+        description: "Content language (default: en)"
+      extra_snippets:
+        type: boolean
+        description: "Include extra excerpts per article"
+  - name: web_summarize
+    description: "Get AI-powered summary of web search results with sources."
+    script: "scripts/summarize.py"
+    params:
+      query:
+        type: string
+        description: "Topic to summarize"
+        required: true
 ---
 
-# Web Search Toolkit
+Search tools for finding web content. Pick the right tool:
+- **web_search**: General queries, documentation, analysis. Default choice.
+- **web_news**: Breaking news, time-sensitive events, stock market. ALWAYS use for "latest/recent" queries.
+- **web_summarize**: Quick factual overview.
 
-> Best with Brave API key (Settings > Service Keys). Without key, DuckDuckGo fallback (reduced quality).
-> **Note**: DuckDuckGo does NOT support `site:` operator — only Brave supports search operators.
-
-## Tools
-
-### `search.py` — Smart Search (Default)
-```bash
-python3 skills/web-search/scripts/search.py "query" [--count N] [--tokens N] [--freshness RANGE] [--search-lang LANG] [--result-filter TYPES]
-```
-- `--count N`: Sources (default: 5, max: 20) | `--tokens N`: Max tokens (default: 8192)
-- `--freshness`: `pd`/`pw`/`pm`/`py` or `YYYY-MM-DDtoYYYY-MM-DD` (bypasses LLM Context when set)
-- `--result-filter`: `discussions`, `faq`, `infobox`, `news`, `web`, `locations`
-- **Do NOT use for news/time-sensitive queries** — use `news.py` instead.
-
-### `news.py` — News Search
-```bash
-python3 skills/web-search/scripts/news.py "query" [--count N] [--freshness RANGE] [--extra-snippets]
-```
-- `--freshness` default: `pw` | `--extra-snippets`: Up to 5 additional excerpts per article
-- **Use for breaking events, press coverage, anything time-sensitive.**
-
-### `videos.py` — Video Search
-```bash
-python3 skills/web-search/scripts/videos.py "query" [--count N] [--freshness RANGE]
-```
-
-### `images.py` — Image Search
-```bash
-python3 skills/web-search/scripts/images.py "query" [--count N] [--safesearch MODE]
-```
-- `--safesearch`: `off`/`strict` (default: strict)
-
-### `summarize.py` — AI Summary
-```bash
-python3 skills/web-search/scripts/summarize.py "query"
-```
-- Returns condensed AI summary with sources.
-
-## Tips
-
-- Decompose complex questions into multiple search calls.
-- Use `site:domain.com` when user mentions a specific website (Brave only).
-- For news/current events, **always** use `news.py`, not `search.py`.
+Tips:
+- Use `site:domain.com` in query to restrict to a specific website (Brave only, not DuckDuckGo).
+- Decompose complex questions into multiple searches.
+- For news/current events, ALWAYS use web_news, not web_search.
 - Cite sources inline: `[Site Name](URL)`.

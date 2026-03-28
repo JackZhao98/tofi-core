@@ -46,6 +46,9 @@ type SkillManifest struct {
 	// RequiredSecrets 技能需要的密钥列表 (如 ["BRAVE_API_KEY"])
 	RequiredSecrets []string `yaml:"required_secrets,omitempty" json:"required_secrets,omitempty"`
 
+	// Tools 技能直接注册的工具列表（跳过 sub-LLM，直接执行脚本）
+	Tools []SkillToolDef `yaml:"tools,omitempty" json:"tools,omitempty"`
+
 	// Version 技能版本
 	Version string `yaml:"version,omitempty" json:"version,omitempty"`
 
@@ -69,6 +72,22 @@ type SkillInput struct {
 type SkillOutput struct {
 	Type        string `yaml:"type" json:"type"`                 // text, json, markdown, file
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+}
+
+// SkillToolDef 定义技能直接注册的工具（脚本直接执行，无需 sub-LLM）
+type SkillToolDef struct {
+	Name        string                    `yaml:"name" json:"name"`
+	Description string                    `yaml:"description" json:"description"`
+	Script      string                    `yaml:"script" json:"script"`   // 相对路径: "scripts/search.py"
+	Params      map[string]SkillToolParam `yaml:"params" json:"params"`
+}
+
+// SkillToolParam 定义工具参数
+type SkillToolParam struct {
+	Type        string `yaml:"type" json:"type"`                                 // "string", "integer", "boolean"
+	Description string `yaml:"description" json:"description"`
+	Default     any    `yaml:"default,omitempty" json:"default,omitempty"`
+	Required    bool   `yaml:"required,omitempty" json:"required,omitempty"`
 }
 
 // SkillFile 表示完整的解析后 SKILL.md 文件

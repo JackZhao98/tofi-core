@@ -28,8 +28,9 @@ type SkillTool struct {
 	Name         string
 	Description  string
 	Instructions string
-	SkillDir     string             // Absolute path to skill directory on disk (empty if no scripts)
-	BundledTools []ExtraBuiltinTool // Tools that come with this skill — activated when skill is loaded
+	SkillDir     string                 // Absolute path to skill directory on disk (empty if no scripts)
+	BundledTools []ExtraBuiltinTool     // Tools that come with this skill — activated when skill is loaded
+	DirectTools  []models.SkillToolDef  // Direct tool definitions from manifest (skip sub-LLM, execute scripts directly)
 }
 
 // ExtraBuiltinTool allows registering additional built-in tools with custom handlers
@@ -292,7 +293,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				}
 			}
 
-			// If skill has scripts, create sandbox symlink + register the run_skill tool
+			// If skill has scripts, create sandbox symlink + register tools
 			if skill.SkillDir != "" {
 				// Create symlink NOW so tofi_shell can find scripts at skills/{name}/
 				if cfg.SandboxDir != "" {
@@ -308,30 +309,150 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 					}
 				}
 
-				runToolName := "run_skill__" + sanitizeToolName(name)
-				alreadyRegistered := false
-				for _, t := range allTools {
-					if t.Name == runToolName {
-						alreadyRegistered = true
-						break
-					}
-				}
-				if !alreadyRegistered {
-					allTools = append(allTools, provider.Tool{
-						Name:        runToolName,
-						Description: fmt.Sprintf("Execute the '%s' skill: %s", name, skill.Description),
-						Parameters: map[string]interface{}{
-							"type": "object",
-							"properties": map[string]interface{}{
-								"input": map[string]interface{}{
-									"type":        "string",
-									"description": "The input/request to send to this skill",
-								},
+				if len(skill.DirectTools) > 0 {
+					// Direct tool registration — each tool maps to a script, no sub-LLM needed
+					for _, toolDef := range skill.DirectTools {
+						// Skip if already registered
+						alreadyRegistered := false
+						for _, t := range allTools {
+							if t.Name == toolDef.Name {
+								alreadyRegistered = true
+								break
+							}
+						}
+						if alreadyRegistered {
+							continue
+						}
+
+						// Build JSON Schema from params
+						properties := map[string]interface{}{}
+						var required []string
+						for paramName, param := range toolDef.Params {
+							prop := map[string]interface{}{
+								"type":        param.Type,
+								"description": param.Description,
+							}
+							if param.Default != nil {
+								prop["default"] = param.Default
+							}
+							properties[paramName] = prop
+							if param.Required {
+								required = append(required, paramName)
+							}
+						}
+
+						schema := provider.Tool{
+							Name:        toolDef.Name,
+							Description: toolDef.Description,
+							Parameters: map[string]interface{}{
+								"type":       "object",
+								"properties": properties,
+								"required":   required,
 							},
-							"required": []string{"input"},
-						},
-					})
-					activatedTools = append(activatedTools, runToolName)
+						}
+
+						// Capture for closure
+						capturedScript := filepath.Join(skill.SkillDir, toolDef.Script)
+						capturedName := toolDef.Name
+						capturedParams := toolDef.Params
+
+						allTools = append(allTools, schema)
+						extraHandlers[capturedName] = func(args map[string]interface{}) (string, error) {
+							cmdParts := []string{"python3", capturedScript}
+
+							// First positional arg: "query" or "url"
+							if q, ok := args["query"].(string); ok {
+								cmdParts = append(cmdParts, shellQuote(q))
+							} else if u, ok := args["url"].(string); ok {
+								cmdParts = append(cmdParts, shellQuote(u))
+							}
+
+							// Named params as flags
+							for paramName, paramDef := range capturedParams {
+								if paramName == "query" || paramName == "url" {
+									continue
+								}
+								val, exists := args[paramName]
+								if !exists {
+									continue
+								}
+								flagName := strings.ReplaceAll(paramName, "_", "-")
+								switch paramDef.Type {
+								case "boolean":
+									if b, ok := val.(bool); ok && b {
+										cmdParts = append(cmdParts, "--"+flagName)
+									}
+								case "integer":
+									if n, ok := val.(float64); ok {
+										cmdParts = append(cmdParts, fmt.Sprintf("--%s", flagName), fmt.Sprintf("%d", int(n)))
+									}
+								default: // string
+									if s, ok := val.(string); ok && s != "" {
+										cmdParts = append(cmdParts, "--"+flagName, shellQuote(s))
+									}
+								}
+							}
+
+							cmd := strings.Join(cmdParts, " ")
+							timeoutSec := 120
+							if cfg.Executor != nil && cfg.UserDir != "" {
+								output, execErr := cfg.Executor.Execute(
+									context.Background(),
+									cfg.SandboxDir,
+									cfg.UserDir,
+									cmd,
+									timeoutSec,
+									cfg.SecretEnv,
+								)
+								if execErr != nil {
+									return truncateShellOutput(output, execErr, 8000), nil
+								}
+								return truncateShellSuccess(output, 8000), nil
+							}
+							// Legacy fallback
+							output, execErr := executor.NewDirectExecutor("").Execute(
+								context.Background(),
+								cfg.SandboxDir,
+								"",
+								cmd,
+								timeoutSec,
+								cfg.SecretEnv,
+							)
+							if execErr != nil {
+								return truncateShellOutput(output, execErr, 8000), nil
+							}
+							return truncateShellSuccess(output, 8000), nil
+						}
+						activatedTools = append(activatedTools, capturedName)
+						ctx.Log("[Skill:%s] Registered direct tool: %s → %s", name, capturedName, capturedScript)
+					}
+				} else {
+					// Fallback: register run_skill__ for skills without direct tools
+					runToolName := "run_skill__" + sanitizeToolName(name)
+					alreadyRegistered := false
+					for _, t := range allTools {
+						if t.Name == runToolName {
+							alreadyRegistered = true
+							break
+						}
+					}
+					if !alreadyRegistered {
+						allTools = append(allTools, provider.Tool{
+							Name:        runToolName,
+							Description: fmt.Sprintf("Execute the '%s' skill: %s", name, skill.Description),
+							Parameters: map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"input": map[string]interface{}{
+										"type":        "string",
+										"description": "The input/request to send to this skill",
+									},
+								},
+								"required": []string{"input"},
+							},
+						})
+						activatedTools = append(activatedTools, runToolName)
+					}
 				}
 			}
 
@@ -1303,6 +1424,11 @@ func mapKeys(m map[string]bool) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// shellQuote wraps a string in single quotes with proper escaping for shell safety.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func sanitizeToolName(name string) string {
