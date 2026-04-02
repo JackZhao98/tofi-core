@@ -66,6 +66,7 @@ type AgentConfig struct {
 	OnStepDone       func(toolName, result string, durationMs int64)           // Generic step done
 	LiveUsage        *provider.Usage                                           // Optional: updated in real-time during agent loop for tools to read
 	Hooks            *Hooks                                                    // Optional: pre/post hooks for tool calls, API calls, compaction
+	AskUserFn        func(question string, options []string) (string, error)   // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
 }
 
 type MCPServerConfig struct {
@@ -575,6 +576,12 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 
 	// Background task manager for auto-backgrounding long shell commands
 	bgManager := NewBackgroundTaskManager()
+
+	// Register task management tools (task_status + ask_user)
+	for _, tt := range buildTaskTools(bgManager, cfg.AskUserFn) {
+		allTools = append(allTools, tt.Schema)
+		extraHandlers[tt.Schema.Name] = tt.Handler
+	}
 
 	for step := 1; step <= maxSteps; step++ {
 		// Check for cancellation before starting a new LLM call

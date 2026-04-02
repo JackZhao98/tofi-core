@@ -33,6 +33,7 @@ type Config struct {
 // HoldSignal is sent through a hold channel to resume a paused agent
 type HoldSignal struct {
 	Action string // "continue" or "abort"
+	Answer string // user's answer text (for tofi_ask_user)
 }
 
 // PreviewSession 缓存已 clone 但尚未确认安装的 skill 预览
@@ -147,14 +148,14 @@ func (s *Server) createHoldChannel(cardID string) chan HoldSignal {
 }
 
 // signalHold sends a signal to unblock the agent waiting on this card
-func (s *Server) signalHold(cardID string, action string) bool {
+func (s *Server) signalHold(cardID, action, answer string) bool {
 	s.holdMu.Lock()
 	defer s.holdMu.Unlock()
 	ch, ok := s.holdChannels[cardID]
 	if !ok {
 		return false
 	}
-	ch <- HoldSignal{Action: action}
+	ch <- HoldSignal{Action: action, Answer: answer}
 	delete(s.holdChannels, cardID)
 	return true
 }

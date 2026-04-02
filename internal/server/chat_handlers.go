@@ -554,6 +554,46 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		agentCfg.OnStepDone = opts.OnStepDone
 	}
 
+	// AskUser: agent can ask the user questions in Chat mode.
+	// Sends an SSE event, holds the agent loop, waits for continue/abort.
+	agentCfg.AskUserFn = func(question string, options []string) (string, error) {
+		// 1. Emit ask_user event to frontend
+		emit("ask_user", map[string]interface{}{
+			"question": question,
+			"options":  options,
+		})
+
+		// 2. Update session status
+		session.Status = "waiting_for_user"
+		s.chatStore.Save(userID, scope, session)
+
+		// 3. Block until user responds via /continue or /abort
+		holdCh := s.createHoldChannel(sessionID)
+		timeout := time.After(5 * time.Minute)
+
+		select {
+		case signal := <-holdCh:
+			session.Status = "running"
+			s.chatStore.Save(userID, scope, session)
+
+			if signal.Action == "abort" {
+				return "", fmt.Errorf("user declined to answer")
+			}
+			// The user's answer comes through signal.Action as "continue"
+			// or a custom response via the body of the continue request
+			if signal.Answer != "" {
+				return signal.Answer, nil
+			}
+			return "User confirmed", nil
+
+		case <-timeout:
+			s.removeHoldChannel(sessionID)
+			session.Status = "running"
+			s.chatStore.Save(userID, scope, session)
+			return "", fmt.Errorf("user did not respond within 5 minutes")
+		}
+	}
+
 	p, err := provider.NewForModel(resolvedModel, apiKey, provider.WithDefaultRetry())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider: %w", err)
@@ -744,7 +784,13 @@ func appendSystemSkills(skillNames []string, db *storage.DB) []string {
 func (s *Server) handleChatSessionContinue(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 
-	if !s.signalHold(sessionID, "continue") {
+	// Parse optional answer from request body
+	var body struct {
+		Answer string `json:"answer"`
+	}
+	json.NewDecoder(r.Body).Decode(&body) // ignore errors — answer is optional
+
+	if !s.signalHold(sessionID, "continue", body.Answer) {
 		writeJSONError(w, http.StatusConflict, ErrConflict, "no hold channel found for session", "")
 		return
 	}
@@ -758,7 +804,7 @@ func (s *Server) handleChatSessionContinue(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleChatSessionAbort(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 
-	if !s.signalHold(sessionID, "abort") {
+	if !s.signalHold(sessionID, "abort", "") {
 		writeJSONError(w, http.StatusConflict, ErrConflict, "no hold channel found for session", "")
 		return
 	}
