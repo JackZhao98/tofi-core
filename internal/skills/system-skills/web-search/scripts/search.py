@@ -35,21 +35,24 @@ def ddgs_search(query, count=5, region="wt-wt"):
     """Fallback search using DuckDuckGo (no API key needed)."""
     query = _strip_search_operators(query)
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=count, region=region))
-            if not results:
-                print(f"No results found for: {query}")
-                return
-            for i, r in enumerate(results, 1):
-                print(f"\n--- Result {i} ---")
-                print(f"Title: {r.get('title', '')}")
-                print(f"URL: {r.get('href', '')}")
-                print(f"Snippet: {r.get('body', '')}")
+        from ddgs import DDGS
     except ImportError:
-        print("Error: duckduckgo-search package not installed.")
-        print("Install with: pip install duckduckgo-search")
-        sys.exit(1)
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            print("Error: ddgs package not installed.")
+            print("Install with: pip install ddgs")
+            sys.exit(1)
+    with DDGS() as ddgs:
+        results = list(ddgs.text(query, max_results=count, region=region))
+        if not results:
+            print(f"No results found for: {query}")
+            return
+        for i, r in enumerate(results, 1):
+            print(f"\n--- Result {i} ---")
+            print(f"Title: {r.get('title', '')}")
+            print(f"URL: {r.get('href', '')}")
+            print(f"Snippet: {r.get('body', '')}")
 
 
 def main():
