@@ -10,21 +10,21 @@ import (
 
 	"tofi-core/internal/capability"
 	"tofi-core/internal/crypto"
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/skills"
 	"tofi-core/internal/storage"
 )
 
 // buildSkillToolsFromRecords builds SkillTool list from skill records and resolves secrets.
 // Returns: skillTools, secretEnv, missingSecrets
-func (s *Server) buildSkillToolsFromRecords(userID string, skillRecords []*storage.SkillRecord) ([]mcp.SkillTool, map[string]string, []string) {
+func (s *Server) buildSkillToolsFromRecords(userID string, skillRecords []*storage.SkillRecord) ([]agent.SkillTool, map[string]string, []string) {
 	localStore := skills.NewLocalStore(s.config.HomeDir)
-	var skillTools []mcp.SkillTool
+	var skillTools []agent.SkillTool
 	secretEnv := make(map[string]string)
 	var missingSecrets []string
 
 	for _, skill := range skillRecords {
-		st := mcp.SkillTool{
+		st := agent.SkillTool{
 			ID:           skill.ID,
 			Name:         skill.Name,
 			Description:  skill.Description,
@@ -68,7 +68,7 @@ func (s *Server) buildSkillToolsFromRecords(userID string, skillRecords []*stora
 // Returns skillTools, skillInstructions (for appending to system prompt), and secretEnv.
 // Unlike buildSkillToolsFromRecords, this silently skips missing skills and secrets
 // (appropriate for chat context where missing secrets are non-fatal).
-func (s *Server) buildSkillToolsFromNames(userID string, skillNames []string) ([]mcp.SkillTool, []string, map[string]string) {
+func (s *Server) buildSkillToolsFromNames(userID string, skillNames []string) ([]agent.SkillTool, []string, map[string]string) {
 	var records []*storage.SkillRecord
 	var skillInstructions []string
 
@@ -95,11 +95,11 @@ func (s *Server) buildSkillToolsFromNames(userID string, skillNames []string) ([
 // buildSkillTools loads skills from embed FS (system) and filesystem (user).
 // Does not query the database — filesystem is the single source of truth.
 // Returns skillTools, skillInstructions, and secretEnv.
-func (s *Server) buildSkillTools(userID string, skillNames []string) ([]mcp.SkillTool, []string, map[string]string) {
+func (s *Server) buildSkillTools(userID string, skillNames []string) ([]agent.SkillTool, []string, map[string]string) {
 	localStore := skills.NewLocalStore(s.config.HomeDir)
 	systemSkills := skills.LoadAllSystemSkills()
 
-	var skillTools []mcp.SkillTool
+	var skillTools []agent.SkillTool
 	var skillInstructions []string
 	secretEnv := make(map[string]string)
 
@@ -109,12 +109,12 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]mcp.Skil
 			continue
 		}
 
-		var st mcp.SkillTool
+		var st agent.SkillTool
 		var requiredSecrets []string
 
 		if sf, ok := systemSkills[name]; ok {
 			// System skill — from embed FS
-			st = mcp.SkillTool{
+			st = agent.SkillTool{
 				ID:           "system/" + name,
 				Name:         sf.Manifest.Name,
 				Description:  sf.Manifest.Description,
@@ -133,7 +133,7 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]mcp.Skil
 				log.Printf("[chat] skill %q not found: %v", name, err)
 				continue
 			}
-			st = mcp.SkillTool{
+			st = agent.SkillTool{
 				ID:           "user/" + name,
 				Name:         sf.Manifest.Name,
 				Description:  sf.Manifest.Description,
@@ -177,7 +177,7 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]mcp.Skil
 }
 
 // buildCapabilitiesFromJSON parses capabilities JSON and returns MCP servers + extra tools.
-func (s *Server) buildCapabilitiesFromJSON(userID, capsJSON string) ([]mcp.MCPServerConfig, []mcp.ExtraBuiltinTool) {
+func (s *Server) buildCapabilitiesFromJSON(userID, capsJSON string) ([]agent.MCPServerConfig, []agent.ExtraBuiltinTool) {
 	caps, err := capability.Parse(capsJSON)
 	if err != nil {
 		log.Printf("⚠️ Invalid capabilities JSON: %v", err)
@@ -206,7 +206,7 @@ func (s *Server) buildCapabilitiesFromJSON(userID, capsJSON string) ([]mcp.MCPSe
 }
 
 // buildCapabilitiesFromMap marshals a capabilities map to JSON and delegates to buildCapabilitiesFromJSON.
-func (s *Server) buildCapabilitiesFromMap(userID string, capsMap interface{}) ([]mcp.MCPServerConfig, []mcp.ExtraBuiltinTool) {
+func (s *Server) buildCapabilitiesFromMap(userID string, capsMap interface{}) ([]agent.MCPServerConfig, []agent.ExtraBuiltinTool) {
 	capsJSON, err := json.Marshal(capsMap)
 	if err != nil {
 		log.Printf("⚠️ Failed to marshal capabilities: %v", err)

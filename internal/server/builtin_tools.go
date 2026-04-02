@@ -4,20 +4,20 @@ import (
 	"fmt"
 	"time"
 
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/provider"
 )
 
 // buildBuiltinTools creates always-available utility tools for agents and chat.
-func (s *Server) buildBuiltinTools(userID string) []mcp.ExtraBuiltinTool {
-	return []mcp.ExtraBuiltinTool{
+func (s *Server) buildBuiltinTools(userID string) []agent.ExtraBuiltinTool {
+	return []agent.ExtraBuiltinTool{
 		buildGetTimeTool(),
 		buildGetUserTool(userID),
 	}
 }
 
-func buildGetTimeTool() mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func buildGetTimeTool() agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_get_time",
 			Description: "Get the current date, time, and timezone. Use this when you need the exact current time, especially during long-running tasks where the initial time in the system prompt may be stale.",
@@ -52,8 +52,8 @@ func buildGetTimeTool() mcp.ExtraBuiltinTool {
 	}
 }
 
-func buildGetUserTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func buildGetUserTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_get_user",
 			Description: "Get the current user's identity. Returns the user ID only. Do NOT use this for token usage, cost, or chat statistics — use tofi_session_info instead.",

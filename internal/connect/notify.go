@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/storage"
 )
@@ -18,7 +18,7 @@ type NotifyDeps struct {
 }
 
 // BuildNotifyTool 基于 connector 系统构建 tofi_notify 工具
-func BuildNotifyTool(connectors []*storage.Connector, deps NotifyDeps) mcp.ExtraBuiltinTool {
+func BuildNotifyTool(connectors []*storage.Connector, deps NotifyDeps) agent.ExtraBuiltinTool {
 	// 构建可用渠道描述
 	var channelDescs []string
 	for _, c := range connectors {
@@ -36,7 +36,7 @@ func BuildNotifyTool(connectors []*storage.Connector, deps NotifyDeps) mcp.Extra
 		channelDescs = []string{"(no connectors configured)"}
 	}
 
-	return mcp.ExtraBuiltinTool{
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name: "tofi_notify",
 			Description: fmt.Sprintf(
@@ -249,10 +249,10 @@ func SendNotification(userID, appID, message string, deps NotifyDeps) (int, erro
 
 // InjectNotifyTool 向 extraTools 注入 tofi_notify（如果有可用 connectors）
 func InjectNotifyTool(
-	extraTools []mcp.ExtraBuiltinTool,
+	extraTools []agent.ExtraBuiltinTool,
 	userID, appID string,
 	deps NotifyDeps,
-) []mcp.ExtraBuiltinTool {
+) []agent.ExtraBuiltinTool {
 	var connectors []*storage.Connector
 	var err error
 
@@ -279,7 +279,7 @@ func InjectNotifyTool(
 	}
 
 	// 移除旧的 send_notification 工具（如果存在）
-	var filtered []mcp.ExtraBuiltinTool
+	var filtered []agent.ExtraBuiltinTool
 	for _, t := range extraTools {
 		if t.Schema.Name != "send_notification" {
 			filtered = append(filtered, t)

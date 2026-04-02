@@ -6,14 +6,14 @@ import (
 	"strings"
 	"time"
 
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/workspace"
 )
 
 // buildAppTools creates tools that let the AI manage Apps from global chat.
-func (s *Server) buildAppTools(userID string) []mcp.ExtraBuiltinTool {
-	return []mcp.ExtraBuiltinTool{
+func (s *Server) buildAppTools(userID string) []agent.ExtraBuiltinTool {
+	return []agent.ExtraBuiltinTool{
 		s.buildListAppsTool(userID),
 		s.buildCreateAppTool(userID),
 		s.buildUpdateAppTool(userID),
@@ -31,8 +31,8 @@ func (s *Server) buildAppTools(userID string) []mcp.ExtraBuiltinTool {
 
 // ── tofi_list_apps ──
 
-func (s *Server) buildListAppsTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildListAppsTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_list_apps",
 			Description: "List all Apps for the current user. Returns name, description, active status, schedule, and next run time. Use this when the user asks about their apps, automations, or scheduled tasks.",
@@ -78,8 +78,8 @@ func (s *Server) buildListAppsTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_create_app ──
 
-func (s *Server) buildCreateAppTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildCreateAppTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name: "tofi_create_app",
 			Description: `Create a new App (automated AI task). The prompt is the instruction the AI will execute each run. Schedule format is a JSON object string with entries and timezone. Skills is an array of skill names to attach.`,
@@ -179,8 +179,8 @@ func (s *Server) buildCreateAppTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_update_app ──
 
-func (s *Server) buildUpdateAppTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildUpdateAppTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_update_app",
 			Description: "Update an existing App's configuration. Only provided fields will be changed. Use this when the user wants to modify an app's prompt, schedule, skills, or other settings.",
@@ -299,8 +299,8 @@ func (s *Server) buildUpdateAppTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_delete_app ──
 
-func (s *Server) buildDeleteAppTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildDeleteAppTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_delete_app",
 			Description: "Delete an App permanently. This removes the app, its files, and cancels any pending runs. Use when the user wants to remove an automation.",
@@ -351,8 +351,8 @@ func (s *Server) buildDeleteAppTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_run_app ──
 
-func (s *Server) buildRunAppTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildRunAppTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_run_app",
 			Description: "Manually trigger an App to run immediately. The app will execute in the background and create a new chat session with the results. Use when the user wants to run an automation right now.",
@@ -399,8 +399,8 @@ func (s *Server) buildRunAppTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_list_app_runs ──
 
-func (s *Server) buildListAppRunsTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildListAppRunsTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_list_app_runs",
 			Description: "List recent runs for an App. Shows status, trigger type, timestamps, and associated session IDs. Use when the user asks about an app's execution history.",
@@ -467,8 +467,8 @@ func (s *Server) buildListAppRunsTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_toggle_schedule ──
 
-func (s *Server) buildToggleScheduleTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildToggleScheduleTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_toggle_schedule",
 			Description: "Enable or disable an App's automatic schedule. When enabled, the app runs according to its schedule. When disabled, pending scheduled runs are cancelled. The app itself is not deleted — it can still be run manually.",
@@ -530,8 +530,8 @@ func (s *Server) buildToggleScheduleTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_list_notify_targets ──
 
-func (s *Server) buildListNotifyTargetsTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildListNotifyTargetsTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_list_notify_targets",
 			Description: "List notification targets for an App, or list all available receivers if no app_id is given. Shows who will receive push notifications when the App completes a run.",
@@ -621,8 +621,8 @@ func (s *Server) buildListNotifyTargetsTool(userID string) mcp.ExtraBuiltinTool 
 
 // ── tofi_set_notify_targets ──
 
-func (s *Server) buildSetNotifyTargetsTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildSetNotifyTargetsTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_set_notify_targets",
 			Description: "Set which receivers should receive push notifications when an App completes a run. Pass receiver_ids to set specific targets, or pass 'all' to notify all available receivers. This replaces any existing targets.",
@@ -699,8 +699,8 @@ func (s *Server) buildSetNotifyTargetsTool(userID string) mcp.ExtraBuiltinTool {
 
 // ── tofi_get_run_detail ──
 
-func (s *Server) buildGetRunDetailTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildGetRunDetailTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name: "tofi_get_run_detail",
 			Description: `Get the full output of a specific App run — all messages, tool calls, and AI responses.
@@ -780,8 +780,8 @@ Use the session_id from tofi_list_app_runs. Returns the complete conversation in
 
 // ── tofi_list_models ──
 
-func (s *Server) buildListModelsTool(userID string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func (s *Server) buildListModelsTool(userID string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_list_models",
 			Description: "List all available AI models that the user has enabled. Returns model name, provider, context window, and cost. Use this when selecting a model for an App.",
@@ -832,8 +832,8 @@ func truncate(s string, maxRunes int) string {
 
 // ── tofi_display_app_plan ──
 
-func buildDisplayAppPlanTool() mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func buildDisplayAppPlanTool() agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name: "tofi_display_app_plan",
 			Description: `Display a structured App plan to the user. The TUI renders a rich visual box showing all details. After calling this, just ask "确认创建？" — do NOT repeat or summarize the plan fields in text, the user already sees everything in the box.`,

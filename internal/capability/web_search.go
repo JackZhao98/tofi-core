@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/provider"
 )
 
 // BuildWebSearchTool creates an ExtraBuiltinTool for web search via Brave Search API.
-func BuildWebSearchTool(apiKey string) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func BuildWebSearchTool(apiKey string) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "web_search",
 			Description: "Search the web for real-time information using Brave Search API. Use this when you need current data, news, prices, or any information that may have changed recently.",

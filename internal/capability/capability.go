@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 )
 
 // ParsedCapabilities represents the decoded capability config from an Agent.
@@ -98,13 +98,13 @@ func resolveSecretString(s string, getter SecretGetter) (string, error) {
 
 // BuildMCPServers converts parsed MCP server definitions to MCPServerConfig
 // entries ready for injection into AgentConfig.
-func BuildMCPServers(caps *ParsedCapabilities) []mcp.MCPServerConfig {
+func BuildMCPServers(caps *ParsedCapabilities) []agent.MCPServerConfig {
 	if caps == nil {
 		return nil
 	}
-	var servers []mcp.MCPServerConfig
+	var servers []agent.MCPServerConfig
 	for name, def := range caps.MCPServers {
-		servers = append(servers, mcp.MCPServerConfig{
+		servers = append(servers, agent.MCPServerConfig{
 			Name:    name,
 			Command: def.Command,
 			Args:    def.Args,
@@ -115,11 +115,11 @@ func BuildMCPServers(caps *ParsedCapabilities) []mcp.MCPServerConfig {
 }
 
 // BuildExtraTools collects all capability-provided tools (web_search, notify, etc.)
-func BuildExtraTools(caps *ParsedCapabilities, getter SecretGetter) []mcp.ExtraBuiltinTool {
+func BuildExtraTools(caps *ParsedCapabilities, getter SecretGetter) []agent.ExtraBuiltinTool {
 	if caps == nil {
 		return nil
 	}
-	var tools []mcp.ExtraBuiltinTool
+	var tools []agent.ExtraBuiltinTool
 
 	// Web Search
 	if caps.WebSearch != nil && caps.WebSearch.Enabled && getter != nil {
@@ -134,11 +134,11 @@ func BuildExtraTools(caps *ParsedCapabilities, getter SecretGetter) []mcp.ExtraB
 }
 
 // BuildNonSearchTools collects capability tools excluding web_search (for when web-search skill is used instead).
-func BuildNonSearchTools(caps *ParsedCapabilities, getter SecretGetter) []mcp.ExtraBuiltinTool {
+func BuildNonSearchTools(caps *ParsedCapabilities, getter SecretGetter) []agent.ExtraBuiltinTool {
 	if caps == nil {
 		return nil
 	}
-	var tools []mcp.ExtraBuiltinTool
+	var tools []agent.ExtraBuiltinTool
 
 	// Notify — now handled by connect.InjectNotifyTool (connector system)
 

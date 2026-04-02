@@ -4,15 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/storage"
 )
 
 // buildMemoryTools creates memory_save and memory_recall ExtraBuiltinTools
 // that are injected into the Agent via the ExtraTools mechanism.
-func (s *Server) buildMemoryTools(userID, cardID string) []mcp.ExtraBuiltinTool {
-	return []mcp.ExtraBuiltinTool{
+func (s *Server) buildMemoryTools(userID, cardID string) []agent.ExtraBuiltinTool {
+	return []agent.ExtraBuiltinTool{
 		{
 			Schema: provider.Tool{
 				Name:        "tofi_save_memory",

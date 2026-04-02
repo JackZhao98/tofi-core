@@ -172,7 +172,7 @@ func (s *Server) handlePlanApp(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Call LLM (non-streaming)
-	p, err := provider.NewForModel(model, apiKey)
+	p, err := provider.NewForModel(model, apiKey, provider.WithDefaultRetry())
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal,
 			fmt.Sprintf("failed to create provider: %v", err), "")

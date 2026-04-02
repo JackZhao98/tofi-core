@@ -13,7 +13,7 @@ import (
 	"tofi-core/internal/chat"
 	"tofi-core/internal/connect"
 	"tofi-core/internal/executor"
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/models"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/skills"
@@ -313,7 +313,7 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 // Used by both the HTTP handler (SSE) and the app scheduler.
 // The onEvent callback receives events: "chunk", "tool_call", "context_compact", "error".
 // If onEvent is nil, events are silently discarded.
-func (s *Server) executeChatSession(userID, scope string, session *chat.Session, message string, onEvent func(eventType string, data any), opts *bridge.ExecuteOptions) (*mcp.AgentResult, error) {
+func (s *Server) executeChatSession(userID, scope string, session *chat.Session, message string, onEvent func(eventType string, data any), opts *bridge.ExecuteOptions) (*agent.AgentResult, error) {
 	sessionID := session.ID
 
 	emit := func(eventType string, data any) {
@@ -391,8 +391,8 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	providerMessages := chat.BuildProviderMessages(session, message, resolvedModel)
 
 	// 5. Parse capabilities for agent scope
-	var capMCPServers []mcp.MCPServerConfig
-	var extraTools []mcp.ExtraBuiltinTool
+	var capMCPServers []agent.MCPServerConfig
+	var extraTools []agent.ExtraBuiltinTool
 	if agentName, ok := strings.CutPrefix(scope, chat.ScopeAgentPrefix); ok {
 		if agentDef, err := s.workspace.ReadAgent(userID, agentName); err == nil {
 			if agentDef.Config.Capabilities != nil {
@@ -422,7 +422,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	var liveUsage provider.Usage // real-time usage updated during agent loop
 
 	// Core tools: always available in every chat session
-	coreTools := make([]mcp.ExtraBuiltinTool, len(extraTools))
+	coreTools := make([]agent.ExtraBuiltinTool, len(extraTools))
 	copy(coreTools, extraTools)
 	// Skill search/install tools only in interactive chat — App runs must not pause for user input
 	isAppRun := strings.HasPrefix(scope, chat.ScopeAgentPrefix+"app-")
@@ -469,7 +469,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 		notifyTools := connect.InjectNotifyTool(nil, userID, notifyAppID, notifyDeps)
 		// Bundle with a "notify" skill entry
-		skillTools = append(skillTools, mcp.SkillTool{
+		skillTools = append(skillTools, agent.SkillTool{
 			Name:         "notify",
 			Description:  "Send notifications to configured channels (Telegram, Slack, Discord, Email)",
 			Instructions: "Use the tofi_notify tool to send a message to the user's configured notification channels.",
@@ -488,7 +488,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 	}
 
-	agentCfg := mcp.AgentConfig{
+	agentCfg := agent.AgentConfig{
 		System:          systemPrompt,
 		Messages:        providerMessages,
 		MCPServers:      capMCPServers,
@@ -554,7 +554,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		agentCfg.OnStepDone = opts.OnStepDone
 	}
 
-	p, err := provider.NewForModel(resolvedModel, apiKey)
+	p, err := provider.NewForModel(resolvedModel, apiKey, provider.WithDefaultRetry())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -569,7 +569,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	log.Printf("💬 [chat:%s] user=%s model=%s skills=%v scope=%s",
 		sessionID[:8], userID, resolvedModel, skillNames, scope)
 
-	agentResult, err := mcp.RunAgentLoop(agentCfg, ctx)
+	agentResult, err := agent.RunAgentLoop(agentCfg, ctx)
 	if err != nil {
 		session.Status = ""
 		s.chatStore.Save(userID, scope, session)
@@ -781,8 +781,8 @@ func sendSSEError(w http.ResponseWriter, flusher http.Flusher, errMsg string) {
 
 // buildChatWishTools builds skill search + suggest_install tools for chat sessions.
 // Uses sessionID as the hold channel key and updates session status/holdInfo.
-func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Session, scope string) []mcp.ExtraBuiltinTool {
-	return []mcp.ExtraBuiltinTool{
+func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Session, scope string) []agent.ExtraBuiltinTool {
+	return []agent.ExtraBuiltinTool{
 		{
 			Schema: provider.Tool{
 				Name:        "tofi_search",
@@ -906,8 +906,8 @@ func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Sess
 // buildSessionInfoTool creates a tool that lets the agent query current session info.
 // liveUsage provides real-time token counts from the current agent loop iteration,
 // so the total includes both historical usage and the in-progress loop.
-func buildSessionInfoTool(session *chat.Session, model string, liveUsage *provider.Usage) mcp.ExtraBuiltinTool {
-	return mcp.ExtraBuiltinTool{
+func buildSessionInfoTool(session *chat.Session, model string, liveUsage *provider.Usage) agent.ExtraBuiltinTool {
+	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
 			Name:        "tofi_session_info",
 			Description: "Get token usage, cost, model name, and message count for the current chat. ALWAYS use this tool when the user asks about usage, tokens, cost, billing, session info, or statistics. Returns: session ID, model, message count, input/output tokens, total cost, active skills.",
@@ -945,7 +945,7 @@ func buildSessionInfoTool(session *chat.Session, model string, liveUsage *provid
 // generateSessionTitle uses AI to create a concise session title from the first user message.
 // Runs asynchronously — updates the session title in storage when done.
 func (s *Server) generateSessionTitle(userID, scope, sessionID, model, apiKey, firstMessage string) {
-	p, err := provider.NewForModel(model, apiKey)
+	p, err := provider.NewForModel(model, apiKey, provider.WithDefaultRetry())
 	if err != nil {
 		log.Printf("⚠️  [title:%s] failed to create provider: %v", sessionID[:8], err)
 		return

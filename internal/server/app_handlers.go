@@ -14,7 +14,7 @@ import (
 	"tofi-core/internal/apps"
 	"tofi-core/internal/crypto"
 	"tofi-core/internal/executor"
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/models"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/skills"
@@ -610,7 +610,7 @@ Examples:
 		return
 	}
 
-	p, err := provider.NewForModel(model, apiKey)
+	p, err := provider.NewForModel(model, apiKey, provider.WithDefaultRetry())
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("failed to create provider: %v", err), "")
 		return
@@ -765,7 +765,7 @@ func (s *Server) handleManagerChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var skillInstructions []string
-	var skillTools []mcp.SkillTool
+	var skillTools []agent.SkillTool
 	secretEnv := make(map[string]string)
 	var missingSecrets []string
 	localStore := skills.NewLocalStore(s.config.HomeDir)
@@ -785,7 +785,7 @@ func (s *Server) handleManagerChat(w http.ResponseWriter, r *http.Request) {
 		if rec.Instructions != "" {
 			skillInstructions = append(skillInstructions, rec.Instructions)
 		}
-		st := mcp.SkillTool{
+		st := agent.SkillTool{
 			ID:           rec.ID,
 			Name:         rec.Name,
 			Description:  rec.Description,
@@ -970,7 +970,7 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 	}
 
 	// Build AgentConfig
-	agentCfg := mcp.AgentConfig{
+	agentCfg := agent.AgentConfig{
 		System:     system,
 		Prompt:     req.Message,
 		Messages:   providerMessages,
@@ -1007,7 +1007,7 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 	}
 
 	// Create Provider instance
-	p, err := provider.NewForModel(model, apiKey)
+	p, err := provider.NewForModel(model, apiKey, provider.WithDefaultRetry())
 	if err != nil {
 		sendSSEError(w, flusher, "Failed to create provider: "+err.Error())
 		return
@@ -1022,7 +1022,7 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 
 	log.Printf("🤖 [manager] user=%s model=%s skills=%v", userID, model, defaultSkills)
 
-	agentResult, err := mcp.RunAgentLoop(agentCfg, ctx)
+	agentResult, err := agent.RunAgentLoop(agentCfg, ctx)
 	if err != nil {
 		sendSSEError(w, flusher, "Agent error: "+err.Error())
 		return
@@ -1035,8 +1035,8 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 }
 
 // buildManagerTools creates extra tools for the Manager agent
-func (s *Server) buildManagerTools(userID string) []mcp.ExtraBuiltinTool {
-	return []mcp.ExtraBuiltinTool{
+func (s *Server) buildManagerTools(userID string) []agent.ExtraBuiltinTool {
+	return []agent.ExtraBuiltinTool{
 		// present_plan: structured plan for user approval
 		{
 			Schema: provider.Tool{

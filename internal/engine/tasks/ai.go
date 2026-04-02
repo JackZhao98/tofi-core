@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 	"tofi-core/internal/executor"
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/models"
 	"tofi-core/internal/pkg/logger"
 	"tofi-core/internal/provider"
@@ -297,7 +297,7 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 	// Load user MCP config
 
-	userConfig, err := mcp.LoadUserMCPConfig(ctx.Paths.Home, ctx.User)
+	userConfig, err := agent.LoadUserMCPConfig(ctx.Paths.Home, ctx.User)
 
 	if err != nil {
 
@@ -315,7 +315,7 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 	// Resolve servers
 
-	var activeServers []mcp.MCPServerConfig
+	var activeServers []agent.MCPServerConfig
 
 	for _, idRaw := range serverIDs {
 
@@ -323,7 +323,7 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 		if def, ok := userConfig.MCPServers[id]; ok {
 
-			activeServers = append(activeServers, mcp.MCPServerConfig{
+			activeServers = append(activeServers, agent.MCPServerConfig{
 
 				Name:    id,
 
@@ -347,7 +347,7 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 
 	// Prepare Agent Config
 
-	agentCfg := mcp.AgentConfig{
+	agentCfg := agent.AgentConfig{
 
 		System:     fmt.Sprint(config["system"]),
 
@@ -376,6 +376,7 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 	if ep, ok := config["endpoint"].(string); ok && ep != "" {
 		opts = append(opts, provider.WithBaseURL(ep))
 	}
+	opts = append(opts, provider.WithDefaultRetry())
 	p, err := provider.NewForModel(model, apiKey, opts...)
 	if err != nil {
 		return "", fmt.Errorf("failed to create provider: %w", err)
@@ -384,7 +385,7 @@ func (a *AI) executeAgent(config map[string]interface{}, serverIDs []interface{}
 	agentCfg.Model = model
 
 	// Run Loop
-	agentResult, err := mcp.RunAgentLoop(agentCfg, ctx)
+	agentResult, err := agent.RunAgentLoop(agentCfg, ctx)
 	if err != nil {
 		return "", err
 	}

@@ -13,7 +13,7 @@ import (
 	"tofi-core/internal/apps"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/connect"
-	"tofi-core/internal/mcp"
+	"tofi-core/internal/agent"
 	"tofi-core/internal/storage"
 
 	"github.com/google/uuid"
@@ -531,7 +531,7 @@ func parseHHMM(s string) (int, int) {
 // ── Run Logs ──
 
 // writeRunLog saves a structured log file for each app run.
-func (as *AppScheduler) writeRunLog(run *storage.AppRunRecord, app *storage.AppRecord, result *mcp.AgentResult, status, sessionID string) {
+func (as *AppScheduler) writeRunLog(run *storage.AppRunRecord, app *storage.AppRecord, result *agent.AgentResult, status, sessionID string) {
 	logsDir := filepath.Join(as.server.config.HomeDir, "users", run.UserID, "agents", app.ID, "logs")
 	os.MkdirAll(logsDir, 0755)
 
