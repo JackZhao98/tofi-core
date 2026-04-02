@@ -94,7 +94,8 @@ func (u *Usage) Add(other Usage) {
 type Option func(*providerConfig)
 
 type providerConfig struct {
-	BaseURL string // Custom endpoint URL (for OpenAI-compatible providers)
+	BaseURL     string       // Custom endpoint URL (for OpenAI-compatible providers)
+	RetryConfig *RetryConfig // Retry configuration (nil = no retry)
 }
 
 // WithBaseURL sets a custom base URL for the provider.
@@ -102,6 +103,23 @@ type providerConfig struct {
 func WithBaseURL(url string) Option {
 	return func(c *providerConfig) {
 		c.BaseURL = strings.TrimRight(url, "/")
+	}
+}
+
+// WithRetry enables automatic retry with exponential backoff for transient errors.
+// Rate-limited requests (429/529) are retried with backoff. After MaxRateLimitRetries
+// consecutive rate limits, falls back to FallbackModel if configured.
+func WithRetry(config RetryConfig) Option {
+	return func(c *providerConfig) {
+		c.RetryConfig = &config
+	}
+}
+
+// WithDefaultRetry enables retry with sensible defaults:
+// 5 retries, 1s base delay, 30s max delay, 3 rate limit retries before fallback.
+func WithDefaultRetry() Option {
+	return func(c *providerConfig) {
+		c.RetryConfig = &RetryConfig{}
 	}
 }
 
@@ -121,47 +139,62 @@ func New(providerName, apiKey string, opts ...Option) (Provider, error) {
 		opt(cfg)
 	}
 
+	var p Provider
+	var err error
+
 	switch strings.ToLower(providerName) {
 	case "openai":
-		return newOpenAIResponses(apiKey, cfg)
+		p, err = newOpenAIResponses(apiKey, cfg)
 	case "openai_completions", "openai_legacy":
-		return newOpenAIChatCompletions(apiKey, cfg)
+		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	case "anthropic", "claude":
-		return newAnthropic(apiKey, cfg)
+		p, err = newAnthropic(apiKey, cfg)
 	case "gemini":
-		return newGemini(apiKey, cfg)
+		p, err = newGemini(apiKey, cfg)
 	case "deepseek":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://api.deepseek.com/v1"
 		}
-		return newOpenAIChatCompletions(apiKey, cfg)
+		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	case "groq":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://api.groq.com/openai/v1"
 		}
-		return newOpenAIChatCompletions(apiKey, cfg)
+		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	case "openrouter":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://openrouter.ai/api/v1"
 		}
-		return newOpenAIChatCompletions(apiKey, cfg)
+		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	case "together":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://api.together.xyz/v1"
 		}
-		return newOpenAIChatCompletions(apiKey, cfg)
+		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	case "ollama":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "http://localhost:11434/v1"
 		}
-		return newOpenAIChatCompletions(apiKey, cfg)
+		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	default:
 		// Assume OpenAI-compatible for unknown providers
 		if cfg.BaseURL != "" {
-			return newOpenAIChatCompletions(apiKey, cfg)
+			p, err = newOpenAIChatCompletions(apiKey, cfg)
+		} else {
+			return nil, fmt.Errorf("unknown provider: %s (set a custom endpoint with WithBaseURL)", providerName)
 		}
-		return nil, fmt.Errorf("unknown provider: %s (set a custom endpoint with WithBaseURL)", providerName)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap with retry if configured
+	if cfg.RetryConfig != nil {
+		p = NewRetryProvider(p, *cfg.RetryConfig)
+	}
+
+	return p, nil
 }
 
 // NewForModel creates a Provider that's optimized for the given model.

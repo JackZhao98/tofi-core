@@ -64,7 +64,7 @@ func (o *openaiChatCompletions) ChatStream(ctx context.Context, req *ChatRequest
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, NewAPIError("openai", resp.StatusCode, string(respBody))
 	}
 
 	return o.parseStream(resp.Body, onDelta)
@@ -194,7 +194,7 @@ func (o *openaiChatCompletions) doRequest(ctx context.Context, payload map[strin
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return "", NewAPIError("openai", resp.StatusCode, string(respBody))
 	}
 
 	return string(respBody), nil

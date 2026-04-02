@@ -89,7 +89,7 @@ func (o *openaiResponses) ChatStream(ctx context.Context, req *ChatRequest, onDe
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		httpErr := NewAPIError("openai", resp.StatusCode, string(respBody))
 		// Fallback to Chat Completions API for tool-related errors
 		if isToolCallError(httpErr) && len(req.Tools) > 0 {
 			return o.legacy.ChatStream(ctx, req, onDelta)
@@ -237,7 +237,7 @@ func (o *openaiResponses) doRequest(ctx context.Context, payload map[string]inte
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return "", NewAPIError("openai", resp.StatusCode, string(respBody))
 	}
 
 	return string(respBody), nil
