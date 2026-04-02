@@ -97,7 +97,9 @@ def main():
     # If no Brave API key, use DuckDuckGo fallback
     if not api_key:
         print("[No Brave API key — using DuckDuckGo fallback]")
-        ddgs_search(query, count)
+        # Convert search_lang to DuckDuckGo region format (e.g., "en" → "us-en")
+        region = "us-en" if search_lang == "en" else f"wt-{search_lang}"
+        ddgs_search(query, count, region=region)
         sys.exit(0)
 
     # When freshness is specified, skip LLM Context (it doesn't support time filtering)
