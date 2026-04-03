@@ -12,12 +12,18 @@ func TestBuildTaskTools_WithBgManager(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, nil)
 
-	// Should have task_status but NOT ask_user (nil callback)
-	if len(tools) != 1 {
-		t.Fatalf("expected 1 tool (task_status only), got %d", len(tools))
+	// Should have task_status + task_list + task_stop but NOT ask_user (nil callback)
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 tools (task_status, task_list, task_stop), got %d", len(tools))
 	}
-	if tools[0].Name() != "tofi_task_status" {
-		t.Errorf("expected tofi_task_status, got %s", tools[0].Name())
+	names := map[string]bool{}
+	for _, tt := range tools {
+		names[tt.Name()] = true
+	}
+	for _, expected := range []string{"tofi_task_status", "tofi_task_list", "tofi_task_stop"} {
+		if !names[expected] {
+			t.Errorf("missing %s", expected)
+		}
 	}
 }
 
@@ -26,18 +32,18 @@ func TestBuildTaskTools_WithAskUser(t *testing.T) {
 	askFn := func(q string, opts []string) (string, error) { return "yes", nil }
 	tools := buildTaskTools(bgm, askFn)
 
-	if len(tools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(tools))
 	}
 
-	names := map[string]bool{}
+	names2 := map[string]bool{}
 	for _, tt := range tools {
-		names[tt.Name()] = true
+		names2[tt.Name()] = true
 	}
-	if !names["tofi_task_status"] {
+	if !names2["tofi_task_status"] {
 		t.Error("missing tofi_task_status")
 	}
-	if !names["tofi_ask_user"] {
+	if !names2["tofi_ask_user"] {
 		t.Error("missing tofi_ask_user")
 	}
 }

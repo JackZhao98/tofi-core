@@ -484,3 +484,30 @@ func (m *BackgroundTaskManager) ActiveCount() int {
 	defer m.mu.Unlock()
 	return len(m.tasks)
 }
+
+// TaskInfo holds summary information about a background task.
+type TaskInfo struct {
+	ID        string
+	Command   string
+	Running   bool
+	StartTime time.Time
+	Elapsed   time.Duration
+}
+
+// ListTasks returns info about all tracked background tasks.
+func (m *BackgroundTaskManager) ListTasks() []TaskInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []TaskInfo
+	for _, t := range m.tasks {
+		result = append(result, TaskInfo{
+			ID:        t.ID,
+			Command:   t.Command,
+			Running:   true,
+			StartTime: t.StartTime,
+			Elapsed:   time.Since(t.StartTime),
+		})
+	}
+	return result
+}

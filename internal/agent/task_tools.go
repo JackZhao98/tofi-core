@@ -20,9 +20,11 @@ import (
 func buildTaskTools(bgManager *BackgroundTaskManager, askUserFn func(question string, options []string) (string, error)) []ToolDef {
 	var extras []ExtraBuiltinTool
 
-	// Always register task_status if we have a background manager
+	// Register task management tools if we have a background manager
 	if bgManager != nil {
 		extras = append(extras, buildTaskStatusTool(bgManager))
+		extras = append(extras, buildTaskListTool(bgManager))
+		extras = append(extras, buildTaskStopTool(bgManager))
 	}
 
 	// Only register ask_user if callback is provided (Chat mode)
@@ -104,6 +106,79 @@ func buildTaskStatusTool(bgManager *BackgroundTaskManager) ExtraBuiltinTool {
 				taskID, result.ExitCode, result.DurationMs, smartTruncate(output, 4000)), nil
 		},
 	}
+}
+
+// ──────────────────────────────────────────────────────────────
+// tofi_task_list — List all active background tasks
+// ──────────────────────────────────────────────────────────────
+
+func buildTaskListTool(bgManager *BackgroundTaskManager) ExtraBuiltinTool {
+	return ExtraBuiltinTool{
+		Schema: provider.Tool{
+			Name:        "tofi_task_list",
+			Description: "List all active background shell tasks with their IDs, commands, and elapsed time.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		Handler: func(args map[string]any) (string, error) {
+			tasks := bgManager.ListTasks()
+			if len(tasks) == 0 {
+				return "No active background tasks.", nil
+			}
+			var lines []string
+			lines = append(lines, fmt.Sprintf("%d active background task(s):", len(tasks)))
+			for _, t := range tasks {
+				lines = append(lines, fmt.Sprintf("- %s: %s (running for %s)", t.ID, t.Command, t.Elapsed.Truncate(time.Second)))
+			}
+			return fmt.Sprintf("%s", joinLines(lines)), nil
+		},
+	}
+}
+
+// ──────────────────────────────────────────────────────────────
+// tofi_task_stop — Cancel a running background task
+// ──────────────────────────────────────────────────────────────
+
+func buildTaskStopTool(bgManager *BackgroundTaskManager) ExtraBuiltinTool {
+	return ExtraBuiltinTool{
+		Schema: provider.Tool{
+			Name:        "tofi_task_stop",
+			Description: "Stop/cancel a running background shell task by its ID.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{
+						"type":        "string",
+						"description": "Task ID to stop (e.g., 'sh_1')",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		Handler: func(args map[string]any) (string, error) {
+			taskID, _ := args["task_id"].(string)
+			if taskID == "" {
+				return "Error: task_id is required", nil
+			}
+			if bgManager.CancelTask(taskID) {
+				return fmt.Sprintf("Task %s cancelled.", taskID), nil
+			}
+			return fmt.Sprintf("Task %s not found or already completed.", taskID), nil
+		},
+	}
+}
+
+func joinLines(lines []string) string {
+	result := ""
+	for i, l := range lines {
+		if i > 0 {
+			result += "\n"
+		}
+		result += l
+	}
+	return result
 }
 
 // ──────────────────────────────────────────────────────────────
