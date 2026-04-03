@@ -25,9 +25,8 @@ import (
 )
 
 type Config struct {
-	Port                   int
-	HomeDir                string
-	MaxConcurrentWorkflows int // 最大并发工作流数（默认 10）
+	Port    int
+	HomeDir string
 }
 
 // HoldSignal is sent through a hold channel to resume a paused agent
@@ -47,12 +46,9 @@ type PreviewSession struct {
 }
 
 type Server struct {
-	config     Config
-	registry   *ExecutionRegistry
-	db         *storage.DB
-	workerPool *WorkerPool
-	scheduler  *Scheduler
-	executor   executor.Executor // Sandbox command executor
+	config   Config
+	db       *storage.DB
+	executor executor.Executor // Sandbox command executor
 	// Hold channel management for agent tofi_suggest_install blocking
 	holdMu       sync.Mutex
 	holdChannels map[string]chan HoldSignal // cardID → signal channel
@@ -106,14 +102,6 @@ func NewServer(config Config) (*Server, error) {
 		log.Printf("⚠️  AI key migration warning: %v", err)
 	}
 
-	// 设置默认并发数
-	if config.MaxConcurrentWorkflows <= 0 {
-		config.MaxConcurrentWorkflows = 10
-	}
-
-	registry := NewExecutionRegistry()
-	workerPool := NewWorkerPool(config.MaxConcurrentWorkflows, registry)
-
 	// Initialize sandbox executor (direct execution with software-level isolation)
 	exec := executor.NewDirectExecutor(config.HomeDir)
 
@@ -126,11 +114,9 @@ func NewServer(config Config) (*Server, error) {
 	}
 
 	return &Server{
-		config:          config,
-		registry:        registry,
-		db:              db,
-		workerPool:      workerPool,
-		executor:        exec,
+		config:   config,
+		db:       db,
+		executor: exec,
 		holdChannels:    make(map[string]chan HoldSignal),
 		previewSessions: make(map[string]*PreviewSession),
 		chatStore:       chat.NewStore(config.HomeDir, db),
@@ -213,17 +199,6 @@ func (s *Server) cleanupPreviewSessions() {
 
 func (s *Server) Start() error {
 	defer s.db.Close()
-	defer s.workerPool.Shutdown()
-
-	// 启动工作池
-	s.workerPool.Start()
-
-	// 启动 Cron 调度器
-	s.scheduler = NewScheduler(s)
-	if err := s.scheduler.Start(); err != nil {
-		log.Printf("⚠️  Cron 调度器启动失败: %v", err)
-	}
-	defer s.scheduler.Stop()
 
 	// Load access token for token-mode auth
 	s.loadAccessToken()
@@ -323,61 +298,19 @@ func (s *Server) Start() error {
 
 	// 公开路由
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /api/v1/stats", s.handleStats) // 工作池统计
 	mux.HandleFunc("GET /api/v1/auth/setup_status", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/v1/auth/setup", s.handleSetupAdmin)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleRefreshToken)
 
-	// Webhook 触发端点（公开，不需要认证）
-	mux.HandleFunc("POST /api/v1/hooks/{token}", s.handleWebhookTrigger)
-	mux.HandleFunc("GET /api/v1/hooks/{token}", s.handleWebhookTrigger) // 支持 GET 触发
-
 	// 受保护的 API 路由 (包裹 AuthMiddleware)
 	mux.HandleFunc("GET /api/v1/auth/me", s.AuthMiddleware(s.handleGetMe))
-	mux.HandleFunc("POST /api/v1/run", s.AuthMiddleware(s.handleRunWorkflow))
-	mux.HandleFunc("GET /api/v1/executions", s.AuthMiddleware(s.handleListExecutions))
-	mux.HandleFunc("GET /api/v1/executions/{id}", s.AuthMiddleware(s.handleGetExecution))
-	mux.HandleFunc("GET /api/v1/executions/{id}/logs", s.AuthMiddleware(s.handleGetExecutionLogs))
-	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts", s.AuthMiddleware(s.handleListArtifacts))
-	mux.HandleFunc("GET /api/v1/executions/{id}/artifacts/{filename}", s.AuthMiddleware(s.handleDownloadArtifact))
-
-	// Global Artifacts
-	mux.HandleFunc("GET /api/v1/artifacts", s.AuthMiddleware(s.handleListAllArtifacts))
 
 	// Global File Library
 	mux.HandleFunc("GET /api/v1/files", s.AuthMiddleware(s.handleListFilesGlobal))
 	mux.HandleFunc("POST /api/v1/files", s.AuthMiddleware(s.handleUploadFileGlobal))
 	mux.HandleFunc("GET /api/v1/files/{id}/preview", s.AuthMiddleware(s.handlePreviewFileGlobal))
 	mux.HandleFunc("DELETE /api/v1/files/{id}", s.AuthMiddleware(s.handleDeleteFileGlobal))
-
-	mux.HandleFunc("POST /api/v1/executions/{id}/nodes/{node_id}/approve", s.AuthMiddleware(s.handleApproveExecution))
-	mux.HandleFunc("POST /api/v1/executions/{id}/cancel", s.AuthMiddleware(s.handleCancelExecution))
-
-	// Workflow 管理路由
-	mux.HandleFunc("GET /api/v1/workflows", s.AuthMiddleware(s.handleListWorkflows))
-	mux.HandleFunc("GET /api/v1/workflows/{id}/schema", s.AuthMiddleware(s.handleGetWorkflowSchema))
-	mux.HandleFunc("GET /api/v1/workflows/{name}", s.AuthMiddleware(s.handleGetWorkflow))
-	mux.HandleFunc("POST /api/v1/workflows", s.AuthMiddleware(s.handleSaveWorkflow))
-	mux.HandleFunc("POST /api/v1/workflows/validate", s.AuthMiddleware(s.handleValidateWorkflow))
-	mux.HandleFunc("DELETE /api/v1/workflows/{name}", s.AuthMiddleware(s.handleDeleteWorkflow))
-
-	// Workflow File Links (Symlink-based for CLI, Upload for Web)
-	mux.HandleFunc("POST /api/v1/workflows/{id}/files", s.AuthMiddleware(s.handleCreateWorkflowFileLink))
-	mux.HandleFunc("POST /api/v1/workflows/{id}/files/upload", s.AuthMiddleware(s.handleUploadWorkflowFile))
-	mux.HandleFunc("DELETE /api/v1/workflows/{id}/files/{filename}", s.AuthMiddleware(s.handleDeleteWorkflowFileLink))
-
-	// Webhook 管理路由（受保护）
-	mux.HandleFunc("POST /api/v1/webhooks", s.AuthMiddleware(s.handleCreateWebhook))
-	mux.HandleFunc("GET /api/v1/webhooks", s.AuthMiddleware(s.handleListWebhooks))
-	mux.HandleFunc("DELETE /api/v1/webhooks/{id}", s.AuthMiddleware(s.handleDeleteWebhook))
-	mux.HandleFunc("PUT /api/v1/webhooks/{id}", s.AuthMiddleware(s.handleToggleWebhook))
-
-	// Cron 管理路由（受保护）
-	mux.HandleFunc("POST /api/v1/crons", s.AuthMiddleware(s.handleCreateCronTrigger))
-	mux.HandleFunc("GET /api/v1/crons", s.AuthMiddleware(s.handleListCronTriggers))
-	mux.HandleFunc("PUT /api/v1/crons/{id}", s.AuthMiddleware(s.handleUpdateCronTrigger))
-	mux.HandleFunc("DELETE /api/v1/crons/{id}", s.AuthMiddleware(s.handleDeleteCronTrigger))
 
 	// Secret 管理路由
 	mux.HandleFunc("POST /api/v1/secrets", s.AuthMiddleware(s.handleCreateSecret))
@@ -395,8 +328,6 @@ func (s *Server) Start() error {
 	mux.HandleFunc("PUT /api/v1/skills/{id}", s.AuthMiddleware(s.handleUpdateSkill))
 	mux.HandleFunc("POST /api/v1/skills/install", s.AuthMiddleware(s.handleInstallSkill))
 	mux.HandleFunc("POST /api/v1/skills/install-zip", s.AuthMiddleware(s.handleInstallSkillZip))
-	mux.HandleFunc("POST /api/v1/skills/{id}/run", s.AuthMiddleware(s.handleRunSkill))
-	mux.HandleFunc("POST /api/v1/skills/{id}/test", s.AuthMiddleware(s.handleTestSkill))
 	mux.HandleFunc("POST /api/v1/skills/{id}/export", s.AuthMiddleware(s.handleExportSkill))
 	mux.HandleFunc("DELETE /api/v1/skills/{id}", s.AuthMiddleware(s.handleDeleteSkill))
 	mux.HandleFunc("GET /api/v1/skills/{id}/resources", s.AuthMiddleware(s.handleGetSkillResources))
@@ -496,8 +427,6 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/users", s.AdminMiddleware(s.handleAdminListUsers))
 	mux.HandleFunc("POST /api/v1/admin/users", s.AdminMiddleware(s.handleAdminCreateUser))
 	mux.HandleFunc("DELETE /api/v1/admin/users/{id}", s.AdminMiddleware(s.handleAdminDeleteUser))
-	mux.HandleFunc("GET /api/v1/admin/executions", s.AdminMiddleware(s.handleAdminListExecutions))
-	mux.HandleFunc("GET /api/v1/admin/workflows", s.AdminMiddleware(s.handleAdminListWorkflows))
 	mux.HandleFunc("GET /api/v1/admin/secrets", s.AdminMiddleware(s.handleAdminListSecrets))
 	mux.HandleFunc("DELETE /api/v1/admin/secrets/{id}", s.AdminMiddleware(s.handleAdminDeleteSecret))
 	mux.HandleFunc("GET /api/v1/admin/usage", s.AdminMiddleware(s.handleAdminGetUsage))
@@ -536,13 +465,6 @@ func SetBuildInfo(version, commit, built string) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(serverStartedAt).Truncate(time.Second)
 
-	// Worker pool stats
-	s.workerPool.mu.RLock()
-	running := s.workerPool.runningCount
-	queued := s.workerPool.queuedCount
-	s.workerPool.mu.RUnlock()
-
-	// Count apps
 	totalApps, _ := s.db.CountAllApps()
 	activeApps, _ := s.db.CountActiveApps()
 
@@ -552,11 +474,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"version": buildVersion,
 		"commit":  buildCommit,
 		"uptime":  uptime.String(),
-		"workers": map[string]any{
-			"max":     s.config.MaxConcurrentWorkflows,
-			"running": running,
-			"queued":  queued,
-		},
 		"apps": map[string]int{
 			"total":  totalApps,
 			"active": activeApps,
@@ -588,11 +505,4 @@ func (s *Server) sendRestartNotification() {
 	log.Printf("[Server] Sent restart confirmation to Telegram chat %s", chatID)
 }
 
-// handleStats 返回工作池的统计信息
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats := s.workerPool.GetStats()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
-}
 

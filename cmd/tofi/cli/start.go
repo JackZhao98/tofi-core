@@ -20,7 +20,6 @@ import (
 var (
 	startPort       int
 	startForeground bool
-	startWorkers    int
 )
 
 var startCmd = &cobra.Command{
@@ -33,7 +32,6 @@ var startCmd = &cobra.Command{
 func init() {
 	startCmd.Flags().IntVarP(&startPort, "port", "p", daemon.GetDefaultPort(), "HTTP API port")
 	startCmd.Flags().BoolVar(&startForeground, "foreground", false, "run in foreground (don't daemonize)")
-	startCmd.Flags().IntVarP(&startWorkers, "workers", "w", 10, "max concurrent workers")
 	rootCmd.AddCommand(startCmd)
 }
 
@@ -143,9 +141,8 @@ func runForeground() error {
 	server.SetBuildInfo(Version, GitCommit, BuildTime)
 
 	cfg := server.Config{
-		Port:                   startPort,
-		HomeDir:                homeDir,
-		MaxConcurrentWorkflows: startWorkers,
+		Port:    startPort,
+		HomeDir: homeDir,
 	}
 
 	srv, err := server.NewServer(cfg)

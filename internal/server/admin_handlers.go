@@ -3,10 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,13 +26,7 @@ type UserResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
-type WorkflowInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	User        string `json:"user"`
-	Description string `json:"description,omitempty"`
-	UpdatedAt   string `json:"updated_at,omitempty"`
-}
+
 
 // --- Admin Handlers ---
 
@@ -150,33 +141,6 @@ func (s *Server) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleAdminListExecutions 返回所有用户的执行记录
-func (s *Server) handleAdminListExecutions(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 50
-	}
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	userFilter := r.URL.Query().Get("user")
-
-	var records interface{}
-	var err error
-
-	if userFilter != "" {
-		records, err = s.db.ListExecutions(userFilter, limit, offset)
-	} else {
-		records, err = s.db.ListAllExecutions(limit, offset)
-	}
-
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(records)
-}
-
 // handleAdminGetStats 返回系统统计
 func (s *Server) handleAdminGetStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.db.GetSystemStats()
@@ -187,57 +151,6 @@ func (s *Server) handleAdminGetStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
-}
-
-// handleAdminListWorkflows 返回所有用户的工作流
-func (s *Server) handleAdminListWorkflows(w http.ResponseWriter, r *http.Request) {
-	userFilter := r.URL.Query().Get("user")
-
-	var workflows []WorkflowInfo
-
-	// 获取所有用户
-	users, err := s.db.ListAllUsers()
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
-		return
-	}
-
-	for _, user := range users {
-		// 如果指定了用户筛选，只处理该用户
-		if userFilter != "" && user.Username != userFilter {
-			continue
-		}
-
-		// 遍历用户的工作流目录
-		userWorkflowDir := filepath.Join(s.config.HomeDir, user.Username, "workflows")
-		if _, err := os.Stat(userWorkflowDir); os.IsNotExist(err) {
-			continue
-		}
-
-		filepath.WalkDir(userWorkflowDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
-				return nil
-			}
-
-			// 获取文件信息
-			info, _ := d.Info()
-			name := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
-
-			workflows = append(workflows, WorkflowInfo{
-				ID:        name,
-				Name:      name,
-				User:      user.Username,
-				UpdatedAt: info.ModTime().Format("2006-01-02T15:04:05Z"),
-			})
-			return nil
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(workflows)
 }
 
 // handleAdminGetUsage returns usage statistics grouped by model
