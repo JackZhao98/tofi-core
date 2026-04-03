@@ -67,6 +67,7 @@ type AgentConfig struct {
 	LiveUsage        *provider.Usage                                           // Optional: updated in real-time during agent loop for tools to read
 	Hooks            *Hooks                                                    // Optional: pre/post hooks for tool calls, API calls, compaction
 	AskUserFn        func(question string, options []string) (string, error)   // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
+	IsSubAgent       bool                                                      // True when running as a sub-agent (prevents recursive spawning)
 }
 
 type MCPServerConfig struct {
@@ -578,6 +579,13 @@ You have tools listed in <available-deferred-tools>. These are not active yet â€
 	for _, tt := range buildTaskTools(bgManager, cfg.AskUserFn) {
 		registry.Register(tt)
 		allTools = append(allTools, tt.Schema())
+	}
+
+	// Register sub-agent tool (only for top-level agents, not sub-agents)
+	if !cfg.IsSubAgent {
+		subAgentTool := buildSubAgentTool(cfg)
+		registry.Register(subAgentTool)
+		allTools = append(allTools, subAgentTool.Schema())
 	}
 
 	for !state.Phase.IsTerminal() {
