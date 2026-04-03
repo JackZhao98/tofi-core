@@ -190,11 +190,13 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		})
 	}
 
-	// Register extra built-in tools and their handlers
-	extraHandlers := make(map[string]func(args map[string]interface{}) (string, error))
+	// Unified tool registry — replaces the old extraHandlers map
+	registry := NewToolRegistry()
+
+	// Register core built-in tools
 	for _, et := range cfg.ExtraTools {
+		registry.Register(WrapExtraBuiltin(et))
 		allTools = append(allTools, et.Schema)
-		extraHandlers[et.Schema.Name] = et.Handler
 	}
 
 	// Track which skills have been loaded (persisted across turns via session)
@@ -224,34 +226,35 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 						}
 					}
 					if !alreadyRegistered {
+						registry.Register(WrapExtraBuiltin(bt))
 						allTools = append(allTools, bt.Schema)
-						extraHandlers[bt.Schema.Name] = bt.Handler
 					}
 				}
 				log.Printf("[chat] [Agent] Pre-activated skill '%s' (%d tools)", preloadName, len(skill.BundledTools))
 			}
 		}
 
-		// Register tofi_load_skill tool — returns full Instructions for a skill
-		allTools = append(allTools, provider.Tool{
-			Name: "tofi_load_skill",
-			Description: "Load the full instructions for a skill by name. " +
-				"Skills are listed in <available-skills> with name and description only. " +
-				"Call this to get detailed instructions before using the skill. " +
-				"After loading, the skill's run_skill__<name> tool becomes available if it has scripts.",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Skill name (from <available-skills> list)",
+		// Register tofi_load_skill tool via ToolRegistry
+		registry.Register(&FuncTool{
+			ToolName:   "tofi_load_skill",
+			ToolSchema: provider.Tool{
+				Name: "tofi_load_skill",
+				Description: "Load the full instructions for a skill by name. " +
+					"Skills are listed in <available-deferred-tools> with name and description only. " +
+					"Call this to get detailed instructions before using the skill. " +
+					"After loading, the skill's run_skill__<name> tool becomes available if it has scripts.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "Skill name (from <available-deferred-tools> list)",
+						},
 					},
+					"required": []string{"name"},
 				},
-				"required": []string{"name"},
 			},
-		})
-
-		extraHandlers["tofi_load_skill"] = func(args map[string]interface{}) (string, error) {
+			ExecuteFunc: func(_ context.Context, args map[string]interface{}) (string, error) {
 			name := strings.TrimSpace(fmt.Sprintf("%v", args["name"]))
 			skill, ok := skillMap[name]
 			if !ok {
@@ -282,17 +285,9 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			// Activate bundled tools (if any)
 			var activatedTools []string
 			for _, bt := range skill.BundledTools {
-				// Skip if already registered
-				alreadyRegistered := false
-				for _, t := range allTools {
-					if t.Name == bt.Schema.Name {
-						alreadyRegistered = true
-						break
-					}
-				}
-				if !alreadyRegistered {
+				if !registry.Has(bt.Schema.Name) {
+					registry.Register(WrapExtraBuiltin(bt))
 					allTools = append(allTools, bt.Schema)
-					extraHandlers[bt.Schema.Name] = bt.Handler
 					activatedTools = append(activatedTools, bt.Schema.Name)
 				}
 			}
@@ -361,64 +356,68 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 						capturedParams := toolDef.Params
 
 						allTools = append(allTools, schema)
-						extraHandlers[capturedName] = func(args map[string]interface{}) (string, error) {
-							cmdParts := []string{"python3", capturedScript}
+						registry.Register(&FuncTool{
+							ToolName:   capturedName,
+							ToolSchema: schema,
+							ExecuteFunc: func(_ context.Context, args map[string]interface{}) (string, error) {
+								cmdParts := []string{"python3", capturedScript}
 
-							// First positional arg: "query" or "url"
-							if q, ok := args["query"].(string); ok {
-								cmdParts = append(cmdParts, shellQuote(q))
-							} else if u, ok := args["url"].(string); ok {
-								cmdParts = append(cmdParts, shellQuote(u))
-							}
+								// First positional arg: "query" or "url"
+								if q, ok := args["query"].(string); ok {
+									cmdParts = append(cmdParts, shellQuote(q))
+								} else if u, ok := args["url"].(string); ok {
+									cmdParts = append(cmdParts, shellQuote(u))
+								}
 
-							// Named params as flags
-							for paramName, paramDef := range capturedParams {
-								if paramName == "query" || paramName == "url" {
-									continue
-								}
-								val, exists := args[paramName]
-								if !exists {
-									continue
-								}
-								flagName := strings.ReplaceAll(paramName, "_", "-")
-								switch paramDef.Type {
-								case "boolean":
-									if b, ok := val.(bool); ok && b {
-										cmdParts = append(cmdParts, "--"+flagName)
+								// Named params as flags
+								for paramName, paramDef := range capturedParams {
+									if paramName == "query" || paramName == "url" {
+										continue
 									}
-								case "integer":
-									if n, ok := val.(float64); ok {
-										cmdParts = append(cmdParts, fmt.Sprintf("--%s", flagName), fmt.Sprintf("%d", int(n)))
+									val, exists := args[paramName]
+									if !exists {
+										continue
 									}
-								default: // string
-									if s, ok := val.(string); ok && s != "" {
-										cmdParts = append(cmdParts, "--"+flagName, shellQuote(s))
+									flagName := strings.ReplaceAll(paramName, "_", "-")
+									switch paramDef.Type {
+									case "boolean":
+										if b, ok := val.(bool); ok && b {
+											cmdParts = append(cmdParts, "--"+flagName)
+										}
+									case "integer":
+										if n, ok := val.(float64); ok {
+											cmdParts = append(cmdParts, fmt.Sprintf("--%s", flagName), fmt.Sprintf("%d", int(n)))
+										}
+									default: // string
+										if s, ok := val.(string); ok && s != "" {
+											cmdParts = append(cmdParts, "--"+flagName, shellQuote(s))
+										}
 									}
 								}
-							}
 
-							cmd := strings.Join(cmdParts, " ")
-							timeoutSec := classifyTimeout(cmd, 0)
-							execInstance := cfg.Executor
-							if execInstance == nil {
-								execInstance = executor.NewDirectExecutor("")
-							}
-							output, execErr := execInstance.Execute(
-								context.Background(),
-								cfg.SandboxDir,
-								cfg.UserDir,
-								cmd,
-								timeoutSec,
-								cfg.SecretEnv,
-							)
-							result := ShellResult{Stdout: output}
-							if execErr != nil {
-								result.Stderr = execErr.Error()
-								result.ExitCode = 1
-							}
-							result.Interpretation = interpretExitCode(cmd, result.ExitCode)
-							return smartTruncate(result.FormatForAgent(), 4000), nil
-						}
+								cmd := strings.Join(cmdParts, " ")
+								timeoutSec := classifyTimeout(cmd, 0)
+								execInstance := cfg.Executor
+								if execInstance == nil {
+									execInstance = executor.NewDirectExecutor("")
+								}
+								output, execErr := execInstance.Execute(
+									context.Background(),
+									cfg.SandboxDir,
+									cfg.UserDir,
+									cmd,
+									timeoutSec,
+									cfg.SecretEnv,
+								)
+								result := ShellResult{Stdout: output}
+								if execErr != nil {
+									result.Stderr = execErr.Error()
+									result.ExitCode = 1
+								}
+								result.Interpretation = interpretExitCode(cmd, result.ExitCode)
+								return smartTruncate(result.FormatForAgent(), 4000), nil
+							},
+						})
 						activatedTools = append(activatedTools, capturedName)
 						ctx.Log("[Skill:%s] Registered direct tool: %s → %s", name, capturedName, capturedScript)
 					}
@@ -466,7 +465,11 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				result += fmt.Sprintf("\n\n---\nActivated tools: %s\nThese tools are now callable.", strings.Join(activatedTools, ", "))
 			}
 			return result, nil
-		}
+		},
+		})
+
+		// Register tofi_tool_search (searches all deferred tools including skills)
+		registry.Register(buildToolSearchTool(registry))
 	}
 
 	// Register tofi_shell + file tools (if sandbox is configured)
@@ -494,10 +497,10 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			},
 		})
 
-		// Register file_read and file_write tools
+		// Register file tools
 		for _, ft := range buildFileTools(cfg.SandboxDir) {
-			allTools = append(allTools, ft.Schema)
-			extraHandlers[ft.Schema.Name] = ft.Handler
+			registry.Register(ft)
+			allTools = append(allTools, ft.Schema())
 		}
 	}
 
@@ -518,16 +521,16 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 	}
 	systemPrompt := cfg.System
 
-	// Append available skills to system prompt (name + description only)
+	// Append available deferred tools to system prompt (name + description only)
 	if len(cfg.SkillTools) > 0 {
-		var skillLines []string
+		var deferredLines []string
 		for _, skill := range cfg.SkillTools {
-			skillLines = append(skillLines, fmt.Sprintf("- %s: %s", skill.Name, skill.Description))
+			deferredLines = append(deferredLines, fmt.Sprintf("- %s: %s", skill.Name, skill.Description))
 		}
-		systemPrompt += "\n\n<available-skills>\n" + strings.Join(skillLines, "\n") + "\n</available-skills>\n"
+		systemPrompt += "\n\n<available-deferred-tools>\n" + strings.Join(deferredLines, "\n") + "\n</available-deferred-tools>\n"
 		systemPrompt += `
-## Skills
-You have skills listed in <available-skills>. Call tofi_load_skill with the skill name to get instructions and activate its tools. Only load when the user's request requires it — not on every message. If you already loaded a skill or have the tools from earlier in the conversation, just use them directly. Never pretend to do something without the right tools.
+## Deferred Tools
+You have tools listed in <available-deferred-tools>. These are not active yet — use tofi_tool_search to find and activate them by keyword, or call tofi_load_skill with the exact name to load a skill directly. Only load when the user's request requires it. If you already loaded a tool, just use it directly.
 
 ## Tool Usage Rules
 - NEVER use tofi_shell to fetch web pages (curl, wget, python requests, httpx, etc). Always use the web-fetch skill for fetching URLs — it extracts clean text and saves tokens.
@@ -579,8 +582,8 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 
 	// Register task management tools (task_status + ask_user)
 	for _, tt := range buildTaskTools(bgManager, cfg.AskUserFn) {
-		allTools = append(allTools, tt.Schema)
-		extraHandlers[tt.Schema.Name] = tt.Handler
+		registry.Register(tt)
+		allTools = append(allTools, tt.Schema())
 	}
 
 	for step := 1; step <= maxSteps; step++ {
@@ -771,9 +774,9 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 					return fmt.Sprintf("Error parsing arguments for %s: %v", tc.Name, err), nil
 				}
 
-				// Extra handlers (custom tools)
-				if handler, ok := extraHandlers[tc.Name]; ok {
-					result, err := handler(argsMap)
+				// Registry tools (core + skill + activated deferred)
+				if tool := registry.Get(tc.Name); tool != nil {
+					result, err := tool.Execute(context.Background(), argsMap)
 					if err != nil {
 						return fmt.Sprintf("Tool error: %v", err), nil
 					}
@@ -1028,9 +1031,9 @@ You have skills listed in <available-skills>. Call tofi_load_skill with the skil
 				continue
 			}
 
-			// Handle extra built-in tools (search_skills, install_skill, etc.)
-			if handler, ok := extraHandlers[fnName]; ok {
-				result, err := handler(argsMap)
+			// Handle registry tools (core + skill + activated deferred)
+			if tool := registry.Get(fnName); tool != nil {
+				result, err := tool.Execute(context.Background(), argsMap)
 				resultMsg := ""
 				if err != nil {
 					resultMsg = fmt.Sprintf("Tool error: %v", err)

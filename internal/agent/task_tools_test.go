@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -15,8 +16,8 @@ func TestBuildTaskTools_WithBgManager(t *testing.T) {
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool (task_status only), got %d", len(tools))
 	}
-	if tools[0].Schema.Name != "tofi_task_status" {
-		t.Errorf("expected tofi_task_status, got %s", tools[0].Schema.Name)
+	if tools[0].Name() != "tofi_task_status" {
+		t.Errorf("expected tofi_task_status, got %s", tools[0].Name())
 	}
 }
 
@@ -31,7 +32,7 @@ func TestBuildTaskTools_WithAskUser(t *testing.T) {
 
 	names := map[string]bool{}
 	for _, tt := range tools {
-		names[tt.Schema.Name] = true
+		names[tt.Name()] = true
 	}
 	if !names["tofi_task_status"] {
 		t.Error("missing tofi_task_status")
@@ -51,7 +52,7 @@ func TestBuildTaskTools_NilBgManager(t *testing.T) {
 func TestTaskStatus_NonBlocking_StillRunning(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, nil)
-	handler := tools[0].Handler
+	tool := tools[0]
 
 	// Simulate a background task that's still running
 	bgm.mu.Lock()
@@ -65,7 +66,7 @@ func TestTaskStatus_NonBlocking_StillRunning(t *testing.T) {
 	}
 	bgm.mu.Unlock()
 
-	result, err := handler(map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"task_id": taskID,
 	})
 	if err != nil {
@@ -79,7 +80,7 @@ func TestTaskStatus_NonBlocking_StillRunning(t *testing.T) {
 func TestTaskStatus_NonBlocking_Completed(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, nil)
-	handler := tools[0].Handler
+	tool := tools[0]
 
 	// Simulate a completed background task
 	doneCh := make(chan ShellResult, 1)
@@ -98,7 +99,7 @@ func TestTaskStatus_NonBlocking_Completed(t *testing.T) {
 	}
 	bgm.mu.Unlock()
 
-	result, err := handler(map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"task_id": taskID,
 	})
 	if err != nil {
@@ -115,7 +116,7 @@ func TestTaskStatus_NonBlocking_Completed(t *testing.T) {
 func TestTaskStatus_Blocking_Wait(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, nil)
-	handler := tools[0].Handler
+	tool := tools[0]
 
 	doneCh := make(chan ShellResult, 1)
 
@@ -138,7 +139,7 @@ func TestTaskStatus_Blocking_Wait(t *testing.T) {
 		}
 	}()
 
-	result, err := handler(map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"task_id": taskID,
 		"wait":    true,
 		"timeout": float64(5),
@@ -154,7 +155,7 @@ func TestTaskStatus_Blocking_Wait(t *testing.T) {
 func TestTaskStatus_Blocking_Timeout(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, nil)
-	handler := tools[0].Handler
+	tool := tools[0]
 
 	bgm.mu.Lock()
 	bgm.seq++
@@ -165,7 +166,7 @@ func TestTaskStatus_Blocking_Timeout(t *testing.T) {
 	}
 	bgm.mu.Unlock()
 
-	result, err := handler(map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"task_id": taskID,
 		"wait":    true,
 		"timeout": float64(1), // 1 second timeout
@@ -181,9 +182,9 @@ func TestTaskStatus_Blocking_Timeout(t *testing.T) {
 func TestTaskStatus_MissingTaskID(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, nil)
-	handler := tools[0].Handler
+	tool := tools[0]
 
-	result, err := handler(map[string]interface{}{})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -208,17 +209,17 @@ func TestAskUser_Success(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, askFn)
 
-	var askHandler func(map[string]interface{}) (string, error)
+	var askTool ToolDef
 	for _, tt := range tools {
-		if tt.Schema.Name == "tofi_ask_user" {
-			askHandler = tt.Handler
+		if tt.Name() == "tofi_ask_user" {
+			askTool = tt
 		}
 	}
-	if askHandler == nil {
+	if askTool == nil {
 		t.Fatal("tofi_ask_user not found")
 	}
 
-	result, err := askHandler(map[string]interface{}{
+	result, err := askTool.Execute(context.Background(), map[string]interface{}{
 		"question": "Delete this folder?",
 		"options":  []interface{}{"Yes", "No"},
 	})
@@ -248,14 +249,14 @@ func TestAskUser_UserDeclines(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, askFn)
 
-	var askHandler func(map[string]interface{}) (string, error)
+	var askTool ToolDef
 	for _, tt := range tools {
-		if tt.Schema.Name == "tofi_ask_user" {
-			askHandler = tt.Handler
+		if tt.Name() == "tofi_ask_user" {
+			askTool = tt
 		}
 	}
 
-	result, err := askHandler(map[string]interface{}{
+	result, err := askTool.Execute(context.Background(), map[string]interface{}{
 		"question": "Are you sure?",
 	})
 	if err != nil {
@@ -274,14 +275,14 @@ func TestAskUser_MissingQuestion(t *testing.T) {
 	bgm := NewBackgroundTaskManager()
 	tools := buildTaskTools(bgm, askFn)
 
-	var askHandler func(map[string]interface{}) (string, error)
+	var askTool ToolDef
 	for _, tt := range tools {
-		if tt.Schema.Name == "tofi_ask_user" {
-			askHandler = tt.Handler
+		if tt.Name() == "tofi_ask_user" {
+			askTool = tt
 		}
 	}
 
-	result, _ := askHandler(map[string]interface{}{})
+	result, _ := askTool.Execute(context.Background(), map[string]interface{}{})
 	if !contains(result, "question is required") {
 		t.Errorf("expected error for missing question, got: %s", result)
 	}

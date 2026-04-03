@@ -25,14 +25,19 @@ import (
 
 // buildFileTools creates all 5 core file tools scoped to the given sandbox directory.
 // Legacy names (tofi_read, tofi_write) are kept as aliases — new code uses tofi__ prefix.
-func buildFileTools(sandboxDir string) []ExtraBuiltinTool {
-	return []ExtraBuiltinTool{
+func buildFileTools(sandboxDir string) []ToolDef {
+	extras := []ExtraBuiltinTool{
 		buildReadTool(sandboxDir),
 		buildWriteTool(sandboxDir),
 		buildEditTool(sandboxDir),
 		buildGlobTool(sandboxDir),
 		buildGrepTool(sandboxDir),
 	}
+	tools := make([]ToolDef, len(extras))
+	for i, et := range extras {
+		tools[i] = WrapExtraBuiltin(et)
+	}
+	return tools
 }
 
 // ──────────────────────────────────────────────────────────────

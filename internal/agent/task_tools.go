@@ -17,19 +17,23 @@ import (
 // buildTaskTools creates task management tools.
 // bgManager: background task manager (from shell auto-backgrounding)
 // askUserFn: callback to ask user a question (nil = tool not registered)
-func buildTaskTools(bgManager *BackgroundTaskManager, askUserFn func(question string, options []string) (string, error)) []ExtraBuiltinTool {
-	var tools []ExtraBuiltinTool
+func buildTaskTools(bgManager *BackgroundTaskManager, askUserFn func(question string, options []string) (string, error)) []ToolDef {
+	var extras []ExtraBuiltinTool
 
 	// Always register task_status if we have a background manager
 	if bgManager != nil {
-		tools = append(tools, buildTaskStatusTool(bgManager))
+		extras = append(extras, buildTaskStatusTool(bgManager))
 	}
 
 	// Only register ask_user if callback is provided (Chat mode)
 	if askUserFn != nil {
-		tools = append(tools, buildAskUserTool(askUserFn))
+		extras = append(extras, buildAskUserTool(askUserFn))
 	}
 
+	tools := make([]ToolDef, len(extras))
+	for i, et := range extras {
+		tools[i] = WrapExtraBuiltin(et)
+	}
 	return tools
 }
 
