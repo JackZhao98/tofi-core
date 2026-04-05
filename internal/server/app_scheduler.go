@@ -159,6 +159,20 @@ func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverri
 func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride string) {
 	log.Printf("[app-run:%s] Dispatching %s run for app %s", run.ID[:8], run.Trigger, run.AppID[:8])
 
+	// Check monthly run quota
+	if quotaStr, err := as.server.db.GetSetting("run_quota_monthly", run.UserID); err == nil && quotaStr != "" {
+		var quota int
+		fmt.Sscanf(quotaStr, "%d", &quota)
+		if quota > 0 {
+			used, _ := as.server.db.CountMonthlyRuns(run.UserID)
+			if used >= quota {
+				log.Printf("[app-run:%s] Monthly quota exceeded (%d/%d) for user %s", run.ID[:8], used, quota, run.UserID)
+				as.server.db.UpdateAppRunResult(run.ID, "failed", "", fmt.Sprintf("Error: Monthly run quota exceeded (%d/%d). Upgrade your plan for more runs.", used, quota))
+				return
+			}
+		}
+	}
+
 	app, err := as.server.db.GetApp(run.AppID)
 	if err != nil {
 		log.Printf("[app-run:%s] App %s not found: %v", run.ID[:8], run.AppID[:8], err)

@@ -301,6 +301,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/auth/setup_status", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/v1/auth/setup", s.handleSetupAdmin)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
+	mux.HandleFunc("POST /api/v1/auth/verify", s.handleVerifyEmail)
+	mux.HandleFunc("POST /api/v1/auth/resend-code", s.handleResendCode)
 	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleRefreshToken)
 
 	// 受保护的 API 路由 (包裹 AuthMiddleware)
@@ -427,6 +430,8 @@ func (s *Server) Start() error {
 
 	// Admin 管理路由 (需要 admin 权限)
 	mux.HandleFunc("GET /api/v1/admin/stats", s.AdminMiddleware(s.handleAdminGetStats))
+	mux.HandleFunc("GET /api/v1/admin/settings/registration", s.AdminMiddleware(s.handleGetRegistrationSettings))
+	mux.HandleFunc("PUT /api/v1/admin/settings/registration", s.AdminMiddleware(s.handleSetRegistrationSettings))
 	mux.HandleFunc("GET /api/v1/admin/users", s.AdminMiddleware(s.handleAdminListUsers))
 	mux.HandleFunc("POST /api/v1/admin/users", s.AdminMiddleware(s.handleAdminCreateUser))
 	mux.HandleFunc("DELETE /api/v1/admin/users/{id}", s.AdminMiddleware(s.handleAdminDeleteUser))

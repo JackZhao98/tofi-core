@@ -102,6 +102,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Block pending users if email verification is required
+	if s.requireVerifiedEmail() && user.Status == "pending" {
+		writeJSONError(w, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "Please verify your email first", "POST /api/v1/auth/resend-code to get a new code")
+		return
+	}
+
 	token, err := GenerateToken(user.Username, user.Role)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")

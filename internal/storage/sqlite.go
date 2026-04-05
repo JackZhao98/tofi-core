@@ -21,11 +21,15 @@ type ExecutionRecord struct {
 }
 
 type UserRecord struct {
-	ID           string
-	Username     string
-	PasswordHash string
-	Role         string // admin, user
-	CreatedAt    sql.NullString
+	ID               string
+	Username         string
+	PasswordHash     string
+	Role             string // admin, user
+	Email            string
+	Status           string // active, pending
+	VerificationCode string
+	CodeExpiresAt    string
+	CreatedAt        sql.NullString
 }
 
 type SecretRecord struct {
@@ -70,6 +74,11 @@ func InitDB(homeDir string) (*DB, error) {
 	if _, err := conn.Exec(userQuery); err != nil {
 		return nil, err
 	}
+	// Migration: add email, status, verification fields to users
+	conn.Exec(`ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''`)
+	conn.Exec(`ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'`)
+	conn.Exec(`ALTER TABLE users ADD COLUMN verification_code TEXT DEFAULT ''`)
+	conn.Exec(`ALTER TABLE users ADD COLUMN code_expires_at TEXT DEFAULT ''`)
 
 	// 创建 executions 表
 	query := `
@@ -268,25 +277,39 @@ func (db *DB) SaveUser(id, username, passwordHash, role string) error {
 	return err
 }
 
-func (db *DB) GetUser(username string) (*UserRecord, error) {
-	query := `SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?`
-	row := db.conn.QueryRow(query, username)
+// SaveUserWithEmail creates a user with email and status fields.
+func (db *DB) SaveUserWithEmail(id, username, email, passwordHash, role, status string) error {
+	query := `INSERT INTO users (id, username, email, password_hash, role, status) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, username, email, passwordHash, role, status)
+	return err
+}
+
+const userSelectFields = `id, username, password_hash, role, email, status, verification_code, code_expires_at, created_at`
+
+func scanUser(row interface{ Scan(dest ...any) error }) (*UserRecord, error) {
 	var u UserRecord
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Email, &u.Status, &u.VerificationCode, &u.CodeExpiresAt, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
+func (db *DB) GetUser(username string) (*UserRecord, error) {
+	row := db.conn.QueryRow(`SELECT `+userSelectFields+` FROM users WHERE username = ?`, username)
+	return scanUser(row)
+}
+
 // GetUserByID returns a user record by ID.
 func (db *DB) GetUserByID(id string) (*UserRecord, error) {
-	row := db.conn.QueryRow(`SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?`, id)
-	var u UserRecord
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
-		return nil, err
-	}
-	return &u, nil
+	row := db.conn.QueryRow(`SELECT `+userSelectFields+` FROM users WHERE id = ?`, id)
+	return scanUser(row)
+}
+
+// GetUserByEmail returns a user record by email.
+func (db *DB) GetUserByEmail(email string) (*UserRecord, error) {
+	row := db.conn.QueryRow(`SELECT `+userSelectFields+` FROM users WHERE email = ? AND email != ''`, email)
+	return scanUser(row)
 }
 
 func (db *DB) CountUsers() (int, error) {
@@ -295,9 +318,41 @@ func (db *DB) CountUsers() (int, error) {
 	return count, err
 }
 
+// UpdateUserStatus sets the user's status (active/pending).
+func (db *DB) UpdateUserStatus(userID, status string) error {
+	_, err := db.conn.Exec(`UPDATE users SET status = ? WHERE id = ?`, status, userID)
+	return err
+}
+
+// SetVerificationCode stores a verification code with expiry.
+func (db *DB) SetVerificationCode(userID, code, expiresAt string) error {
+	_, err := db.conn.Exec(`UPDATE users SET verification_code = ?, code_expires_at = ? WHERE id = ?`, code, expiresAt, userID)
+	return err
+}
+
+// ClearVerificationCode removes the code after successful verification.
+func (db *DB) ClearVerificationCode(userID string) error {
+	_, err := db.conn.Exec(`UPDATE users SET verification_code = '', code_expires_at = '' WHERE id = ?`, userID)
+	return err
+}
+
+// CountTodayRegistrations counts how many users registered today (global rate limit).
+func (db *DB) CountTodayRegistrations() (int, error) {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM users WHERE created_at >= date('now')`).Scan(&count)
+	return count, err
+}
+
+// CountMonthlyRuns counts runs for a user in the current month.
+func (db *DB) CountMonthlyRuns(userID string) (int, error) {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM app_runs WHERE user_id = ? AND created_at >= date('now', 'start of month')`, userID).Scan(&count)
+	return count, err
+}
+
 // Admin: ListAllUsers 返回所有用户
 func (db *DB) ListAllUsers() ([]*UserRecord, error) {
-	query := `SELECT id, username, password_hash, role, created_at FROM users ORDER BY created_at DESC`
+	query := `SELECT ` + userSelectFields + ` FROM users ORDER BY created_at DESC`
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -306,11 +361,11 @@ func (db *DB) ListAllUsers() ([]*UserRecord, error) {
 
 	var records []*UserRecord
 	for rows.Next() {
-		var u UserRecord
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		u, err := scanUser(rows)
+		if err != nil {
 			continue
 		}
-		records = append(records, &u)
+		records = append(records, u)
 	}
 	return records, nil
 }
