@@ -91,7 +91,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try username first, then email
 	user, err := s.db.GetUser(req.Username)
+	if err != nil {
+		user, err = s.db.GetUserByEmail(req.Username)
+	}
 	if err != nil {
 		writeJSONError(w, http.StatusUnauthorized, ErrInvalidCredentials, "Invalid username or password", "")
 		return
