@@ -42,6 +42,7 @@ func init() {
 	configCmd.AddCommand(configSetKeyCmd)
 	configCmd.AddCommand(configDeleteKeyCmd)
 	configCmd.AddCommand(configModelCmd)
+	configCmd.AddCommand(configSignupCmd)
 }
 
 func runConfigHelp(cmd *cobra.Command, args []string) error {
@@ -56,6 +57,7 @@ func runConfigHelp(cmd *cobra.Command, args []string) error {
 		{"tofi config set-key <provider> <key>", "Set an AI provider key"},
 		{"tofi config delete-key <provider>", "Delete an AI provider key"},
 		{"tofi config model [name]", "View or set preferred model"},
+		{"tofi config signup [on|off]", "View or toggle user registration"},
 	}
 
 	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f6fc"))
@@ -275,6 +277,87 @@ func runConfigModel(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	fmt.Println(successStyle.Render("  ✓ Preferred model: ") + accentStyle.Render(modelName))
+	fmt.Println()
+	return nil
+}
+
+// --- tofi config signup [on|off] ---
+
+var configSignupCmd = &cobra.Command{
+	Use:   "signup [on|off]",
+	Short: "View or toggle user registration",
+	Long: `View or toggle whether new users can register.
+
+Examples:
+  tofi config signup        # Show current status
+  tofi config signup on     # Enable registration
+  tofi config signup off    # Disable registration`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runConfigSignup,
+}
+
+func runConfigSignup(cmd *cobra.Command, args []string) error {
+	client := newAPIClient()
+	if err := client.ensureRunning(); err != nil {
+		return err
+	}
+
+	if len(args) == 0 {
+		// Show current status
+		var result struct {
+			AllowSignup          bool `json:"allow_signup"`
+			RequireVerifiedEmail bool `json:"require_verified_email"`
+			EmailConfigured      bool `json:"email_configured"`
+		}
+		if err := client.get("/api/v1/admin/settings/registration", &result); err != nil {
+			return fmt.Errorf("failed to fetch registration settings: %w", err)
+		}
+		fmt.Println()
+		signupStatus := "off"
+		if result.AllowSignup {
+			signupStatus = "on"
+		}
+		fmt.Println(subtitleStyle.Render("  Registration: ") + accentStyle.Render(signupStatus))
+		verifyStatus := "off"
+		if result.RequireVerifiedEmail {
+			verifyStatus = "on"
+		}
+		fmt.Println(subtitleStyle.Render("  Email verification: ") + accentStyle.Render(verifyStatus))
+		emailStatus := "not configured"
+		if result.EmailConfigured {
+			emailStatus = "configured"
+		}
+		fmt.Println(subtitleStyle.Render("  Email provider: ") + accentStyle.Render(emailStatus))
+		fmt.Println()
+		return nil
+	}
+
+	// Set signup on/off
+	val := strings.ToLower(args[0])
+	var enable bool
+	switch val {
+	case "on", "true", "yes", "1":
+		enable = true
+	case "off", "false", "no", "0":
+		enable = false
+	default:
+		return fmt.Errorf("invalid value %q — use on or off", val)
+	}
+
+	body := fmt.Sprintf(`{"allow_signup":%t}`, enable)
+	if err := client.put("/api/v1/admin/settings/registration", strings.NewReader(body), nil); err != nil {
+		fmt.Println()
+		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
+		fmt.Println()
+		return err
+	}
+
+	status := "disabled"
+	if enable {
+		status = "enabled"
+	}
+	fmt.Println()
+	fmt.Println(successStyle.Render("  ✓ Registration " + status))
 	fmt.Println()
 	return nil
 }
