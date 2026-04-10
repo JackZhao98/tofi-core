@@ -102,6 +102,15 @@ func (s *AgentState) WithMessages(msgs []provider.Message) *AgentState {
 	return &next
 }
 
+// WithCompactedMessages replaces messages after compaction and resets InitialMsgCount
+// so that NewMessages() correctly tracks only messages added AFTER the compaction.
+func (s *AgentState) WithCompactedMessages(msgs []provider.Message) *AgentState {
+	next := *s
+	next.Messages = msgs
+	next.InitialMsgCount = len(msgs)
+	return &next
+}
+
 func (s *AgentState) WithResult(content string) *AgentState {
 	next := *s
 	next.Phase = PhaseDone

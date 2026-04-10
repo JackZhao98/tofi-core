@@ -740,6 +740,13 @@ When a task requires multiple tool calls, narrate your progress with brief text 
 - Keep narration to 1 short sentence, then make the tool call in the SAME response.
 - Do NOT stay silent during multi-step work — the user should see your thought process.
 
+## Notifications & Connectors
+Tofi has built-in connectors for Telegram, Slack, Discord, and Email. These are configured by the user in Settings → Connectors and work automatically:
+- When an App finishes running, the result is automatically delivered to configured notification channels.
+- You do NOT need to install any skill or plugin to send messages to Telegram/Slack/Discord.
+- If the user asks to "send results to Telegram" or similar, explain that they need to configure the Telegram connector in Settings, and then any App run will automatically notify them.
+- Do NOT try to search for or install third-party Telegram/Slack/notification skills — the functionality is built-in.
+
 Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 
 	return prompt

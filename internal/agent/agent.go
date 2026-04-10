@@ -628,6 +628,8 @@ You have tools listed in <available-deferred-tools>. These are not active yet â€
 				ctx.Log("[Agent] Pre-call compaction failed: %v", compactErr)
 			} else {
 				messages = compactAndRebuild(messages, summary)
+				// Reset InitialMsgCount so NewMessages() tracks only post-compaction additions
+				state = state.WithCompactedMessages(messages)
 				compactedTokens := EstimateContextUsage(systemPrompt, messages, allTools)
 				cfg.Hooks.callPostCompact(originalCount, len(messages), estimatedInput, compactedTokens)
 				ctx.Log("[Agent] Pre-call compacted to %d messages (~%d tokens)", len(messages), compactedTokens)
@@ -1194,6 +1196,8 @@ You have tools listed in <available-deferred-tools>. These are not active yet â€
 			} else {
 				originalCount := len(messages)
 				messages = compactAndRebuild(messages, summary)
+				// Reset InitialMsgCount so NewMessages() tracks only post-compaction additions
+				state = state.WithCompactedMessages(messages)
 
 				compactedTokens := EstimateContextUsage(systemPrompt, messages, allTools)
 				cfg.Hooks.callPostCompact(originalCount, len(messages), originalTokens, compactedTokens)
