@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +17,7 @@ type adminItem struct {
 
 var adminMenuItems = []adminItem{
 	{"users", "Users", "Manage user accounts"},
+	{"registration", "Registration", "Enable/disable signup"},
 	{"usage", "Usage", "Token usage by model"},
 }
 
@@ -89,6 +92,182 @@ func (m *adminMenuModel) View() string {
 	return "\n" + renderTUIBox("Admin", content) + warn + "\n"
 }
 
+// ── Registration Settings TUI ──
+
+type regSettings struct {
+	AllowSignup          bool `json:"allow_signup"`
+	RequireVerifiedEmail bool `json:"require_verified_email"`
+	EmailConfigured      bool `json:"email_configured"`
+}
+
+type regItem struct {
+	id   string
+	name string
+}
+
+var regMenuItems = []regItem{
+	{"signup", "Allow Registration"},
+	{"verify", "Require Email Verification"},
+}
+
+type regModel struct {
+	cursor     int
+	settings   regSettings
+	loaded     bool
+	err        string
+	exitReason tuiExitReason
+	ctrlC      ctrlCGuard
+	client     *apiClient
+}
+
+func newRegModel() *regModel {
+	return &regModel{client: newAPIClient()}
+}
+
+type regLoadedMsg struct{ s regSettings }
+type regErrorMsg struct{ err string }
+type regUpdatedMsg struct{ s regSettings }
+
+func (m *regModel) loadSettings() tea.Msg {
+	var s regSettings
+	if err := m.client.get("/api/v1/admin/settings/registration", &s); err != nil {
+		return regErrorMsg{err: err.Error()}
+	}
+	return regLoadedMsg{s: s}
+}
+
+func (m *regModel) toggleSetting(field string, val bool) tea.Cmd {
+	return func() tea.Msg {
+		payload := map[string]bool{field: val}
+		body, _ := json.Marshal(payload)
+		if err := m.client.put("/api/v1/admin/settings/registration", bytes.NewReader(body), nil); err != nil {
+			return regErrorMsg{err: err.Error()}
+		}
+		var s regSettings
+		if err := m.client.get("/api/v1/admin/settings/registration", &s); err != nil {
+			return regErrorMsg{err: err.Error()}
+		}
+		return regUpdatedMsg{s: s}
+	}
+}
+
+func (m *regModel) Init() tea.Cmd {
+	return m.loadSettings
+}
+
+func (m *regModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case regLoadedMsg:
+		m.settings = msg.s
+		m.loaded = true
+		return m, nil
+	case regUpdatedMsg:
+		m.settings = msg.s
+		return m, nil
+	case regErrorMsg:
+		m.err = msg.err
+		m.loaded = true
+		return m, nil
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			if quit, quitCmd := m.ctrlC.HandleCtrlC(); quit {
+				m.exitReason = exitQuit
+				return m, tea.Quit
+			} else {
+				return m, quitCmd
+			}
+		case "esc":
+			m.exitReason = exitToMenu
+			return m, tea.Quit
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(regMenuItems)-1 {
+				m.cursor++
+			}
+		case "enter", " ":
+			if !m.loaded {
+				return m, nil
+			}
+			switch regMenuItems[m.cursor].id {
+			case "signup":
+				return m, m.toggleSetting("allow_signup", !m.settings.AllowSignup)
+			case "verify":
+				if m.settings.EmailConfigured {
+					return m, m.toggleSetting("require_verified_email", !m.settings.RequireVerifiedEmail)
+				}
+			}
+		default:
+			m.ctrlC.HandleReset()
+		}
+	case ctrlCResetMsg:
+		m.ctrlC.HandleReset()
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *regModel) View() string {
+	if !m.loaded {
+		return "\n" + renderTUIBox("Registration", subtitleStyle.Render("Loading...")) + "\n"
+	}
+	if m.err != "" {
+		return "\n" + renderTUIBox("Registration", errorStyle.Render("  ✗ "+m.err)) + "\n"
+	}
+
+	var items string
+	for i, item := range regMenuItems {
+		var toggle string
+		switch item.id {
+		case "signup":
+			if m.settings.AllowSignup {
+				toggle = successStyle.Render("ON")
+			} else {
+				toggle = subtitleStyle.Render("OFF")
+			}
+		case "verify":
+			if !m.settings.EmailConfigured {
+				toggle = subtitleStyle.Render("OFF") + subtitleStyle.Render(" (no email provider)")
+			} else if m.settings.RequireVerifiedEmail {
+				toggle = successStyle.Render("ON")
+			} else {
+				toggle = subtitleStyle.Render("OFF")
+			}
+		}
+
+		label := fmt.Sprintf("%-28s %s", item.name, toggle)
+		if i == m.cursor {
+			items += tuiSelectedRow.Render("► " + label) + "\n"
+		} else {
+			items += "  " + label + "\n"
+		}
+	}
+
+	footer := subtitleStyle.Render("↑↓ navigate · enter toggle · esc back")
+	content := items + "\n" + footer
+
+	warn := ""
+	if m.ctrlC.IsArmed() {
+		warn = "\n" + m.ctrlC.RenderWarning()
+	}
+
+	return "\n" + renderTUIBox("Registration", content) + warn + "\n"
+}
+
+func runRegistrationSection(_ *cobra.Command) error {
+	c := newAPIClient()
+	if err := c.ensureRunning(); err != nil {
+		return err
+	}
+
+	p := tea.NewProgram(newRegModel())
+	_, err := p.Run()
+	return err
+}
+
 // runAdminSection runs the admin menu loop.
 func runAdminSection(cmd *cobra.Command) (tuiExitReason, error) {
 	for {
@@ -110,6 +289,8 @@ func runAdminSection(cmd *cobra.Command) (tuiExitReason, error) {
 		switch model.selected {
 		case "users":
 			subErr = runUsersSection(cmd)
+		case "registration":
+			subErr = runRegistrationSection(cmd)
 		case "usage":
 			subErr = runUsageSection(cmd)
 		}
