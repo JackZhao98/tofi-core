@@ -98,6 +98,7 @@ type regSettings struct {
 	AllowSignup          bool `json:"allow_signup"`
 	RequireVerifiedEmail bool `json:"require_verified_email"`
 	EmailConfigured      bool `json:"email_configured"`
+	AllowUserKeys        bool `json:"allow_user_keys"`
 }
 
 type regItem struct {
@@ -108,6 +109,7 @@ type regItem struct {
 var regMenuItems = []regItem{
 	{"signup", "Allow Registration"},
 	{"verify", "Require Email Verification"},
+	{"userkeys", "Allow User API Keys"},
 }
 
 type regModel struct {
@@ -133,19 +135,42 @@ func (m *regModel) loadSettings() tea.Msg {
 	if err := m.client.get("/api/v1/admin/settings/registration", &s); err != nil {
 		return regErrorMsg{err: err.Error()}
 	}
+	// Also fetch allow_user_keys from the AI keys endpoint
+	var aiKeys struct {
+		AllowUserKeys bool `json:"allow_user_keys"`
+	}
+	if err := m.client.get("/api/v1/user/settings/ai-keys", &aiKeys); err == nil {
+		s.AllowUserKeys = aiKeys.AllowUserKeys
+	}
 	return regLoadedMsg{s: s}
 }
 
 func (m *regModel) toggleSetting(field string, val bool) tea.Cmd {
 	return func() tea.Msg {
-		payload := map[string]bool{field: val}
-		body, _ := json.Marshal(payload)
-		if err := m.client.put("/api/v1/admin/settings/registration", bytes.NewReader(body), nil); err != nil {
-			return regErrorMsg{err: err.Error()}
+		if field == "allow" {
+			// User keys uses a different endpoint
+			payload := map[string]bool{"allow": val}
+			body, _ := json.Marshal(payload)
+			if err := m.client.put("/api/v1/admin/settings/allow-user-keys", bytes.NewReader(body), nil); err != nil {
+				return regErrorMsg{err: err.Error()}
+			}
+		} else {
+			payload := map[string]bool{field: val}
+			body, _ := json.Marshal(payload)
+			if err := m.client.put("/api/v1/admin/settings/registration", bytes.NewReader(body), nil); err != nil {
+				return regErrorMsg{err: err.Error()}
+			}
 		}
+		// Reload all settings
 		var s regSettings
 		if err := m.client.get("/api/v1/admin/settings/registration", &s); err != nil {
 			return regErrorMsg{err: err.Error()}
+		}
+		var aiKeys struct {
+			AllowUserKeys bool `json:"allow_user_keys"`
+		}
+		if err := m.client.get("/api/v1/user/settings/ai-keys", &aiKeys); err == nil {
+			s.AllowUserKeys = aiKeys.AllowUserKeys
 		}
 		return regUpdatedMsg{s: s}
 	}
@@ -199,6 +224,8 @@ func (m *regModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.settings.EmailConfigured {
 					return m, m.toggleSetting("require_verified_email", !m.settings.RequireVerifiedEmail)
 				}
+			case "userkeys":
+				return m, m.toggleSetting("allow", !m.settings.AllowUserKeys)
 			}
 		default:
 			m.ctrlC.HandleReset()
@@ -235,6 +262,12 @@ func (m *regModel) View() string {
 				toggle = successStyle.Render("ON")
 			} else {
 				toggle = subtitleStyle.Render("OFF")
+			}
+		case "userkeys":
+			if m.settings.AllowUserKeys {
+				toggle = successStyle.Render("ON") + subtitleStyle.Render(" (BYOK)")
+			} else {
+				toggle = subtitleStyle.Render("OFF") + subtitleStyle.Render(" (SaaS mode)")
 			}
 		}
 
