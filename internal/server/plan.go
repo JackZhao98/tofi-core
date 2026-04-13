@@ -39,8 +39,23 @@ var PlanPrice = map[string]int64{
 	"developer": 500, // $5.00
 }
 
-// getUserPlanLimits returns the plan limits for a user.
+// AdminLimits is used for admin users — no restrictions.
+var AdminLimits = PlanLimits{
+	MaxApps:        0,
+	DailyRuns:      999999,
+	ConcurrentRuns: 999,
+	WebhookAPI:     true,
+	CustomCron:     true,
+	EmailNotify:    true,
+	RunHistoryDays: 0,
+}
+
+// getUserPlanLimits returns the plan limits for a user. Admin users have no limits.
 func (s *Server) getUserPlanLimits(userID string) PlanLimits {
+	// Admin bypass — no limits
+	if user, err := s.db.GetUser(userID); err == nil && user.Role == "admin" {
+		return AdminLimits
+	}
 	plan, _ := s.db.GetUserPlan(userID)
 	if limits, ok := PlanDefs[plan]; ok {
 		return limits
