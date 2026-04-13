@@ -178,9 +178,11 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 		available = []providerStatus{}
 	}
 
+	plan, _ := s.db.GetUserPlan(user)
 	resp := map[string]any{
 		"username":  u.Username,
 		"role":      u.Role,
+		"plan":      plan,
 		"providers": available,
 	}
 	// When no providers are configured, tell the user what's available

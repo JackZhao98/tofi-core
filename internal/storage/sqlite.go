@@ -266,6 +266,10 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  refresh_tokens table creation: %v", err)
 	}
 
+	if err := db.initSubscriptionsTable(); err != nil {
+		log.Printf("⚠️  subscriptions table creation: %v", err)
+	}
+
 	return db, nil
 }
 

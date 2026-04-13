@@ -225,6 +225,14 @@ func (s *Server) Start() error {
 	// 启动 refresh token 清理
 	s.startRefreshTokenCleanup()
 
+	// 初始化 Stripe（可选 — 不配置则 checkout 端点返回 503）
+	if initStripe() {
+		log.Println("[stripe] initialized")
+	}
+
+	// 启动订阅过期检查（每小时）
+	s.startSubscriptionExpiryChecker()
+
 	// 启动 rate limiter 清理
 	rateLimitStop := make(chan struct{})
 	go s.rateLimiter.StartCleanup(rateLimitStop)
@@ -387,6 +395,14 @@ func (s *Server) Start() error {
 
 	// Admin: allow_user_keys toggle
 	mux.HandleFunc("PUT /api/v1/admin/settings/allow-user-keys", s.AdminMiddleware(s.handleSetAllowUserKeys))
+
+	// Subscription / Plan
+	mux.HandleFunc("GET /api/v1/user/subscription", s.AuthMiddleware(s.handleGetSubscription))
+	mux.HandleFunc("GET /api/v1/user/subscription/usage", s.AuthMiddleware(s.handleGetUsage))
+	mux.HandleFunc("POST /api/v1/user/subscription/checkout", s.AuthMiddleware(s.handleCreateCheckout))
+	mux.HandleFunc("POST /api/v1/user/subscription/portal", s.AuthMiddleware(s.handleCreatePortal))
+	mux.HandleFunc("GET /api/v1/user/subscription/events", s.AuthMiddleware(s.handleListSubEvents))
+	mux.HandleFunc("POST /api/v1/webhooks/stripe", s.handleStripeWebhook)
 
 	// Connectors — 统一多渠道 API
 	mux.HandleFunc("GET /api/v1/connectors", s.AuthMiddleware(s.handleListConnectors))
