@@ -87,6 +87,17 @@ func (s *Server) handleGetApp(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
+	// Plan limit: max apps
+	limits := s.getUserPlanLimits(userID)
+	if limits.MaxApps > 0 {
+		count, _ := s.db.CountUserApps(userID)
+		if count >= limits.MaxApps {
+			writeJSONError(w, http.StatusForbidden, "PLAN_LIMIT",
+				fmt.Sprintf("App limit reached (%d/%d). Upgrade to Developer for unlimited apps.", count, limits.MaxApps), "")
+			return
+		}
+	}
+
 	var req struct {
 		ID               string           `json:"id"`
 		Name             string           `json:"name"`
@@ -381,6 +392,21 @@ func (s *Server) handleDeactivateApp(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
+
+	// Plan limits: daily runs + concurrent runs
+	limits := s.getUserPlanLimits(userID)
+	dailyUsed, _ := s.db.CountDailyRuns(userID)
+	if dailyUsed >= limits.DailyRuns {
+		writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
+			fmt.Sprintf("Daily run limit reached (%d/%d). Resets at UTC midnight.", dailyUsed, limits.DailyRuns), "")
+		return
+	}
+	running, _ := s.db.CountRunningRuns(userID)
+	if running >= limits.ConcurrentRuns {
+		writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
+			fmt.Sprintf("Concurrent run limit reached (%d/%d).", running, limits.ConcurrentRuns), "")
+		return
+	}
 
 	app, err := s.db.GetApp(id)
 	if err != nil || app.UserID != userID {
@@ -1269,6 +1295,13 @@ func requestToAgentDef(
 func (s *Server) handleTriggerApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
+
+	// Plan limit: webhook API
+	limits := s.getUserPlanLimits(userID)
+	if !limits.WebhookAPI {
+		writeJSONError(w, http.StatusForbidden, "PLAN_LIMIT", "Webhook API requires Developer plan", "")
+		return
+	}
 
 	app, err := s.db.GetApp(id)
 	if err != nil || app.UserID != userID {
