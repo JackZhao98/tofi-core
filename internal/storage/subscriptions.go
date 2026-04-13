@@ -17,6 +17,7 @@ type SubscriptionRecord struct {
 	StripeSubscriptionID string `json:"stripe_subscription_id"`
 	CurrentPeriodStart   string `json:"current_period_start"`
 	CurrentPeriodEnd     string `json:"current_period_end"`
+	CancelAtPeriodEnd    bool   `json:"cancel_at_period_end"`
 	CreatedAt            string `json:"created_at"`
 	UpdatedAt            string `json:"updated_at"`
 }
@@ -59,6 +60,8 @@ func (db *DB) initSubscriptionsTable() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_sub_events_user ON subscription_events(user_id);
 	`)
+	// Migration: add cancel_at_period_end column
+	db.conn.Exec(`ALTER TABLE user_subscriptions ADD COLUMN cancel_at_period_end INTEGER DEFAULT 0`)
 	return err
 }
 
@@ -80,11 +83,11 @@ func (db *DB) GetSubscription(userID string) (*SubscriptionRecord, error) {
 	var s SubscriptionRecord
 	err := db.conn.QueryRow(`
 		SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
-		       current_period_start, current_period_end, created_at, updated_at
+		       current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at
 		FROM user_subscriptions WHERE user_id = ?
 	`, userID).Scan(
 		&s.UserID, &s.Plan, &s.Status, &s.StripeCustomerID, &s.StripeSubscriptionID,
-		&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CreatedAt, &s.UpdatedAt,
+		&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CancelAtPeriodEnd, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -97,10 +100,14 @@ func (db *DB) GetSubscription(userID string) (*SubscriptionRecord, error) {
 
 // UpsertSubscription creates or updates the subscription row.
 func (db *DB) UpsertSubscription(s *SubscriptionRecord) error {
+	cancelInt := 0
+	if s.CancelAtPeriodEnd {
+		cancelInt = 1
+	}
 	_, err := db.conn.Exec(`
 		INSERT INTO user_subscriptions (user_id, plan, status, stripe_customer_id, stripe_subscription_id,
-		                                current_period_start, current_period_end, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		                                current_period_start, current_period_end, cancel_at_period_end, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			plan = excluded.plan,
 			status = excluded.status,
@@ -108,10 +115,11 @@ func (db *DB) UpsertSubscription(s *SubscriptionRecord) error {
 			stripe_subscription_id = excluded.stripe_subscription_id,
 			current_period_start = excluded.current_period_start,
 			current_period_end = excluded.current_period_end,
+			cancel_at_period_end = excluded.cancel_at_period_end,
 			updated_at = excluded.updated_at
 	`,
 		s.UserID, s.Plan, s.Status, s.StripeCustomerID, s.StripeSubscriptionID,
-		s.CurrentPeriodStart, s.CurrentPeriodEnd, time.Now().UTC().Format(time.RFC3339),
+		s.CurrentPeriodStart, s.CurrentPeriodEnd, cancelInt, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert subscription: %w", err)
@@ -199,11 +207,11 @@ func (db *DB) GetSubscriptionByStripeCustomer(customerID string) (*SubscriptionR
 	var s SubscriptionRecord
 	err := db.conn.QueryRow(`
 		SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
-		       current_period_start, current_period_end, created_at, updated_at
+		       current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at
 		FROM user_subscriptions WHERE stripe_customer_id = ?
 	`, customerID).Scan(
 		&s.UserID, &s.Plan, &s.Status, &s.StripeCustomerID, &s.StripeSubscriptionID,
-		&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CreatedAt, &s.UpdatedAt,
+		&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CancelAtPeriodEnd, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -219,7 +227,7 @@ func (db *DB) GetExpiredSubscriptions() ([]*SubscriptionRecord, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := db.conn.Query(`
 		SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
-		       current_period_start, current_period_end, created_at, updated_at
+		       current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at
 		FROM user_subscriptions
 		WHERE plan != 'free' AND status = 'active' AND current_period_end != '' AND current_period_end < ?
 	`, now)
@@ -232,7 +240,7 @@ func (db *DB) GetExpiredSubscriptions() ([]*SubscriptionRecord, error) {
 	for rows.Next() {
 		var s SubscriptionRecord
 		if err := rows.Scan(&s.UserID, &s.Plan, &s.Status, &s.StripeCustomerID, &s.StripeSubscriptionID,
-			&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CancelAtPeriodEnd, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan expired subscription: %w", err)
 		}
 		subs = append(subs, &s)

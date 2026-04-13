@@ -36,6 +36,7 @@ func (s *Server) handleGetSubscription(w http.ResponseWriter, r *http.Request) {
 	if sub != nil {
 		resp["status"] = sub.Status
 		resp["current_period_end"] = sub.CurrentPeriodEnd
+		resp["cancel_at_period_end"] = sub.CancelAtPeriodEnd
 		resp["stripe_customer_id"] = sub.StripeCustomerID
 	}
 
@@ -205,6 +206,8 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		s.handleInvoicePaid(event)
 	case "invoice.payment_failed":
 		s.handleInvoicePaymentFailed(event)
+	case "customer.subscription.updated":
+		s.handleSubscriptionUpdated(event)
 	case "customer.subscription.deleted":
 		s.handleSubscriptionDeleted(event)
 	default:
@@ -293,6 +296,38 @@ func (s *Server) handleInvoicePaymentFailed(event stripe.Event) {
 	s.db.UpsertSubscription(sub)
 	s.db.LogSubscriptionEvent(sub.UserID, "payment_failed", sub.Plan, sub.Plan, event.ID, "{}")
 	log.Printf("[stripe] payment failed for user %s", sub.UserID)
+}
+
+func (s *Server) handleSubscriptionUpdated(event stripe.Event) {
+	var stripeSub struct {
+		Customer         string `json:"customer"`
+		CancelAtPeriodEnd bool  `json:"cancel_at_period_end"`
+		CurrentPeriodEnd int64  `json:"current_period_end"`
+	}
+	if err := json.Unmarshal(event.Data.Raw, &stripeSub); err != nil {
+		log.Printf("[stripe] failed to parse subscription updated: %v", err)
+		return
+	}
+
+	sub := s.findSubByCustomerID(stripeSub.Customer)
+	if sub == nil {
+		return
+	}
+
+	sub.CancelAtPeriodEnd = stripeSub.CancelAtPeriodEnd
+	if stripeSub.CurrentPeriodEnd > 0 {
+		sub.CurrentPeriodEnd = time.Unix(stripeSub.CurrentPeriodEnd, 0).UTC().Format(time.RFC3339)
+	}
+
+	s.db.UpsertSubscription(sub)
+
+	if stripeSub.CancelAtPeriodEnd {
+		s.db.LogSubscriptionEvent(sub.UserID, "cancel_scheduled", sub.Plan, "free", event.ID, "{}")
+		log.Printf("[stripe] user %s scheduled cancellation at period end", sub.UserID)
+	} else {
+		s.db.LogSubscriptionEvent(sub.UserID, "cancel_reversed", sub.Plan, sub.Plan, event.ID, "{}")
+		log.Printf("[stripe] user %s reversed cancellation", sub.UserID)
+	}
 }
 
 func (s *Server) handleSubscriptionDeleted(event stripe.Event) {
