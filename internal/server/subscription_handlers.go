@@ -64,7 +64,7 @@ func (s *Server) handleGetUsage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateCheckout(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
-	priceID := stripePriceID()
+	priceID := stripePriceID("developer")
 	if priceID == "" {
 		writeJSONError(w, http.StatusServiceUnavailable, ErrInternal, "Stripe not configured", "")
 		return

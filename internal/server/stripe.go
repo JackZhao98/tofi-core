@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"tofi-core/internal/storage"
 
@@ -24,8 +25,9 @@ func stripeWebhookSecret() string {
 	return os.Getenv("STRIPE_WEBHOOK_SECRET")
 }
 
-func stripePriceID() string {
-	return os.Getenv("STRIPE_PRICE_ID")
+func stripePriceID(plan string) string {
+	key := "STRIPE_PRICE_" + strings.ToUpper(plan)
+	return os.Getenv(key)
 }
 
 // getOrCreateStripeCustomer finds or creates a Stripe customer for the given user.
