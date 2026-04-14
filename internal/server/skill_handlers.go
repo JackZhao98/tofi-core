@@ -965,8 +965,10 @@ func (s *Server) handleSetAllowUserKeys(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleListModels GET /api/v1/models — 列出所有已知模型
-// 支持 ?enabled=true 仅返回用户已启用的模型
+// handleListModels GET /api/v1/models — 列出已知模型
+//   ?available=true  → provider 有 key 的所有模型（用于 Settings 管理 UI）
+//   ?enabled=true    → available ∩ 用户白名单（白名单空时 = available，用于 ModelPicker）
+//   无参数           → 整个 Registry（含没 key 的，供 admin / 调试）
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	type modelEntry struct {
 		Name            string  `json:"name"`
@@ -976,10 +978,16 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		OutputCostPer1M float64 `json:"output_cost_per_1m"`
 	}
 
-	// 构建 enabled 过滤：只返回用户有 key 的 provider 的模型
+	query := r.URL.Query()
+	availableOnly := query.Get("available") == "true"
+	enabledOnly := query.Get("enabled") == "true"
+	filterByKey := availableOnly || enabledOnly
+
+	// 构建 "provider 有 key" 集合（enabled / available 都需要）
 	var enabledProviders map[string]bool
-	if r.URL.Query().Get("enabled") == "true" {
-		userID := r.Context().Value(UserContextKey).(string)
+	var userID string
+	if filterByKey {
+		userID = r.Context().Value(UserContextKey).(string)
 		enabledProviders = make(map[string]bool)
 		for _, pName := range []string{"openai", "anthropic", "gemini", "deepseek", "groq", "openrouter"} {
 			if key := s.findAPIKey(pName, userID); key != "" {
@@ -988,10 +996,27 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 构建用户白名单（仅 enabled=true 需要）。空集合 = 默认全开 = 不过滤。
+	var whitelist map[string]bool
+	if enabledOnly {
+		if raw, _ := s.db.GetSetting("enabled_models", userID); raw != "" {
+			var names []string
+			if err := json.Unmarshal([]byte(raw), &names); err == nil && len(names) > 0 {
+				whitelist = make(map[string]bool, len(names))
+				for _, n := range names {
+					whitelist[n] = true
+				}
+			}
+		}
+	}
+
 	all := provider.ListAllModels()
 	models := make([]modelEntry, 0, len(all))
 	for name, info := range all {
 		if enabledProviders != nil && !enabledProviders[info.Provider] {
+			continue
+		}
+		if whitelist != nil && !whitelist[name] {
 			continue
 		}
 		models = append(models, modelEntry{
@@ -1008,6 +1033,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		orModels, err := provider.FetchOpenRouterModels()
 		if err == nil {
 			for _, entry := range provider.OpenRouterModelsAsEntries(orModels) {
+				if whitelist != nil && !whitelist[entry.Name] {
+					continue
+				}
 				models = append(models, modelEntry{
 					Name:            entry.Name,
 					Provider:        entry.Provider,
