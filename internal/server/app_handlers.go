@@ -388,7 +388,12 @@ func (s *Server) handleDeactivateApp(w http.ResponseWriter, r *http.Request) {
 
 // handleRunAppNow POST /api/v1/apps/{id}/run
 // All runs go through the Dispatcher — manual trigger creates an app_run and dispatches immediately.
-// Accepts optional JSON body: {"prompt": "override prompt for this run"}
+// Accepts optional JSON body:
+//
+//	{
+//	  "prompt": "override prompt for this run (skips template substitution)",
+//	  "params": { "ticker": "MSFT" }  // merged over saved parameters
+//	}
 func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -419,18 +424,32 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional prompt override from request body
+	// Parse optional prompt override and runtime params from request body
 	var promptOverride string
+	var runtimeParams map[string]interface{}
 	if r.Body != nil && r.ContentLength > 0 {
 		var req struct {
-			Prompt string `json:"prompt"`
+			Prompt string                 `json:"prompt"`
+			Params map[string]interface{} `json:"params"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
 			promptOverride = req.Prompt
+			runtimeParams = req.Params
 		}
 	}
 
-	run, err := s.appScheduler.DispatchManualRun(app, userID, promptOverride)
+	// Validate required params when we're going through the template
+	// (prompt override skips substitution, so skip validation too)
+	if promptOverride == "" {
+		if missing := apps.MissingRequiredParams(app.Parameters, app.ParameterDefs, runtimeParams); len(missing) > 0 {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest,
+				fmt.Sprintf("missing required parameters: %s", strings.Join(missing, ", ")),
+				"Provide values via the 'params' object or save defaults on the app.")
+			return
+		}
+	}
+
+	run, err := s.appScheduler.DispatchManualRun(app, userID, promptOverride, runtimeParams)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("failed to run app: %v", err), "")
 		return
@@ -1290,8 +1309,14 @@ func requestToAgentDef(
 // ── App Webhook Trigger ──
 
 // handleTriggerApp POST /api/v1/apps/{id}/trigger
-// Public-facing webhook: triggers an immediate run with optional payload.
-// Accepts optional JSON body: {"prompt": "override", "payload": {...}}
+// Public-facing webhook: triggers an immediate run.
+// Accepts optional JSON body:
+//
+//	{
+//	  "prompt":  "override prompt (skips template substitution)",
+//	  "params":  { "ticker": "MSFT" },      // merged into the app's parameter values
+//	  "payload": { ...arbitrary... }        // appended to the resolved prompt as context
+//	}
 func (s *Server) handleTriggerApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -1314,25 +1339,42 @@ func (s *Server) handleTriggerApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional trigger payload
+	// Parse optional trigger body
 	var promptOverride string
+	var runtimeParams map[string]interface{}
+	var payload map[string]interface{}
 	if r.Body != nil && r.ContentLength > 0 {
 		var req struct {
 			Prompt  string                 `json:"prompt,omitempty"`
+			Params  map[string]interface{} `json:"params,omitempty"`
 			Payload map[string]interface{} `json:"payload,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
-			if req.Prompt != "" {
-				promptOverride = req.Prompt
-			} else if len(req.Payload) > 0 {
-				// Serialize payload as context for the AI
-				payloadJSON, _ := json.MarshalIndent(req.Payload, "", "  ")
-				promptOverride = app.Prompt + "\n\n## Webhook Payload\n```json\n" + string(payloadJSON) + "\n```"
-			}
+			promptOverride = req.Prompt
+			runtimeParams = req.Params
+			payload = req.Payload
 		}
 	}
 
-	run, err := s.appScheduler.DispatchRun(app, userID, promptOverride, "webhook")
+	// When caller provided a payload (but no explicit prompt), append the
+	// payload as context on top of the template-resolved prompt.
+	if promptOverride == "" && len(payload) > 0 {
+		resolved := apps.ResolveWithOverrides(app.Prompt, app.Parameters, app.ParameterDefs, runtimeParams)
+		payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+		promptOverride = resolved + "\n\n## Webhook Payload\n```json\n" + string(payloadJSON) + "\n```"
+	}
+
+	// Validate required params when substitution is actually going to run
+	if promptOverride == "" {
+		if missing := apps.MissingRequiredParams(app.Parameters, app.ParameterDefs, runtimeParams); len(missing) > 0 {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest,
+				fmt.Sprintf("missing required parameters: %s", strings.Join(missing, ", ")),
+				"Provide values via the 'params' object or save defaults on the app.")
+			return
+		}
+	}
+
+	run, err := s.appScheduler.DispatchRun(app, userID, promptOverride, "webhook", runtimeParams)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("failed to trigger app: %v", err), "")
 		return

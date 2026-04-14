@@ -115,13 +115,45 @@ Stops the scheduler and cancels all pending runs.
 
 ### Run Management
 
+> All run dispatch is **asynchronous**: the server immediately returns a `run_id`,
+> the actual LLM execution happens in the background. Poll
+> `GET /apps/{id}/runs/{run_id}` to read status (`running` → `done` / `failed`)
+> and the final `result`.
+
+#### Template Substitution
+
+The app's `prompt` field is a template. Two forms are supported:
+
+- `{{var_name}}` — substitutes the parameter's value
+- `{{#bool_var}}...{{/bool_var}}` — keeps the block when the parameter is truthy
+  (`true` / `yes` / `1`); otherwise removes it
+
+Value precedence (highest first):
+
+1. `params` from this request body (per-run override)
+2. `parameters` saved on the app (default values)
+3. `default` from the matching `parameter_defs` entry
+
+If a `parameter_defs` entry is `required: true` and no value is found through
+any of the three layers, the request fails with **HTTP 400** and a hint listing
+the missing names.
+
+When the request body includes a non-empty `prompt`, template substitution is
+**skipped** entirely — the override string is sent to the LLM as-is.
+
 #### Trigger Run (Manual)
 ```
 POST /apps/{id}/run
 Content-Type: application/json
 
-{"prompt": "Optional override for this run only"}
+{
+  "prompt": "Optional full prompt override (skips template)",
+  "params": { "ticker": "MSFT" }
+}
 ```
+
+Both fields are optional. `params` is merged on top of the app's saved
+parameter values for this single run.
 
 Response: `201 Created`
 ```json
@@ -139,15 +171,16 @@ POST /apps/{id}/trigger
 Content-Type: application/json
 
 {
-  "prompt": "Override prompt (optional)",
-  "payload": {
-    "city": "Tokyo",
-    "units": "celsius"
-  }
+  "prompt":  "Override prompt (optional, skips template)",
+  "params":  { "ticker": "MSFT" },
+  "payload": { "user": "alice", "free_text": "..." }
 }
 ```
 
-If `payload` is provided without `prompt`, the payload JSON is appended to the app's default prompt as context.
+- `params` is merged into the template substitution (same as `/run`).
+- `payload` is appended verbatim to the resolved prompt under a
+  `## Webhook Payload` header — useful for free-form context that doesn't fit a
+  parameter slot.
 
 Response: `202 Accepted`
 ```json

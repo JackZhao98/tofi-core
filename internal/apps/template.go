@@ -83,8 +83,23 @@ func isTruthy(val string) bool {
 	return val == "true" || val == "yes" || val == "1"
 }
 
-// ResolveFromJSON resolves a prompt template using JSON parameter values and definitions
+// ResolveFromJSON resolves a prompt template using JSON parameter values and definitions.
+// Saved params only — no runtime overrides. For per-run overrides use ResolveWithOverrides.
 func ResolveFromJSON(prompt, parametersJSON, parameterDefsJSON string) string {
+	return ResolveWithOverrides(prompt, parametersJSON, parameterDefsJSON, nil)
+}
+
+// ResolveWithOverrides resolves a prompt template, merging saved parameter values
+// with per-run overrides. Precedence (highest first):
+//
+//	runtime overrides > saved params > paramDef defaults
+//
+// The runtime map accepts any JSON-compatible scalar (string / number / bool);
+// values are stringified before substitution.
+func ResolveWithOverrides(
+	prompt, parametersJSON, parameterDefsJSON string,
+	runtime map[string]interface{},
+) string {
 	if prompt == "" {
 		return ""
 	}
@@ -99,9 +114,85 @@ func ResolveFromJSON(prompt, parametersJSON, parameterDefsJSON string) string {
 		json.Unmarshal([]byte(parameterDefsJSON), &paramDefs)
 	}
 
+	if len(runtime) > 0 {
+		if paramValues == nil {
+			paramValues = make(map[string]string, len(runtime))
+		}
+		for k, v := range runtime {
+			paramValues[k] = stringifyRuntimeValue(v)
+		}
+	}
+
 	if len(paramValues) == 0 && len(paramDefs) == 0 {
 		return prompt
 	}
 
 	return ResolvePrompt(prompt, paramValues, paramDefs)
+}
+
+func stringifyRuntimeValue(v interface{}) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		s := string(b)
+		// Unquote plain JSON strings so downstream substitution sees the raw value
+		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+			var unquoted string
+			if json.Unmarshal(b, &unquoted) == nil {
+				return unquoted
+			}
+		}
+		return s
+	}
+}
+
+// MissingRequiredParams returns the names of required parameters that have no
+// value from either saved params or runtime overrides. Useful for pre-run
+// validation before dispatching.
+func MissingRequiredParams(
+	parametersJSON, parameterDefsJSON string,
+	runtime map[string]interface{},
+) []string {
+	var paramDefs map[string]*AppParameter
+	if parameterDefsJSON != "" && parameterDefsJSON != "{}" {
+		json.Unmarshal([]byte(parameterDefsJSON), &paramDefs)
+	}
+	if len(paramDefs) == 0 {
+		return nil
+	}
+
+	var saved map[string]string
+	if parametersJSON != "" && parametersJSON != "{}" {
+		json.Unmarshal([]byte(parametersJSON), &saved)
+	}
+
+	var missing []string
+	for name, def := range paramDefs {
+		if def == nil || !def.Required {
+			continue
+		}
+		if def.Default != "" {
+			continue
+		}
+		if v, ok := saved[name]; ok && v != "" {
+			continue
+		}
+		if v, ok := runtime[name]; ok && stringifyRuntimeValue(v) != "" {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	return missing
 }

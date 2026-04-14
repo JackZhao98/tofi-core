@@ -122,7 +122,7 @@ func (as *AppScheduler) pollAndDispatch() {
 				log.Printf("[app-scheduler] Failed to mark run %s as running: %v", r.ID[:8], err)
 				continue
 			}
-			go as.dispatchRun(r, "")
+			go as.dispatchRun(r, "", nil)
 		}
 	}
 
@@ -132,12 +132,13 @@ func (as *AppScheduler) pollAndDispatch() {
 
 // DispatchManualRun creates an app_run record with trigger=manual and dispatches it immediately.
 // If promptOverride is non-empty, it replaces the app's configured prompt for this run only.
-func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string, promptOverride string) (*storage.AppRunRecord, error) {
-	return as.DispatchRun(app, userID, promptOverride, "manual")
+// runtimeParams merges into the saved parameter values for this run (highest precedence).
+func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string, promptOverride string, runtimeParams map[string]interface{}) (*storage.AppRunRecord, error) {
+	return as.DispatchRun(app, userID, promptOverride, "manual", runtimeParams)
 }
 
 // DispatchRun creates and executes a run with the given trigger type.
-func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverride, trigger string) (*storage.AppRunRecord, error) {
+func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverride, trigger string, runtimeParams map[string]interface{}) (*storage.AppRunRecord, error) {
 	run := &storage.AppRunRecord{
 		ID:          uuid.New().String(),
 		AppID:       app.ID,
@@ -152,11 +153,11 @@ func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverri
 	// Mark running (started_at)
 	as.server.db.UpdateAppRunStatus(run.ID, "running")
 
-	go as.dispatchRun(run, promptOverride)
+	go as.dispatchRun(run, promptOverride, runtimeParams)
 	return run, nil
 }
 
-func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride string) {
+func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride string, runtimeParams map[string]interface{}) {
 	log.Printf("[app-run:%s] Dispatching %s run for app %s", run.ID[:8], run.Trigger, run.AppID[:8])
 
 	// Check monthly run quota
@@ -180,7 +181,7 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 		return
 	}
 
-	prompt := apps.ResolveFromJSON(app.Prompt, app.Parameters, app.ParameterDefs)
+	prompt := apps.ResolveWithOverrides(app.Prompt, app.Parameters, app.ParameterDefs, runtimeParams)
 	if promptOverride != "" {
 		prompt = promptOverride
 	}

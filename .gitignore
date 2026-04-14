@@ -6,6 +6,7 @@
 
 docs/
 !internal/server/docs/
+!docs/APP_API.md
 
 # Workflows (user-defined, not tracked)
 workflows/

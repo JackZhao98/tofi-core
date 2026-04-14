@@ -387,7 +387,7 @@ func (s *Server) buildRunAppTool(userID string) agent.ExtraBuiltinTool {
 				return "", fmt.Errorf("scheduler not available")
 			}
 
-			run, err := s.appScheduler.DispatchManualRun(app, userID, "")
+			run, err := s.appScheduler.DispatchManualRun(app, userID, "", nil)
 			if err != nil {
 				return "", fmt.Errorf("failed to dispatch run: %w", err)
 			}
