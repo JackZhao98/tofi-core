@@ -129,8 +129,16 @@ func (s *Server) handleGetChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := struct {
+		*chat.Session
+		ContextUsagePercent int `json:"context_usage_percent"`
+	}{
+		Session:             session,
+		ContextUsagePercent: chat.ContextUsagePercent(session.Usage.InputTokens, session.Model),
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(session)
+	json.NewEncoder(w).Encode(response)
 }
 
 // --- DELETE /api/v1/chat/sessions/{id} ---
