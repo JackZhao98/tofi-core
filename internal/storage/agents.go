@@ -13,7 +13,7 @@ type AgentRecord struct {
 	Prompt           string `json:"prompt"`            // one-line task prompt
 	SystemPrompt     string `json:"system_prompt"`     // custom system prompt (empty = default)
 	Model            string `json:"model"`             // empty = auto-detect
-	Skills           string `json:"skills"`            // JSON array of skill IDs
+	Skills           RawJSONString `json:"skills"`     // JSON array of skill IDs
 	ScheduleRules    string `json:"schedule_rules"`    // JSON ScheduleRule
 	Capabilities     string `json:"capabilities"`      // JSON: capability config (mcp_servers, web_search, notify, etc.)
 	BufferSize       int    `json:"buffer_size"`       // max pending runs

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -57,7 +58,7 @@ type appRecord struct {
 	Description   string `json:"description"`
 	Prompt        string `json:"prompt"`
 	Model         string `json:"model"`
-	Skills        string `json:"skills"`
+	Skills        json.RawMessage `json:"skills"`
 	ScheduleRules string `json:"schedule_rules"`
 	IsActive      bool   `json:"is_active"`
 }

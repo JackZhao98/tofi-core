@@ -75,6 +75,11 @@ func GetModelInfo(model string) (ModelInfo, bool) {
 func DetectProvider(model string) string {
 	m := strings.ToLower(model)
 
+	// OpenRouter format: "author/model-name" (e.g., "anthropic/claude-3.5-sonnet")
+	if strings.Contains(m, "/") {
+		return "openrouter"
+	}
+
 	// Check known prefixes
 	switch {
 	case strings.HasPrefix(m, "claude"):
@@ -97,6 +102,14 @@ func DetectProvider(model string) string {
 func GetContextWindow(model string) int {
 	if info, ok := GetModelInfo(model); ok {
 		return info.ContextWindow
+	}
+
+	// For OpenRouter "author/model" format, try matching the model part after "/"
+	if idx := strings.Index(model, "/"); idx >= 0 {
+		suffix := model[idx+1:]
+		if info, ok := GetModelInfo(suffix); ok {
+			return info.ContextWindow
+		}
 	}
 
 	// Heuristic fallbacks

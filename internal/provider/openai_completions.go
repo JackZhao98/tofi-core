@@ -14,8 +14,9 @@ import (
 // openaiChatCompletions implements Provider using the OpenAI Chat Completions API.
 // Used for OpenAI-compatible providers (Ollama, Groq, OpenRouter, DeepSeek, etc.).
 type openaiChatCompletions struct {
-	apiKey  string
-	baseURL string
+	apiKey       string
+	baseURL      string
+	extraHeaders map[string]string
 }
 
 func newOpenAIChatCompletions(apiKey string, cfg *providerConfig) (Provider, error) {
@@ -24,7 +25,7 @@ func newOpenAIChatCompletions(apiKey string, cfg *providerConfig) (Provider, err
 		baseURL = cfg.BaseURL
 	}
 	// API key may be empty for local providers like Ollama
-	return &openaiChatCompletions{apiKey: apiKey, baseURL: baseURL}, nil
+	return &openaiChatCompletions{apiKey: apiKey, baseURL: baseURL, extraHeaders: cfg.ExtraHeaders}, nil
 }
 
 // Chat sends a non-streaming Chat Completions request.
@@ -53,6 +54,9 @@ func (o *openaiChatCompletions) ChatStream(ctx context.Context, req *ChatRequest
 	httpReq.Header.Set("Content-Type", "application/json")
 	if o.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	}
+	for k, v := range o.extraHeaders {
+		httpReq.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Minute}
@@ -179,6 +183,9 @@ func (o *openaiChatCompletions) doRequest(ctx context.Context, payload map[strin
 	httpReq.Header.Set("Content-Type", "application/json")
 	if o.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	}
+	for k, v := range o.extraHeaders {
+		httpReq.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: 5 * time.Minute}

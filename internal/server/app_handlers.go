@@ -216,7 +216,7 @@ func (s *Server) handleUpdateApp(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Skills != nil {
 		skillsJSON, _ := json.Marshal(req.Skills)
-		existing.Skills = string(skillsJSON)
+		existing.Skills = storage.RawJSONString(skillsJSON)
 	}
 	if req.ScheduleRules != nil {
 		existing.ScheduleRules = string(*req.ScheduleRules)

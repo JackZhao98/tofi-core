@@ -8,6 +8,7 @@ import (
 
 	"tofi-core/internal/agent"
 	"tofi-core/internal/provider"
+	"tofi-core/internal/storage"
 	"tofi-core/internal/workspace"
 )
 
@@ -251,7 +252,7 @@ func (s *Server) buildUpdateAppTool(userID string) agent.ExtraBuiltinTool {
 					}
 				}
 				skillsJSON, _ := json.Marshal(names)
-				existing.Skills = string(skillsJSON)
+				existing.Skills = storage.RawJSONString(skillsJSON)
 			}
 			if schedStr, ok := args["schedule"].(string); ok && schedStr != "" {
 				existing.ScheduleRules = schedStr

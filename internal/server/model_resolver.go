@@ -39,6 +39,7 @@ func (s *Server) resolveModelAndKey(userID, requestedModel string) (model, apiKe
 
 	// 3. 自动检测：按优先级尝试各 provider
 	// Default models should be the best generally-available model per provider.
+	// OpenRouter last — it's a meta-provider, prefer direct connections.
 	providers := []struct {
 		name         string
 		defaultModel string
@@ -48,6 +49,7 @@ func (s *Server) resolveModelAndKey(userID, requestedModel string) (model, apiKe
 		{"openai", "gpt-5.4", "TOFI_OPENAI_API_KEY"},
 		{"gemini", "gemini-2.5-flash", "TOFI_GEMINI_API_KEY"},
 		{"deepseek", "deepseek-chat", "TOFI_DEEPSEEK_API_KEY"},
+		{"openrouter", "anthropic/claude-sonnet-4", "TOFI_OPENROUTER_API_KEY"},
 	}
 
 	for _, p := range providers {
@@ -82,11 +84,12 @@ func (s *Server) findAPIKey(provider, userID string) string {
 
 	// 2. 环境变量
 	envMap := map[string]string{
-		"openai":    "TOFI_OPENAI_API_KEY",
-		"anthropic": "TOFI_ANTHROPIC_API_KEY",
-		"claude":    "TOFI_ANTHROPIC_API_KEY",
-		"gemini":    "TOFI_GEMINI_API_KEY",
-		"deepseek":  "TOFI_DEEPSEEK_API_KEY",
+		"openai":     "TOFI_OPENAI_API_KEY",
+		"anthropic":  "TOFI_ANTHROPIC_API_KEY",
+		"claude":     "TOFI_ANTHROPIC_API_KEY",
+		"gemini":     "TOFI_GEMINI_API_KEY",
+		"deepseek":   "TOFI_DEEPSEEK_API_KEY",
+		"openrouter": "TOFI_OPENROUTER_API_KEY",
 	}
 	if envName, ok := envMap[provider]; ok {
 		if v := os.Getenv(envName); v != "" {

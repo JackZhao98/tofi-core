@@ -1003,6 +1003,24 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Append OpenRouter models (dynamic, fetched from API)
+	if enabledProviders == nil || enabledProviders["openrouter"] {
+		orModels, err := provider.FetchOpenRouterModels()
+		if err == nil {
+			for _, entry := range provider.OpenRouterModelsAsEntries(orModels) {
+				models = append(models, modelEntry{
+					Name:            entry.Name,
+					Provider:        entry.Provider,
+					ContextWindow:   entry.ContextWindow,
+					InputCostPer1M:  entry.InputCostPer1M,
+					OutputCostPer1M: entry.OutputCostPer1M,
+				})
+			}
+		} else {
+			log.Printf("⚠️ Failed to fetch OpenRouter models: %v", err)
+		}
+	}
+
 	// Sort by provider order, then by cost descending (flagship models first)
 	providerOrder := map[string]int{
 		"openai": 0, "anthropic": 1, "gemini": 2, "deepseek": 3, "groq": 4, "openrouter": 5,

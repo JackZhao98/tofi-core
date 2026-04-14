@@ -2,12 +2,44 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// RawJSONString stores a JSON-encoded string in SQLite but marshals as raw JSON in API responses.
+// This prevents double-encoding: `["a","b"]` stays an array, not `"[\"a\",\"b\"]"`.
+type RawJSONString string
+
+func (r RawJSONString) MarshalJSON() ([]byte, error) {
+	if r == "" || r == "null" {
+		return []byte("null"), nil
+	}
+	// Validate it's real JSON; if not, marshal as a plain string
+	if json.Valid([]byte(r)) {
+		return []byte(r), nil
+	}
+	return json.Marshal(string(r))
+}
+
+func (r *RawJSONString) Scan(value interface{}) error {
+	if value == nil {
+		*r = "[]"
+		return nil
+	}
+	switch v := value.(type) {
+	case string:
+		*r = RawJSONString(v)
+	case []byte:
+		*r = RawJSONString(v)
+	default:
+		return fmt.Errorf("RawJSONString.Scan: unsupported type %T", value)
+	}
+	return nil
+}
 
 // AppRecord represents an AI App (formerly Agent)
 type AppRecord struct {
@@ -17,7 +49,7 @@ type AppRecord struct {
 	Prompt           string `json:"prompt"`            // task prompt template (may contain {{params}})
 	SystemPrompt     string `json:"system_prompt"`     // custom system prompt
 	Model            string `json:"model"`             // empty = auto-detect
-	Skills           string `json:"skills"`            // JSON array of skill names
+	Skills           RawJSONString `json:"skills"`     // JSON array of skill names
 	ScheduleRules    string `json:"schedule_rules"`    // JSON ScheduleRule
 	Capabilities     string `json:"capabilities"`      // JSON: capability config
 	BufferSize       int    `json:"buffer_size"`       // max pending runs

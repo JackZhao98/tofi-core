@@ -94,8 +94,9 @@ func (u *Usage) Add(other Usage) {
 type Option func(*providerConfig)
 
 type providerConfig struct {
-	BaseURL     string       // Custom endpoint URL (for OpenAI-compatible providers)
-	RetryConfig *RetryConfig // Retry configuration (nil = no retry)
+	BaseURL      string            // Custom endpoint URL (for OpenAI-compatible providers)
+	RetryConfig  *RetryConfig      // Retry configuration (nil = no retry)
+	ExtraHeaders map[string]string // Additional HTTP headers (e.g., OpenRouter attribution)
 }
 
 // WithBaseURL sets a custom base URL for the provider.
@@ -112,6 +113,14 @@ func WithBaseURL(url string) Option {
 func WithRetry(config RetryConfig) Option {
 	return func(c *providerConfig) {
 		c.RetryConfig = &config
+	}
+}
+
+// WithExtraHeaders sets additional HTTP headers on every request.
+// Used for provider-specific headers like OpenRouter attribution.
+func WithExtraHeaders(headers map[string]string) Option {
+	return func(c *providerConfig) {
+		c.ExtraHeaders = headers
 	}
 }
 
@@ -164,6 +173,15 @@ func New(providerName, apiKey string, opts ...Option) (Provider, error) {
 	case "openrouter":
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = "https://openrouter.ai/api/v1"
+		}
+		if cfg.ExtraHeaders == nil {
+			cfg.ExtraHeaders = map[string]string{}
+		}
+		if cfg.ExtraHeaders["HTTP-Referer"] == "" {
+			cfg.ExtraHeaders["HTTP-Referer"] = "https://tofi.sentiosurge.com"
+		}
+		if cfg.ExtraHeaders["X-Title"] == "" {
+			cfg.ExtraHeaders["X-Title"] = "Tofi"
 		}
 		p, err = newOpenAIChatCompletions(apiKey, cfg)
 	case "together":

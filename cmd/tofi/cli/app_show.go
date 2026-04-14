@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -29,7 +30,7 @@ type appDetail struct {
 	Prompt       string `json:"prompt"`
 	SystemPrompt string `json:"system_prompt"`
 	Source       string `json:"source"`
-	Skills       string `json:"skills"`
+	Skills       json.RawMessage `json:"skills"`
 	Schedule     string `json:"schedule"`
 	UserID       string `json:"user_id"`
 }
@@ -102,11 +103,14 @@ func renderAppDetail(app *appDetail) {
 		}{{"Desc", app.Description}}, rows...)
 	}
 
-	if app.Skills != "" && app.Skills != "[]" && app.Skills != "null" {
-		rows = append(rows, struct {
-			label string
-			value string
-		}{"Skills", app.Skills})
+	if len(app.Skills) > 0 && string(app.Skills) != "[]" && string(app.Skills) != "null" {
+		var skillNames []string
+		if json.Unmarshal(app.Skills, &skillNames) == nil {
+			rows = append(rows, struct {
+				label string
+				value string
+			}{"Skills", strings.Join(skillNames, ", ")})
+		}
 	}
 
 	if app.Schedule != "" && app.Schedule != "null" {

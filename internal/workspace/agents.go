@@ -170,10 +170,10 @@ func (w *Workspace) DeleteAgent(userID, agentName string) error {
 func AgentDefToRecord(userID string, def *apps.AgentDef) *storage.AppRecord {
 	cfg := def.Config
 
-	skillsJSON := "[]"
+	skillsJSON := storage.RawJSONString("[]")
 	if len(cfg.Skills) > 0 {
 		if b, err := json.Marshal(cfg.Skills); err == nil {
-			skillsJSON = string(b)
+			skillsJSON = storage.RawJSONString(b)
 		}
 	}
 
