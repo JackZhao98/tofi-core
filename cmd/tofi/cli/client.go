@@ -218,6 +218,23 @@ func (c *apiClient) postRaw(path string, body io.Reader) ([]byte, int, error) {
 	return data, resp.StatusCode, nil
 }
 
+// MeResponse mirrors the backend /auth/me response shape.
+type MeResponse struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Plan     string `json:"plan"`
+}
+
+// Me fetches the authenticated user's profile from the daemon.
+func (c *apiClient) Me() (*MeResponse, error) {
+	var resp MeResponse
+	if err := c.get("/api/v1/auth/me", &resp); err != nil {
+		return nil, fmt.Errorf("fetch profile: %w", err)
+	}
+	return &resp, nil
+}
+
 // parseAPIError extracts a user-friendly error message from the API response body.
 // If the body is a JSON error ({"error":{"code":"...","message":"...","hint":"..."}}),
 // it returns the message (and hint if present). Otherwise falls back to raw text.
