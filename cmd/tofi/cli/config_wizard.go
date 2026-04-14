@@ -63,7 +63,7 @@ var cfgMenuItems = []cfgMenuItem{
 	{id: "autostart", display: "Auto Start", description: "Start engine on boot"},
 }
 
-var cfgProviderOrder = []string{"openai", "anthropic", "gemini", "deepseek"}
+var cfgProviderOrder = []string{"openai", "anthropic", "gemini", "deepseek", "groq", "openrouter"}
 
 // --- Model ---
 
@@ -907,9 +907,9 @@ func (m cfgModel) loadModels() tea.Cmd {
 			keyed[k["provider"]] = true
 		}
 
-		// Sort models by provider order: openai → anthropic → gemini → deepseek
+		// Sort models by provider order
 		providerOrder := map[string]int{
-			"openai": 0, "anthropic": 1, "gemini": 2, "deepseek": 3,
+			"openai": 0, "anthropic": 1, "gemini": 2, "deepseek": 3, "groq": 4, "openrouter": 5,
 		}
 		sort.SliceStable(models, func(i, j int) bool {
 			oi, ok1 := providerOrder[models[i].Provider]
