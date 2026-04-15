@@ -138,7 +138,30 @@ func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string,
 }
 
 // DispatchRun creates and executes a run with the given trigger type.
+//
+// Plan quota enforcement happens here so every dispatch entry point —
+// webhook trigger, agent tofi_run_app tool, TUI manual trigger, and the
+// scheduler's cron loop — goes through the same gate. Previously only the
+// webhook handler checked a WebhookAPI flag; an agent with tofi_run_app
+// could loop-trigger runs until monthly settings quota kicked in, bypassing
+// the user's plan DailyRuns / ConcurrentRuns limits.
 func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverride, trigger string, runtimeParams map[string]interface{}) (*storage.AppRunRecord, error) {
+	limits := as.server.getUserPlanLimits(userID)
+
+	if limits.DailyRuns > 0 {
+		used, err := as.server.db.CountDailyRuns(userID)
+		if err == nil && used >= limits.DailyRuns {
+			return nil, fmt.Errorf("daily run limit reached (%d/%d) — upgrade plan or wait until tomorrow", used, limits.DailyRuns)
+		}
+	}
+
+	if limits.ConcurrentRuns > 0 {
+		running, err := as.server.db.CountRunningRuns(userID)
+		if err == nil && running >= limits.ConcurrentRuns {
+			return nil, fmt.Errorf("concurrent run limit reached (%d/%d) — wait for a run to finish", running, limits.ConcurrentRuns)
+		}
+	}
+
 	run := &storage.AppRunRecord{
 		ID:          uuid.New().String(),
 		AppID:       app.ID,
