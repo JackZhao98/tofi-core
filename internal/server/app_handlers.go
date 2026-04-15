@@ -1328,6 +1328,27 @@ func (s *Server) handleTriggerApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
 
+	// Replay-window guard: if the caller supplies an X-Tofi-Timestamp header
+	// (Unix seconds), reject anything more than 5 minutes old or in the
+	// future. The header is optional during this transition so existing
+	// clients keep working; making it required is planned for v1.0. The
+	// defence-in-depth layers that apply regardless are rate limit (auth
+	// middleware, 60 rpm), plan DailyRuns/ConcurrentRuns, and spend cap.
+	if ts := r.Header.Get("X-Tofi-Timestamp"); ts != "" {
+		n, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "X-Tofi-Timestamp must be a Unix timestamp (seconds)", "")
+			return
+		}
+		skew := time.Since(time.Unix(n, 0))
+		if skew > 5*time.Minute || skew < -5*time.Minute {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest,
+				"X-Tofi-Timestamp outside 5-minute replay window",
+				"Check that the client's clock is correct and generate a fresh timestamp per request.")
+			return
+		}
+	}
+
 	// Plan limit: webhook API
 	limits := s.getUserPlanLimits(userID)
 	if !limits.WebhookAPI {
