@@ -840,7 +840,20 @@ func appendSystemSkills(skillNames []string, db *storage.DB) []string {
 // --- POST /api/v1/chat/sessions/{id}/continue ---
 
 func (s *Server) handleChatSessionContinue(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
 	sessionID := r.PathValue("id")
+
+	// Ownership check: a session ID alone must not let another user resume
+	// or inject an answer into someone else's paused agent.
+	idx, err := s.chatStore.GetIndex(sessionID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrSessionNotFound, "session not found", "")
+		return
+	}
+	if idx.UserID != userID {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "forbidden", "")
+		return
+	}
 
 	// Parse optional answer from request body
 	var body struct {
@@ -860,7 +873,20 @@ func (s *Server) handleChatSessionContinue(w http.ResponseWriter, r *http.Reques
 // --- POST /api/v1/chat/sessions/{id}/abort ---
 
 func (s *Server) handleChatSessionAbort(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
 	sessionID := r.PathValue("id")
+
+	// Ownership check: without this anyone who guesses a session id can kill
+	// another user's in-flight agent.
+	idx, err := s.chatStore.GetIndex(sessionID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrSessionNotFound, "session not found", "")
+		return
+	}
+	if idx.UserID != userID {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "forbidden", "")
+		return
+	}
 
 	// Abort works at two layers:
 	// 1. signalHold wakes an agent blocked on hold (skill install, ask_user)
