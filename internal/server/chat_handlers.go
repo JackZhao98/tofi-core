@@ -479,10 +479,19 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	// Core tools: always available in every chat session
 	coreTools := make([]agent.ExtraBuiltinTool, len(extraTools))
 	copy(coreTools, extraTools)
-	// Skill search/install tools only in interactive chat — App runs must not pause for user input
+	// App webhook runs must not pause for user input; used below to gate
+	// tools that expect an interactive client.
 	isAppRun := strings.HasPrefix(scope, chat.ScopeAgentPrefix+"app-")
-	if !isAppRun {
-		coreTools = append(coreTools, s.buildChatWishTools(userID, sessionID, session, scope, emit)...)
+	// Marketplace search is only exposed in the user's free-form chat.
+	// Agents and Apps are pre-configured by their creator; letting the agent
+	// autonomously pull new skills from the marketplace causes two problems:
+	//   1) it ignores skills already wired into the agent and re-searches
+	//      the same capability (observed in v0.8.0 with web-search);
+	//   2) there is no real install path — the old tofi_suggest_install
+	//      hard-coded a "successfully installed" reply, so the agent then
+	//      tried to use a skill that was never on disk.
+	if scope == chat.ScopeUser {
+		coreTools = append(coreTools, s.buildChatWishTools()...)
 	}
 	coreTools = append(coreTools, s.buildMemoryTools(userID, "")...)
 	coreTools = append(coreTools, s.buildBuiltinTools(userID)...)
@@ -972,16 +981,19 @@ func sendSSEError(w http.ResponseWriter, flusher http.Flusher, errMsg string) {
 	sendSSEEvent(w, flusher, "error", map[string]string{"error": errMsg})
 }
 
-// buildChatWishTools builds skill search + suggest_install tools for chat sessions.
-// Uses sessionID as the hold channel key and updates session status/holdInfo.
-// emit is invoked to push an SSE "hold" event the moment the agent pauses, so
-// the frontend can render the Approve/Skip prompt without waiting for polling.
-func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Session, scope string, emit func(eventType string, data any)) []agent.ExtraBuiltinTool {
+// buildChatWishTools exposes the marketplace search tool to user-scope chat.
+// The agent cannot install skills itself — discovered skills are surfaced so
+// the user can install them through the dashboard. A previous in-agent
+// install path (tofi_suggest_install) was removed in v0.8.1: it had no real
+// clone/fs step and lied to the agent about success.
+func (s *Server) buildChatWishTools() []agent.ExtraBuiltinTool {
 	return []agent.ExtraBuiltinTool{
 		{
 			Schema: provider.Tool{
-				Name:        "tofi_search",
-				Description: "Search for skills on the skills.sh marketplace. Use this when you need a capability that isn't already installed.",
+				Name: "tofi_search",
+				Description: "Search the skills.sh marketplace for skills the user could install. " +
+					"Returns a listing only — you cannot install skills yourself. " +
+					"If the user already has a skill covering the capability (shown in your system prompt), prefer tofi_load_skill over searching.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -1007,101 +1019,12 @@ func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Sess
 					return "No skills found for query: " + query, nil
 				}
 				var sb strings.Builder
-				sb.WriteString(fmt.Sprintf("Found %d skills:\n\n", len(result.Skills)))
+				sb.WriteString(fmt.Sprintf("Found %d skills. You cannot install these directly — if one looks useful, tell the user the name + ID and suggest they install it from the dashboard.\n\n", len(result.Skills)))
 				for _, sk := range result.Skills {
 					sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", sk.Name, sk.Source, sk.Description))
-					sb.WriteString(fmt.Sprintf("  Install: use tofi_suggest_install with skill_id=\"%s\"\n", sk.ID))
+					sb.WriteString(fmt.Sprintf("  ID: %s\n", sk.ID))
 				}
 				return sb.String(), nil
-			},
-		},
-		{
-			Schema: provider.Tool{
-				Name: "tofi_suggest_install",
-				Description: "Suggest installing a skill. Execution will PAUSE until the user installs and clicks Continue, or skips. " +
-					"Use this after tofi_search finds a useful skill that isn't installed yet.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"skill_id": map[string]interface{}{
-							"type":        "string",
-							"description": "Full skill ID from search results (e.g., 'owner/repo@skill-name')",
-						},
-						"skill_name": map[string]interface{}{
-							"type":        "string",
-							"description": "Human-readable skill name",
-						},
-						"reason": map[string]interface{}{
-							"type":        "string",
-							"description": "Why this skill would be useful for the current task",
-						},
-					},
-					"required": []string{"skill_id", "skill_name"},
-				},
-			},
-			Handler: func(args map[string]interface{}) (string, error) {
-				skillID, _ := args["skill_id"].(string)
-				skillName, _ := args["skill_name"].(string)
-				reason, _ := args["reason"].(string)
-
-				if skillID == "" || skillName == "" {
-					return "Error: skill_id and skill_name are required", nil
-				}
-
-				// 1. Update session to "hold" with HoldInfo
-				session.Status = "hold"
-				session.HoldInfo = &chat.HoldInfo{
-					Type:    "skill_install",
-					SkillID: skillID,
-					Name:    skillName,
-					Reason:  reason,
-				}
-				if err := s.chatStore.Save(userID, scope, session); err != nil {
-					log.Printf("⚠️  [chat:%s] Failed to save hold state: %v", sessionID[:8], err)
-				}
-
-				// 2. Emit SSE hold event so the frontend can render Approve/Skip
-				// immediately — without this, the UI only notices via polling.
-				emit("hold", map[string]interface{}{
-					"type":       "skill_install",
-					"skill_id":   skillID,
-					"skill_name": skillName,
-					"reason":     reason,
-				})
-
-				log.Printf("⏸ [chat:%s] Agent paused — waiting for user action on skill: %s", sessionID[:8], skillName)
-
-				// 3. Block until user clicks Continue/Skip or timeout
-				holdCh := s.createHoldChannel(sessionID)
-				timeout := time.After(10 * time.Minute)
-
-				select {
-				case signal := <-holdCh:
-					// Clear hold state
-					session.Status = "running"
-					session.HoldInfo = nil
-					if err := s.chatStore.Save(userID, scope, session); err != nil {
-						log.Printf("⚠️  [chat:%s] Failed to clear hold state: %v", sessionID[:8], err)
-					}
-
-					if signal.Action == "abort" {
-						log.Printf("⏭ [chat:%s] User skipped skill install, resuming agent", sessionID[:8])
-						return fmt.Sprintf("User chose to skip installing '%s'. Continue without it.", skillName), nil
-					}
-					// "continue" — user installed and clicked Continue
-					log.Printf("▶ [chat:%s] User continued after skill install, resuming agent", sessionID[:8])
-					return fmt.Sprintf("Skill '%s' has been installed successfully and is now available. You can use it to complete the task.", skillName), nil
-
-				case <-timeout:
-					log.Printf("⏰ [chat:%s] Hold timed out after 10 minutes, auto-skipping", sessionID[:8])
-					s.removeHoldChannel(sessionID)
-					session.Status = "running"
-					session.HoldInfo = nil
-					if err := s.chatStore.Save(userID, scope, session); err != nil {
-						log.Printf("⚠️  [chat:%s] Failed to clear hold state: %v", sessionID[:8], err)
-					}
-					return fmt.Sprintf("Installation of '%s' timed out. Continuing without it.", skillName), nil
-				}
 			},
 		},
 	}
