@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -258,7 +259,81 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Set up SSE
+	// 3. Agent runs on an independent context so it survives HTTP client
+	// disconnects (e.g. browser refresh). Cancellation is driven exclusively
+	// by POST /abort (which also signals any active hold).
+	agentCtx, cancel := context.WithCancel(context.Background())
+
+	// 4. Register the session hub. This also enforces a one-agent-per-session
+	// invariant: a second POST /messages while an agent is still running
+	// (e.g. paused on hold) returns 409.
+	hub, err := s.createSessionHub(sessionID, cancel)
+	if err != nil {
+		cancel()
+		writeJSONError(w, http.StatusConflict, ErrConflict, "session already has an active agent; use /continue or /abort", "")
+		return
+	}
+
+	// 5. Kick off the agent in a goroutine; HTTP lifecycle no longer gates it.
+	go func() {
+		defer s.removeSessionHub(sessionID)
+		defer hub.close()
+		defer func() {
+			// The HTTP mux recovers sync handlers, but this goroutine runs
+			// outside that stack. Catch panics here so a bad tool or skill
+			// can't crash the whole server.
+			if r := recover(); r != nil {
+				log.Printf("🔥 [chat:%s] agent goroutine panic: %v", sessionID[:8], r)
+				// Restore session to a clean state so the UI doesn't leave
+				// the user stuck on a "running" or "hold" badge forever.
+				session.Status = ""
+				session.HoldInfo = nil
+				_ = s.chatStore.Save(userID, idx.Scope, session)
+				hub.publish("error", map[string]string{
+					"code":  ErrInternal,
+					"error": "agent crashed unexpectedly",
+				})
+			}
+		}()
+
+		onEvent := func(eventType string, data any) {
+			hub.publish(eventType, data)
+		}
+
+		result, runErr := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, &bridge.ExecuteOptions{Ctx: agentCtx})
+		if runErr != nil {
+			// apiKeyError already emitted a structured error event via onEvent.
+			if _, ok := runErr.(*apiKeyError); !ok {
+				errMsg, errCode, errHint := classifyAgentError(runErr)
+				hub.publish("error", map[string]string{
+					"code":  errCode,
+					"error": errMsg,
+					"hint":  errHint,
+				})
+			}
+			return
+		}
+
+		contextPct := chat.ContextUsagePercent(result.TotalUsage.InputTokens, result.Model)
+		hub.publish("done", map[string]any{
+			"result":                result.Content,
+			"model":                 result.Model,
+			"total_input_tokens":    result.TotalUsage.InputTokens,
+			"total_output_tokens":   result.TotalUsage.OutputTokens,
+			"total_cost":            result.TotalCost,
+			"llm_calls":             result.LLMCalls,
+			"context_usage_percent": contextPct,
+		})
+	}()
+
+	// 6. Subscribe and forward hub events to this HTTP response.
+	streamSessionEventsToSSE(w, r, hub, sessionID, 0)
+}
+
+// streamSessionEventsToSSE subscribes to a session hub and forwards every
+// event to the HTTP client until the hub closes (agent done) or the client
+// disconnects. fromSeq lets resumers replay from a known checkpoint.
+func streamSessionEventsToSSE(w http.ResponseWriter, r *http.Request, hub *sessionHub, sessionID string, fromSeq int) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -276,45 +351,10 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: connected\ndata: %s\n\n", connData)
 	flusher.Flush()
 
-	// 4. Execute via shared method with SSE-based callbacks.
-	// Use request context so that client disconnect (ESC) cancels the agent loop.
-	reqCtx := r.Context()
-	onEvent := func(eventType string, data any) {
-		// Skip sending if client already disconnected
-		if reqCtx.Err() != nil {
-			return
-		}
-		sendSSEEvent(w, flusher, eventType, data)
-	}
+	subID, ch := hub.subscribe(fromSeq)
+	defer hub.unsubscribe(subID)
 
-	result, err := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, &bridge.ExecuteOptions{Ctx: reqCtx})
-	if err != nil {
-		// apiKeyError already emitted a structured error event in executeChatSession
-		if _, ok := err.(*apiKeyError); !ok {
-			// Wrap upstream errors — never expose raw provider responses to the user
-			errMsg, errCode, errHint := classifyAgentError(err)
-			sendSSEEvent(w, flusher, "error", map[string]string{
-				"code":  errCode,
-				"error": errMsg,
-				"hint":  errHint,
-			})
-		}
-		return
-	}
-
-	// 5. Send done event
-	contextPct := chat.ContextUsagePercent(result.TotalUsage.InputTokens, result.Model)
-	done, _ := json.Marshal(map[string]any{
-		"result":                result.Content,
-		"model":                 result.Model,
-		"total_input_tokens":    result.TotalUsage.InputTokens,
-		"total_output_tokens":   result.TotalUsage.OutputTokens,
-		"total_cost":            result.TotalCost,
-		"llm_calls":             result.LLMCalls,
-		"context_usage_percent": contextPct,
-	})
-	fmt.Fprintf(w, "event: done\ndata: %s\n\n", done)
-	flusher.Flush()
+	forwardHubToSSE(w, flusher, ch, r.Context().Done())
 }
 
 // executeChatSession runs an agent loop for a chat session.
@@ -420,7 +460,14 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	}
 	defer s.executor.Cleanup(sandboxDir)
 
-	// 7. Mark session as running
+	// 7. Persist user message and mark session as running.
+	// User message is saved BEFORE the agent loop so that if the loop
+	// pauses (hold/ask_user) or the client disconnects, a subsequent
+	// GET /chat/sessions/{id} still returns this turn's prompt.
+	session.AddMessage(chat.Message{
+		Role:    "user",
+		Content: message,
+	})
 	session.Status = "running"
 	if err := s.chatStore.Save(userID, scope, session); err != nil {
 		log.Printf("⚠️  [chat:%s] failed to save running state: %v", sessionID[:8], err)
@@ -435,7 +482,7 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	// Skill search/install tools only in interactive chat — App runs must not pause for user input
 	isAppRun := strings.HasPrefix(scope, chat.ScopeAgentPrefix+"app-")
 	if !isAppRun {
-		coreTools = append(coreTools, s.buildChatWishTools(userID, sessionID, session, scope)...)
+		coreTools = append(coreTools, s.buildChatWishTools(userID, sessionID, session, scope, emit)...)
 	}
 	coreTools = append(coreTools, s.buildMemoryTools(userID, "")...)
 	coreTools = append(coreTools, s.buildBuiltinTools(userID)...)
@@ -625,13 +672,8 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		return nil, fmt.Errorf("agent error: %w", err)
 	}
 
-	// 10. Persist messages to session XML
-	session.AddMessage(chat.Message{
-		Role:    "user",
-		Content: message,
-	})
-
-	// Persist all intermediate messages (assistant + tool calls + tool responses)
+	// 10. Persist assistant/tool messages to session XML.
+	// User message was already saved at step 7 before the agent loop ran.
 	for _, msg := range agentResult.Messages {
 		chatMsg := chat.Message{
 			Role:    msg.Role,
@@ -820,13 +862,76 @@ func (s *Server) handleChatSessionContinue(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleChatSessionAbort(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 
-	if !s.signalHold(sessionID, "abort", "") {
-		writeJSONError(w, http.StatusConflict, ErrConflict, "no hold channel found for session", "")
+	// Abort works at two layers:
+	// 1. signalHold wakes an agent blocked on hold (skill install, ask_user)
+	//    and tells it to skip/decline gracefully.
+	// 2. cancelSession cancels the agent's context so mid-stream generation
+	//    also stops.
+	// At least one must succeed for the abort to report as applied.
+	signalled := s.signalHold(sessionID, "abort", "")
+	cancelled := s.cancelSession(sessionID)
+
+	if !signalled && !cancelled {
+		writeJSONError(w, http.StatusConflict, ErrConflict, "no active agent for session", "")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "aborted"})
+}
+
+// --- GET /api/v1/chat/sessions/{id}/stream ---
+//
+// Subscribe to an in-flight agent's SSE stream. Used after a browser refresh
+// to resume following the same agent — e.g. after approving a skill install
+// when the original POST /messages connection has already been torn down.
+//
+// If no agent is currently running for this session the endpoint emits a
+// single "idle" event and closes, letting the client fall back to session
+// detail polling.
+//
+// Honours the `Last-Event-ID` header so clients that reconnect mid-stream
+// replay only events they haven't seen yet.
+func (s *Server) handleChatSessionStream(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+	sessionID := r.PathValue("id")
+
+	idx, err := s.chatStore.GetIndex(sessionID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrSessionNotFound, "session not found", "")
+		return
+	}
+	if idx.UserID != userID {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "forbidden", "")
+		return
+	}
+
+	// Parse Last-Event-ID for replay offset (SSE reconnection convention).
+	fromSeq := 0
+	if v := r.Header.Get("Last-Event-ID"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			fromSeq = n
+		}
+	}
+
+	hub := s.getSessionHub(sessionID)
+	if hub == nil {
+		// Agent already finished — emit an idle marker and close.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "streaming not supported", "")
+			return
+		}
+		fmt.Fprintf(w, "event: idle\ndata: {}\n\n")
+		flusher.Flush()
+		return
+	}
+
+	streamSessionEventsToSSE(w, r, hub, sessionID, fromSeq)
 }
 
 // sendSSEEvent is a helper to send a named SSE event with JSON data.
@@ -843,7 +948,9 @@ func sendSSEError(w http.ResponseWriter, flusher http.Flusher, errMsg string) {
 
 // buildChatWishTools builds skill search + suggest_install tools for chat sessions.
 // Uses sessionID as the hold channel key and updates session status/holdInfo.
-func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Session, scope string) []agent.ExtraBuiltinTool {
+// emit is invoked to push an SSE "hold" event the moment the agent pauses, so
+// the frontend can render the Approve/Skip prompt without waiting for polling.
+func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Session, scope string, emit func(eventType string, data any)) []agent.ExtraBuiltinTool {
 	return []agent.ExtraBuiltinTool{
 		{
 			Schema: provider.Tool{
@@ -927,9 +1034,18 @@ func (s *Server) buildChatWishTools(userID, sessionID string, session *chat.Sess
 					log.Printf("⚠️  [chat:%s] Failed to save hold state: %v", sessionID[:8], err)
 				}
 
+				// 2. Emit SSE hold event so the frontend can render Approve/Skip
+				// immediately — without this, the UI only notices via polling.
+				emit("hold", map[string]interface{}{
+					"type":       "skill_install",
+					"skill_id":   skillID,
+					"skill_name": skillName,
+					"reason":     reason,
+				})
+
 				log.Printf("⏸ [chat:%s] Agent paused — waiting for user action on skill: %s", sessionID[:8], skillName)
 
-				// 2. Block until user clicks Continue/Skip or timeout
+				// 3. Block until user clicks Continue/Skip or timeout
 				holdCh := s.createHoldChannel(sessionID)
 				timeout := time.After(10 * time.Minute)
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -52,6 +53,13 @@ type Server struct {
 	// Hold channel management for agent tofi_suggest_install blocking
 	holdMu       sync.Mutex
 	holdChannels map[string]chan HoldSignal // cardID → signal channel
+
+	// SSE event hubs: one per in-flight chat agent run. Lets multiple HTTP
+	// clients (e.g. the original POST /messages + a GET /stream after refresh)
+	// subscribe to the same event stream with replay.
+	sessionHubsMu  sync.Mutex
+	sessionHubs    map[string]*sessionHub
+	sessionCancels map[string]context.CancelFunc
 
 	// Preview session cache for two-phase skill install
 	previewMu       sync.Mutex
@@ -118,10 +126,58 @@ func NewServer(config Config) (*Server, error) {
 		db:       db,
 		executor: exec,
 		holdChannels:    make(map[string]chan HoldSignal),
+		sessionHubs:     make(map[string]*sessionHub),
+		sessionCancels:  make(map[string]context.CancelFunc),
 		previewSessions: make(map[string]*PreviewSession),
 		chatStore:       chat.NewStore(config.HomeDir, db),
 		rateLimiter:     NewRateLimiter(rpm),
 	}, nil
+}
+
+// createSessionHub registers a new hub + cancel func for a session. Returns
+// an error if a hub already exists — we disallow concurrent agent runs on
+// the same session.
+func (s *Server) createSessionHub(sessionID string, cancel context.CancelFunc) (*sessionHub, error) {
+	s.sessionHubsMu.Lock()
+	defer s.sessionHubsMu.Unlock()
+	if _, exists := s.sessionHubs[sessionID]; exists {
+		return nil, fmt.Errorf("session %s already has an active agent", sessionID)
+	}
+	hub := newSessionHub()
+	s.sessionHubs[sessionID] = hub
+	s.sessionCancels[sessionID] = cancel
+	return hub, nil
+}
+
+// getSessionHub returns the in-flight hub for a session, or nil if no agent
+// is currently running.
+func (s *Server) getSessionHub(sessionID string) *sessionHub {
+	s.sessionHubsMu.Lock()
+	defer s.sessionHubsMu.Unlock()
+	return s.sessionHubs[sessionID]
+}
+
+// removeSessionHub clears both hub and cancel registrations for a session.
+// Call after the agent goroutine completes.
+func (s *Server) removeSessionHub(sessionID string) {
+	s.sessionHubsMu.Lock()
+	defer s.sessionHubsMu.Unlock()
+	delete(s.sessionHubs, sessionID)
+	delete(s.sessionCancels, sessionID)
+}
+
+// cancelSession triggers the cancel func associated with an in-flight agent
+// run. Used by POST /abort to stop the agent mid-stream even when the agent
+// is not currently on a hold.
+func (s *Server) cancelSession(sessionID string) bool {
+	s.sessionHubsMu.Lock()
+	defer s.sessionHubsMu.Unlock()
+	cancel, ok := s.sessionCancels[sessionID]
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
 }
 
 // createHoldChannel creates a buffered channel for a card to wait on
@@ -361,6 +417,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("PATCH /api/v1/chat/sessions/{id}", s.AuthMiddleware(s.handleUpdateChatSession))
 	mux.HandleFunc("GET /api/v1/chat/sessions/{id}/export", s.AuthMiddleware(s.handleExportSession))
 	mux.HandleFunc("POST /api/v1/chat/sessions/{id}/messages", s.AuthMiddleware(s.handleChatMessage))
+	mux.HandleFunc("GET /api/v1/chat/sessions/{id}/stream", s.AuthMiddleware(s.handleChatSessionStream))
 	mux.HandleFunc("POST /api/v1/chat/sessions/{id}/continue", s.AuthMiddleware(s.handleChatSessionContinue))
 	mux.HandleFunc("POST /api/v1/chat/sessions/{id}/abort", s.AuthMiddleware(s.handleChatSessionAbort))
 
