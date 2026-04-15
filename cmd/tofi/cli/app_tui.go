@@ -299,7 +299,7 @@ func (m *appModel) View() string {
 func (m *appModel) loadApps() tea.Cmd {
 	return func() tea.Msg {
 		var apps []appRecord
-		if err := m.client.get("/api/v1/apps", &apps); err != nil {
+		if err := m.client.get("/api/v1/agents", &apps); err != nil {
 			return appErrMsg{err: err}
 		}
 		if apps == nil {

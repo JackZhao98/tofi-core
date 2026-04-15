@@ -348,7 +348,7 @@ func (m *appModel) viewSessions() string {
 
 func (m *appModel) runApp(appID, name string) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.client.post(fmt.Sprintf("/api/v1/apps/%s/run", appID), nil, nil); err != nil {
+		if err := m.client.post(fmt.Sprintf("/api/v1/agents/%s/run", appID), nil, nil); err != nil {
 			return appErrMsg{err: fmt.Errorf("failed to run %s: %w", name, err)}
 		}
 		return appActionDoneMsg{msg: fmt.Sprintf("✓ Run triggered for %s", name)}
@@ -361,7 +361,7 @@ func (m *appModel) activateApp(appID, name string, active bool) tea.Cmd {
 		if !active {
 			endpoint = "deactivate"
 		}
-		if err := m.client.post(fmt.Sprintf("/api/v1/apps/%s/%s", appID, endpoint), nil, nil); err != nil {
+		if err := m.client.post(fmt.Sprintf("/api/v1/agents/%s/%s", appID, endpoint), nil, nil); err != nil {
 			return appErrMsg{err: fmt.Errorf("failed: %w", err)}
 		}
 		verb := "activated"
@@ -374,7 +374,7 @@ func (m *appModel) activateApp(appID, name string, active bool) tea.Cmd {
 
 func (m *appModel) deleteApp(appID, name string) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.client.delete(fmt.Sprintf("/api/v1/apps/%s", appID)); err != nil {
+		if err := m.client.delete(fmt.Sprintf("/api/v1/agents/%s", appID)); err != nil {
 			return appErrMsg{err: fmt.Errorf("failed to delete %s: %w", name, err)}
 		}
 		return appActionDoneMsg{msg: fmt.Sprintf("✓ %s deleted", name)}

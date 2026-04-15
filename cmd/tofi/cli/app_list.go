@@ -38,7 +38,7 @@ func runAppList(cmd *cobra.Command, args []string) error {
 	}
 
 	var apps []appSummary
-	if err := client.get("/api/v1/apps", &apps); err != nil {
+	if err := client.get("/api/v1/agents", &apps); err != nil {
 		return fmt.Errorf("failed to fetch apps: %w", err)
 	}
 

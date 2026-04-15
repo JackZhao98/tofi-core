@@ -855,7 +855,7 @@ func (m connConfigModel) loadApps() tea.Cmd {
 	return func() tea.Msg {
 		client := newAPIClient()
 		var apps []appListItem
-		if err := client.get("/api/v1/apps", &apps); err != nil {
+		if err := client.get("/api/v1/agents", &apps); err != nil {
 			return appsLoadedMsg{apps: nil}
 		}
 		return appsLoadedMsg{apps: apps}

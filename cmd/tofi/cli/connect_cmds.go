@@ -417,7 +417,7 @@ func runConnLink(cmd *cobra.Command, args []string) error {
 	var result struct {
 		OK bool `json:"ok"`
 	}
-	if err := client.post(fmt.Sprintf("/api/v1/apps/%s/connectors", appID), bytes.NewReader(bodyJSON), &result); err != nil {
+	if err := client.post(fmt.Sprintf("/api/v1/agents/%s/connectors", appID), bytes.NewReader(bodyJSON), &result); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()
@@ -457,7 +457,7 @@ func runConnUnlink(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("app not found: %s", connUnlinkApp)
 	}
 
-	if err := client.delete(fmt.Sprintf("/api/v1/apps/%s/connectors/%s", appID, connID)); err != nil {
+	if err := client.delete(fmt.Sprintf("/api/v1/agents/%s/connectors/%s", appID, connID)); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()

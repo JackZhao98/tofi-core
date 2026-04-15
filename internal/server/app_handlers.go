@@ -24,7 +24,7 @@ import (
 
 // ── App CRUD Handlers ──
 
-// handleListApps GET /api/v1/apps
+// handleListApps GET /api/v1/agents
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
@@ -63,7 +63,7 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// handleGetApp GET /api/v1/apps/{id}
+// handleGetApp GET /api/v1/agents/{id}
 func (s *Server) handleGetApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -82,7 +82,7 @@ func (s *Server) handleGetApp(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(app)
 }
 
-// handleCreateApp POST /api/v1/apps
+// handleCreateApp POST /api/v1/agents
 // Flow: parse request → build AgentDef → write files → sync to DB index
 func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -167,7 +167,7 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(created)
 }
 
-// handleUpdateApp PUT /api/v1/apps/{id}
+// handleUpdateApp PUT /api/v1/agents/{id}
 // Flow: merge updates → convert to AgentDef → write files → sync to DB index
 func (s *Server) handleUpdateApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -286,7 +286,7 @@ func (s *Server) handleUpdateApp(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(updated)
 }
 
-// handleDeleteApp DELETE /api/v1/apps/{id}
+// handleDeleteApp DELETE /api/v1/agents/{id}
 // Flow: get app name → delete files → remove from DB index
 func (s *Server) handleDeleteApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -322,7 +322,7 @@ func (s *Server) handleDeleteApp(w http.ResponseWriter, r *http.Request) {
 
 // ── Schedule Handlers ──
 
-// handleActivateApp POST /api/v1/apps/{id}/activate
+// handleActivateApp POST /api/v1/agents/{id}/activate
 func (s *Server) handleActivateApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -357,7 +357,7 @@ func (s *Server) handleActivateApp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDeactivateApp POST /api/v1/apps/{id}/deactivate
+// handleDeactivateApp POST /api/v1/agents/{id}/deactivate
 func (s *Server) handleDeactivateApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -386,7 +386,7 @@ func (s *Server) handleDeactivateApp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRunAppNow POST /api/v1/apps/{id}/run
+// handleRunAppNow POST /api/v1/agents/{id}/run
 // All runs go through the Dispatcher — manual trigger creates an app_run and dispatches immediately.
 // Accepts optional JSON body:
 //
@@ -460,7 +460,7 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(run)
 }
 
-// handleListAppRuns GET /api/v1/apps/{id}/runs
+// handleListAppRuns GET /api/v1/agents/{id}/runs
 func (s *Server) handleListAppRuns(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
@@ -493,7 +493,7 @@ func (s *Server) handleListAppRuns(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(runs)
 }
 
-// handleGetAppRun GET /api/v1/apps/{id}/runs/{runId}
+// handleGetAppRun GET /api/v1/agents/{id}/runs/{runId}
 func (s *Server) handleGetAppRun(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	appID := r.PathValue("id")
@@ -515,7 +515,7 @@ func (s *Server) handleGetAppRun(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(run)
 }
 
-// handleGetAppRunSession GET /api/v1/apps/{id}/runs/{runId}/session
+// handleGetAppRunSession GET /api/v1/agents/{id}/runs/{runId}/session
 // Returns the full chat session (with messages) associated with an app run.
 func (s *Server) handleGetAppRunSession(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -549,7 +549,7 @@ func (s *Server) handleGetAppRunSession(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(session)
 }
 
-// handleGetAppRunLog GET /api/v1/apps/{id}/runs/{runId}/log
+// handleGetAppRunLog GET /api/v1/agents/{id}/runs/{runId}/log
 // Returns the plain-text log file for an app run.
 func (s *Server) handleGetAppRunLog(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -578,7 +578,7 @@ func (s *Server) handleGetAppRunLog(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleParseSchedule POST /api/v1/apps/parse-schedule
+// handleParseSchedule POST /api/v1/agents/parse-schedule
 func (s *Server) handleParseSchedule(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
@@ -756,7 +756,7 @@ func (s *Server) handleSkipRun(w http.ResponseWriter, r *http.Request) {
 
 // ── Manager Chat (SSE + AgentLoop) ──
 
-// handleManagerChat POST /api/v1/apps/manager/chat — SSE streaming manager with full agent capabilities
+// handleManagerChat POST /api/v1/agents/manager/chat — SSE streaming manager with full agent capabilities
 func (s *Server) handleManagerChat(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
@@ -1308,7 +1308,7 @@ func requestToAgentDef(
 
 // ── App Webhook Trigger ──
 
-// handleTriggerApp POST /api/v1/apps/{id}/trigger
+// handleTriggerApp POST /api/v1/agents/{id}/trigger
 // Public-facing webhook: triggers an immediate run.
 //
 // The app's own prompt (system prompt + template substitution) is ALWAYS
@@ -1418,13 +1418,13 @@ func (s *Server) handleTriggerApp(w http.ResponseWriter, r *http.Request) {
 		"app_id":  app.ID,
 		"status":  run.Status,
 		"trigger": "webhook",
-		"message": "App run triggered successfully. Poll GET /api/v1/apps/" + app.ID + "/runs/" + run.ID + " for status.",
+		"message": "App run triggered successfully. Poll GET /api/v1/agents/" + app.ID + "/runs/" + run.ID + " for status.",
 	})
 }
 
 // ── Abort Running Run ──
 
-// handleAbortRun POST /api/v1/apps/{id}/runs/{runId}/abort
+// handleAbortRun POST /api/v1/agents/{id}/runs/{runId}/abort
 // Aborts a currently running app run.
 func (s *Server) handleAbortRun(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -1473,7 +1473,7 @@ func (s *Server) handleAbortRun(w http.ResponseWriter, r *http.Request) {
 
 // ── App Statistics ──
 
-// handleGetAppStats GET /api/v1/apps/{id}/stats
+// handleGetAppStats GET /api/v1/agents/{id}/stats
 // Returns aggregate run statistics for an app.
 func (s *Server) handleGetAppStats(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)

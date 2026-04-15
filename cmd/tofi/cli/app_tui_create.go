@@ -350,7 +350,7 @@ func (m *appModel) submitCreate() tea.Cmd {
 		// If editing existing app, use PUT
 		if m.selectedApp != nil && m.selectedApp.ID != "" {
 			jsonBody, _ := json.Marshal(body)
-			if err := m.client.put(fmt.Sprintf("/api/v1/apps/%s", m.selectedApp.ID), bytes.NewReader(jsonBody), nil); err != nil {
+			if err := m.client.put(fmt.Sprintf("/api/v1/agents/%s", m.selectedApp.ID), bytes.NewReader(jsonBody), nil); err != nil {
 				return appErrMsg{err: fmt.Errorf("update failed: %w", err)}
 			}
 			return appActionDoneMsg{msg: fmt.Sprintf("✓ %s updated", m.formName)}
@@ -361,7 +361,7 @@ func (m *appModel) submitCreate() tea.Cmd {
 		var result struct {
 			Name string `json:"name"`
 		}
-		if err := m.client.post("/api/v1/apps", bytes.NewReader(jsonBody), &result); err != nil {
+		if err := m.client.post("/api/v1/agents", bytes.NewReader(jsonBody), &result); err != nil {
 			return appErrMsg{err: fmt.Errorf("create failed: %w", err)}
 		}
 		name := result.Name

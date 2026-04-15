@@ -189,7 +189,7 @@ Response: `202 Accepted`
   "app_id": "daily-weather",
   "status": "running",
   "trigger": "webhook",
-  "message": "App run triggered successfully. Poll GET /api/v1/apps/daily-weather/runs/{run_id} for status."
+  "message": "App run triggered successfully. Poll GET /api/v1/agents/daily-weather/runs/{run_id} for status."
 }
 ```
 

@@ -535,7 +535,7 @@ func (s *Server) handleConnectorTest(w http.ResponseWriter, r *http.Request) {
 
 // ===================== App-Connector Linking =====================
 
-// handleLinkAppConnector POST /api/v1/apps/{id}/connectors
+// handleLinkAppConnector POST /api/v1/agents/{id}/connectors
 func (s *Server) handleLinkAppConnector(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	appID := r.PathValue("id")
@@ -569,7 +569,7 @@ func (s *Server) handleLinkAppConnector(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-// handleUnlinkAppConnector DELETE /api/v1/apps/{id}/connectors/{cid}
+// handleUnlinkAppConnector DELETE /api/v1/agents/{id}/connectors/{cid}
 func (s *Server) handleUnlinkAppConnector(w http.ResponseWriter, r *http.Request) {
 	_ = r.Context().Value(UserContextKey).(string)
 	appID := r.PathValue("id")
@@ -589,7 +589,7 @@ func (s *Server) handleUnlinkAppConnector(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-// handleListAppConnectors GET /api/v1/apps/{id}/connectors
+// handleListAppConnectors GET /api/v1/agents/{id}/connectors
 func (s *Server) handleListAppConnectors(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	appID := r.PathValue("id")

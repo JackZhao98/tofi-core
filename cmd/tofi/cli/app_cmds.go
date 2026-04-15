@@ -37,7 +37,7 @@ func runAppRun(cmd *cobra.Command, args []string) error {
 		Trigger     string `json:"trigger_type"`
 		ScheduledAt string `json:"scheduled_at"`
 	}
-	if err := client.post(fmt.Sprintf("/api/v1/apps/%s/run", appID), nil, &result); err != nil {
+	if err := client.post(fmt.Sprintf("/api/v1/agents/%s/run", appID), nil, &result); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()
@@ -81,7 +81,7 @@ func runAppRuns(cmd *cobra.Command, args []string) error {
 		StartedAt   *string `json:"started_at"`
 		CompletedAt *string `json:"completed_at"`
 	}
-	if err := client.get(fmt.Sprintf("/api/v1/apps/%s/runs?limit=20", appID), &runs); err != nil {
+	if err := client.get(fmt.Sprintf("/api/v1/agents/%s/runs?limit=20", appID), &runs); err != nil {
 		return fmt.Errorf("failed to fetch runs: %w", err)
 	}
 
@@ -162,7 +162,7 @@ func runAppActivate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := client.post(fmt.Sprintf("/api/v1/apps/%s/activate", appID), nil, nil); err != nil {
+	if err := client.post(fmt.Sprintf("/api/v1/agents/%s/activate", appID), nil, nil); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()
@@ -199,7 +199,7 @@ func runAppDeactivate(cmd *cobra.Command, args []string) error {
 	var result struct {
 		Cancelled int `json:"cancelled"`
 	}
-	if err := client.post(fmt.Sprintf("/api/v1/apps/%s/deactivate", appID), nil, &result); err != nil {
+	if err := client.post(fmt.Sprintf("/api/v1/agents/%s/deactivate", appID), nil, &result); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()
@@ -236,7 +236,7 @@ func runAppDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := client.delete(fmt.Sprintf("/api/v1/apps/%s", appID)); err != nil {
+	if err := client.delete(fmt.Sprintf("/api/v1/agents/%s", appID)); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()
@@ -339,7 +339,7 @@ func runAppCreate(cmd *cobra.Command, args []string) error {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	if err := client.post("/api/v1/apps", bytes.NewReader(jsonBody), &result); err != nil {
+	if err := client.post("/api/v1/agents", bytes.NewReader(jsonBody), &result); err != nil {
 		fmt.Println()
 		fmt.Println(errorStyle.Render("  ✗ ") + err.Error())
 		fmt.Println()
@@ -366,7 +366,7 @@ func resolveAppID(client *apiClient, name string) (string, error) {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	if err := client.get("/api/v1/apps", &apps); err != nil {
+	if err := client.get("/api/v1/agents", &apps); err != nil {
 		return "", fmt.Errorf("failed to fetch apps: %w", err)
 	}
 

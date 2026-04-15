@@ -55,7 +55,7 @@ info:
 
     **Step 5: Or use Apps**
     ```bash
-    curl https://tofi.sentiosurge.com/api/v1/apps \
+    curl https://tofi.sentiosurge.com/api/v1/agents \
       -H "Authorization: Bearer YOUR_TOKEN"
     ```
 
@@ -672,7 +672,7 @@ paths:
         '404':
           description: Plan not found or expired
 
-  /api/v1/apps:
+  /api/v1/agents:
     get:
       summary: List Apps
       description: Returns all apps belonging to the authenticated user.
@@ -697,7 +697,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
-  /api/v1/apps/{id}:
+  /api/v1/agents/{id}:
     get:
       summary: Get App
       description: Returns details of a single app.
@@ -715,7 +715,7 @@ paths:
         '404':
           description: App not found
 
-  /api/v1/apps/{id}/run:
+  /api/v1/agents/{id}/run:
     post:
       summary: Trigger App Run
       description: |
@@ -762,7 +762,7 @@ paths:
         '404':
           description: App not found
 
-  /api/v1/apps/{id}/runs:
+  /api/v1/agents/{id}/runs:
     get:
       summary: List App Runs
       description: Returns run history for an app, ordered by most recent first.
@@ -794,7 +794,7 @@ paths:
         '404':
           description: App not found
 
-  /api/v1/apps/{id}/runs/{runId}:
+  /api/v1/agents/{id}/runs/{runId}:
     get:
       summary: Get Run Status & Result
       description: |

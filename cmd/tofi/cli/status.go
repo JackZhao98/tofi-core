@@ -25,7 +25,7 @@ func init() {
 // appsCount fetches the number of apps from the API.
 func appsCount(port int) (total int, active int) {
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/api/v1/apps", port))
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/api/v1/agents", port))
 	if err != nil {
 		return 0, 0
 	}
