@@ -89,12 +89,18 @@ func NewServer(config Config) (*Server, error) {
 	// 初始化 JWT Auth
 	InitAuth()
 
-	// 初始化加密（从环境变量获取密钥，或使用默认密钥）
+	// 初始化加密密钥。
+	// 默认严格：必须由环境提供 TOFI_ENCRYPTION_KEY。只有 TOFI_DEV=1 时才
+	// 允许 fallback 到公开的默认 key —— 否则生产部署漏设环境变量会让所有
+	// 用户的 AI key 用全网已知的密钥加密（等同于明文存储）。
 	encryptionKey := os.Getenv("TOFI_ENCRYPTION_KEY")
 	if encryptionKey == "" {
-		// 默认密钥（生产环境必须使用环境变量！）
-		encryptionKey = "tofi-default-encryption-key!!123" // 恰好 32 字节
-		log.Println("⚠️  警告：使用默认加密密钥，生产环境请设置 TOFI_ENCRYPTION_KEY 环境变量")
+		if os.Getenv("TOFI_DEV") == "" {
+			log.Fatal("TOFI_ENCRYPTION_KEY is required. Set it in your environment, " +
+				"or set TOFI_DEV=1 to use a known-default key for local development.")
+		}
+		encryptionKey = "tofi-default-encryption-key!!123" // 32 bytes, dev-only
+		log.Println("⚠️  TOFI_DEV: using the default encryption key — never use in production")
 	}
 	if err := crypto.InitEncryption(encryptionKey); err != nil {
 		return nil, fmt.Errorf("failed to initialize encryption: %v", err)

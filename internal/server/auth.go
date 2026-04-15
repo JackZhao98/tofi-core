@@ -16,13 +16,20 @@ import (
 
 var jwtSecret []byte
 
-// InitAuth initializes JWT secret from TOFI_JWT_SECRET env var.
-// If not set, generates a temporary secret (dev mode).
+// InitAuth initializes the JWT signing secret.
+// Default is strict: the caller must provide TOFI_JWT_SECRET. TOFI_DEV=1 opts
+// into a process-lifetime temporary secret for local development — previously
+// this was the silent fallback, which let a production deploy with a missing
+// secret issue tokens signed with a timestamp-based key.
 func InitAuth() {
 	secret := os.Getenv("TOFI_JWT_SECRET")
 	if secret == "" {
+		if os.Getenv("TOFI_DEV") == "" {
+			log.Fatal("TOFI_JWT_SECRET is required. Set it in your environment, " +
+				"or set TOFI_DEV=1 to use a temporary per-process secret for local development.")
+		}
 		jwtSecret = []byte(fmt.Sprintf("dev-secret-%d", time.Now().UnixNano()))
-		log.Printf("TOFI_JWT_SECRET not set. Generated temporary secret for dev mode.")
+		log.Printf("⚠️  TOFI_DEV: using a temporary JWT secret — tokens become invalid on restart and must never be used in production")
 	} else {
 		jwtSecret = []byte(secret)
 	}
