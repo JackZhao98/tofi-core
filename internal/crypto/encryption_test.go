@@ -113,3 +113,56 @@ func TestGenerateKey(t *testing.T) {
 		t.Fatal("Encryption/Decryption with generated key failed")
 	}
 }
+
+// TestEncryptDecryptWithKey covers the rotate-encryption-key path where two
+// different keys are in play within a single process.
+func TestEncryptDecryptWithKey(t *testing.T) {
+	keyA := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	keyB := []byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	plaintext := "rotate-me"
+
+	// Round trip under the same key works.
+	encA, err := EncryptWithKey(keyA, plaintext)
+	if err != nil {
+		t.Fatalf("EncryptWithKey(A): %v", err)
+	}
+	back, err := DecryptWithKey(keyA, encA)
+	if err != nil {
+		t.Fatalf("DecryptWithKey(A): %v", err)
+	}
+	if back != plaintext {
+		t.Fatalf("round-trip mismatch: got %q want %q", back, plaintext)
+	}
+
+	// Ciphertext produced with keyA must not decrypt under keyB.
+	if _, err := DecryptWithKey(keyB, encA); err == nil {
+		t.Fatal("DecryptWithKey(B) must fail on ciphertext produced with A")
+	}
+
+	// Format parity with the global Encrypt: a ciphertext produced by
+	// InitEncryption+Encrypt must decrypt via DecryptWithKey using the same
+	// bytes. This is what rotate-encryption-key relies on.
+	if err := InitEncryption(string(keyA)); err != nil {
+		t.Fatalf("InitEncryption(A): %v", err)
+	}
+	encGlobal, err := Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	got, err := DecryptWithKey(keyA, encGlobal)
+	if err != nil {
+		t.Fatalf("DecryptWithKey on global ciphertext: %v", err)
+	}
+	if got != plaintext {
+		t.Fatalf("cross-API mismatch: got %q want %q", got, plaintext)
+	}
+}
+
+func TestEncryptWithKeyInvalidLength(t *testing.T) {
+	if _, err := EncryptWithKey([]byte("short"), "x"); err == nil {
+		t.Fatal("EncryptWithKey must reject non-32-byte keys")
+	}
+	if _, err := DecryptWithKey([]byte("short"), "x"); err == nil {
+		t.Fatal("DecryptWithKey must reject non-32-byte keys")
+	}
+}
