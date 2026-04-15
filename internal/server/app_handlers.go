@@ -1377,11 +1377,13 @@ func (s *Server) handleTriggerApp(w http.ResponseWriter, r *http.Request) {
 			Params  map[string]interface{} `json:"params,omitempty"`
 			Payload map[string]interface{} `json:"payload,omitempty"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
-			userInput = req.Prompt
-			runtimeParams = req.Params
-			payload = req.Payload
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "invalid JSON body", err.Error())
+			return
 		}
+		userInput = req.Prompt
+		runtimeParams = req.Params
+		payload = req.Payload
 	}
 
 	// Always enforce the app's template — the webhook caller supplies inputs,
