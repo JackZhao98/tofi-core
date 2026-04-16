@@ -49,13 +49,24 @@ func ShouldCompact(messages []Message, model string) bool {
 	return estimated > threshold
 }
 
-// ContextUsagePercent returns the estimated context usage as a percentage (0-100).
-func ContextUsagePercent(inputTokens int64, model string) int {
+// ContextUsagePercent returns the estimated context usage as a percentage (0-100)
+// based on the size of the conversation history that would be sent on the next
+// turn. This is the right number to gauge "how full is the model's context"
+// because it matches what compaction (60% / 80%) thresholds against.
+//
+// The previous implementation used cumulative session input tokens, which over-
+// counted: every turn re-sends the full history, so accumulating per-turn input
+// double-counts older messages and the gauge climbs much faster than reality.
+// Inspired UX bug: a session showing 45% would drop to 3% after a small turn
+// because the live SSE 'done' event reports per-turn input tokens, fighting
+// the cumulative session value.
+func ContextUsagePercent(messages []Message, model string) int {
 	budget := ContextBudget(model)
 	if budget == 0 {
 		return 0
 	}
-	pct := int(float64(inputTokens) / float64(budget) * 100)
+	estimated := EstimateTokens(messages)
+	pct := int(float64(estimated) / float64(budget) * 100)
 	if pct > 100 {
 		pct = 100
 	}

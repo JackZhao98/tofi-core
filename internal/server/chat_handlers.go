@@ -136,7 +136,7 @@ func (s *Server) handleGetChatSession(w http.ResponseWriter, r *http.Request) {
 		ContextUsagePercent int `json:"context_usage_percent"`
 	}{
 		Session:             session,
-		ContextUsagePercent: chat.ContextUsagePercent(session.Usage.InputTokens, session.Model),
+		ContextUsagePercent: chat.ContextUsagePercent(session.Messages, session.Model),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -450,7 +450,10 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		contextPct := chat.ContextUsagePercent(result.TotalUsage.InputTokens, result.Model)
+		// Use the post-turn message history (what the next turn would re-send)
+		// instead of this-turn input tokens, so the gauge stays consistent with
+		// what GET /sessions/{id} returns and doesn't snap between two metrics.
+		contextPct := chat.ContextUsagePercent(session.Messages, result.Model)
 		hub.publish("done", map[string]any{
 			"result":                result.Content,
 			"model":                 result.Model,
