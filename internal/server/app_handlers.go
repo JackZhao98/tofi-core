@@ -587,7 +587,8 @@ func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
 	var req struct {
-		Messages []provider.Message `json:"messages"`
+		Messages        []provider.Message `json:"messages"`
+		AvailableModels []string           `json:"available_models"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "invalid request body", "")
@@ -610,6 +611,11 @@ func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var modelsSection string
+	if len(req.AvailableModels) > 0 {
+		modelsSection = "\n\nAvailable models (pick from this list only):\n- " + strings.Join(req.AvailableModels, "\n- ")
+	}
+
 	systemPrompt := `You are an AI agent architect. The user is designing an agent through conversation. On each turn, return ONLY a complete updated JSON configuration in this exact format:
 
 {
@@ -620,13 +626,23 @@ func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
   "model": "gpt-5-mini"
 }
 
-Rules:
+Output rules:
 - ALWAYS return the full JSON — never say "here are the changes"; return the complete updated config every turn.
 - Keep name short (2-4 words).
-- prompt should be actionable and specific. Use {{variable}} for values the user supplies per run.
-- system_prompt defines the AI's persona and constraints.
-- model: "gpt-5-mini" by default, "claude-sonnet-4-20250514" if the task needs strong reasoning.
-- Respond in the same language as the user.`
+- Respond in the same language as the user.
+
+Task prompt ("prompt" field) rules:
+- The prompt describes the CORE work the agent does: fetching, analyzing, producing output. Nothing else.
+- Use {{variable}} placeholders ONLY for per-run user inputs like {{url}}, {{ticker}}, {{topic}}, {{query}}.
+- NEVER put integration credentials in {{variables}}. That means no {{telegram_bot_token}}, {{telegram_chat_id}}, {{api_key}}, {{smtp_password}}, {{webhook_url}}, etc. Delivery to Telegram/Email/Discord/Slack is handled by Tofi's connector system AFTER the task completes — the task prompt must not reference those secrets.
+- If the user asks for delivery to a channel, note it in the system_prompt as a comment (e.g. "Results will be delivered to the user's Telegram connector after completion") but keep the task prompt focused on producing the content.
+
+System prompt rules:
+- system_prompt defines persona, tone, hard rules, and graceful-degradation behavior.
+- Always include a line like: "If an expected integration or parameter is missing, complete the core task with whatever data you can gather and clearly note in the output what couldn't be done — do NOT ask the user for clarification mid-run."
+
+Model rules:
+- Default to "gpt-5.4". Use a stronger reasoning model only if the task clearly needs it.` + modelsSection
 
 	model, apiKey, _, err := s.resolveModelAndKey(userID, "")
 	if err != nil {
