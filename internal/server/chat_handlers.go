@@ -187,22 +187,49 @@ func (s *Server) handleGetChatSessionCapabilities(w http.ResponseWriter, r *http
 	// Names match what's exposed to the model so the user can correlate
 	// tool calls in the transcript with this list.
 	builtin := []toolInfo{
-		{"tofi_load_skill", "Load the full instructions for a skill on demand"},
+		// Shell + file
+		{"tofi_shell", "Run a shell command in an isolated sandbox"},
+		{"tofi_read", "Read a file by path"},
+		{"tofi_write", "Write or overwrite a file"},
+		{"tofi_edit", "Apply a targeted edit to a file (find + replace)"},
+		{"tofi_grep", "Search file contents with a pattern"},
+		{"tofi_glob", "Find files matching a glob pattern"},
+		// Skill / tool discovery
+		{"tofi_load_skill", "Re-acknowledge a preloaded skill (no-op, all skills are preloaded)"},
+		{"tofi_tool_search", "Search deferred tools by keyword"},
+		{"tofi_search", "Search the skills.sh marketplace"},
+		// Delegation + flow
 		{"tofi_sub_agent", "Spawn a fresh sub-agent in an isolated context"},
+		{"tofi_ask_user", "Pause and ask the user a question (TUI only)"},
+		{"tofi_wait", "Sleep for N seconds"},
+		// Self-introspection
 		{"tofi_get_time", "Get current date, time, and timezone"},
 		{"tofi_get_user", "Get the current user's identity"},
-		{"tofi_session_info", "Get token usage, cost, and session statistics"},
-		{"tofi_memory_read", "Read persistent memory entries for the user"},
-		{"tofi_memory_write", "Write a persistent memory entry for the user"},
-		{"tofi_memory_search", "Search persistent memory entries"},
-		{"tofi_schedule_create", "Schedule a task to run later"},
-		{"tofi_schedule_list", "List scheduled tasks"},
-		{"tofi_schedule_cancel", "Cancel a scheduled task"},
-		{"tofi_task_list", "List background tasks"},
-		{"tofi_task_stop", "Stop a running background task"},
-		{"tofi_notify", "Send a message via configured notification channels"},
-		{"tofi_skill_install", "Install a new skill from a source URL or zip"},
-		{"tofi_wish_grant", "Honor a /wish slash command result"},
+		{"tofi_session_info", "Get token usage, cost, and session stats"},
+		{"tofi_list_models", "List models available to this user"},
+		// Memory
+		{"tofi_save_memory", "Save a persistent memory entry"},
+		{"tofi_recall_memory", "Recall persistent memory entries"},
+		// Background shell tasks
+		{"tofi_task_status", "Check or wait on a backgrounded shell command"},
+		{"tofi_task_list", "List backgrounded shell commands"},
+		{"tofi_task_stop", "Cancel a backgrounded shell command"},
+		// Schedule
+		{"tofi_schedule", "Create or update a scheduled run"},
+		{"tofi_toggle_schedule", "Enable or disable a schedule"},
+		// Notify
+		{"tofi_list_notify_targets", "List configured notification targets"},
+		{"tofi_set_notify_targets", "Configure notification targets"},
+		// App management
+		{"tofi_list_apps", "List the user's apps"},
+		{"tofi_create_app", "Create a new app"},
+		{"tofi_update_app", "Update an existing app"},
+		{"tofi_delete_app", "Delete an app"},
+		{"tofi_run_app", "Run an app on demand"},
+		{"tofi_list_app_runs", "List recent runs for an app"},
+		{"tofi_get_run_detail", "Get details for a specific run"},
+		{"tofi_display_app_plan", "Render the app creation plan to the user"},
+		{"tofi_update_progress", "Push a progress update to the UI"},
 	}
 
 	// Available skills: system embed FS + this user's filesystem.

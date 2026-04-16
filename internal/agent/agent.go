@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 	"unsafe"
@@ -203,6 +204,11 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 	// Track which skills have been loaded (persisted across turns via session)
 	loadedSkills := make(map[string]bool)
 
+	// Instructions collected from eager skill preload — injected into the
+	// system prompt below so the model sees every skill's full SKILL.md
+	// without having to call tofi_load_skill.
+	var preloadedInstructions []string
+
 	// Register skill tools — deferred loading pattern (like Claude Code)
 	// Skills are listed by name+description in <available-skills> section of system prompt.
 	// Full Instructions loaded on-demand via tofi_load_skill tool.
@@ -235,27 +241,15 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			}
 		}
 
-		// Register tofi_load_skill tool via ToolRegistry
-		registry.Register(&FuncTool{
-			ToolName:   "tofi_load_skill",
-			ToolSchema: provider.Tool{
-				Name: "tofi_load_skill",
-				Description: "Load the full instructions for a skill by name. " +
-					"Skills are listed in <available-deferred-tools> with name and description only. " +
-					"Call this to get detailed instructions before using the skill. " +
-					"After loading, the skill's run_skill__<name> tool becomes available if it has scripts.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"name": map[string]interface{}{
-							"type":        "string",
-							"description": "Skill name (from <available-deferred-tools> list)",
-						},
-					},
-					"required": []string{"name"},
-				},
-			},
-			ExecuteFunc: func(_ context.Context, args map[string]interface{}) (string, error) {
+		// Skill loader closure — does all the side effects (registers bundled
+		// tools, sets up symlinks, registers DirectTools, etc) and returns the
+		// SKILL.md instructions so callers can decide where to surface them.
+		// Used in two places:
+		//   1. Eager preload at startup (this turn) → instructions go into the
+		//      system prompt so the model sees them immediately.
+		//   2. tofi_load_skill ExecuteFunc → kept as a backwards-compat no-op
+		//      (returns "already active") since everything is preloaded now.
+		loadSkillByName := func(_ context.Context, args map[string]interface{}) (string, error) {
 			name := strings.TrimSpace(fmt.Sprintf("%v", args["name"]))
 			skill, ok := skillMap[name]
 			if !ok {
@@ -466,8 +460,45 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				result += fmt.Sprintf("\n\n---\nActivated tools: %s\nThese tools are now callable.", strings.Join(activatedTools, ", "))
 			}
 			return result, nil
-		},
+		}
+
+		// Register tofi_load_skill — kept as a thin wrapper around the loader
+		// for backwards compat with transcripts that already call it. Now that
+		// every skill is preloaded at startup, this tool just returns a hint
+		// telling the AI the skill is already available.
+		registry.Register(&FuncTool{
+			ToolName:        "tofi_load_skill",
+			ToolDisplayName: "Load Skill",
+			ToolSchema: provider.Tool{
+				Name: "tofi_load_skill",
+				Description: "Re-acknowledge a skill (no-op — all skills are preloaded at session start). " +
+					"You can call any skill's tools directly without loading. Returns the skill's instructions if you need a refresher.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "Skill name (e.g. 'web-fetch')",
+						},
+					},
+					"required": []string{"name"},
+				},
+			},
+			ExecuteFunc: loadSkillByName,
 		})
+
+		// Eager preload — activate every skill at session start and collect
+		// its instructions for the system prompt. Trades ~5k tokens for the
+		// 'no need to load skills' UX. Skills with bundled tools register
+		// them now so the model can call them directly on the first turn.
+		for skillName := range skillMap {
+			result, err := loadSkillByName(context.Background(), map[string]interface{}{"name": skillName})
+			if err == nil && result != "" {
+				preloadedInstructions = append(preloadedInstructions, result)
+			}
+		}
+		// Sort for stable system-prompt ordering (matters for prompt cache).
+		sort.Strings(preloadedInstructions)
 
 		// Register tofi_tool_search (searches all deferred tools including skills)
 		registry.Register(buildToolSearchTool(registry))
@@ -522,17 +553,18 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 	}
 	systemPrompt := cfg.System
 
-	// Append available deferred tools to system prompt (name + description only)
-	if len(cfg.SkillTools) > 0 {
-		var deferredLines []string
-		for _, skill := range cfg.SkillTools {
-			deferredLines = append(deferredLines, fmt.Sprintf("- %s: %s", skill.Name, skill.Description))
-		}
-		systemPrompt += "\n\n<available-deferred-tools>\n" + strings.Join(deferredLines, "\n") + "\n</available-deferred-tools>\n"
-		systemPrompt += `
-## Deferred Tools
-You have tools listed in <available-deferred-tools>. These are not active yet — use tofi_tool_search to find and activate them by keyword, or call tofi_load_skill with the exact name to load a skill directly. Only load when the user's request requires it. If you already loaded a tool, just use it directly.
+	// All skills are eagerly preloaded at session start (see skill registration
+	// block above). Inject every skill's full SKILL.md instructions inline so
+	// the model knows what they do without a load round-trip.
+	if len(preloadedInstructions) > 0 {
+		systemPrompt += "\n\n## Active Skills\n\nThese skills are loaded and ready. Their tools are already callable — just use them directly.\n\n"
+		systemPrompt += strings.Join(preloadedInstructions, "\n\n---\n\n")
+		systemPrompt += "\n\n"
+	}
 
+	// Tool usage rules apply whenever shell + skill tools are in play.
+	if len(cfg.SkillTools) > 0 {
+		systemPrompt += `
 ## Tool Usage Rules
 - NEVER use tofi_shell to fetch web pages (curl, wget, python requests, httpx, etc). Always use the web-fetch skill for fetching URLs — it extracts clean text and saves tokens.
 - NEVER use tofi_shell to run python scripts with requests/httpx/urllib for web scraping. Use web-fetch instead.
