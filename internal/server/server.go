@@ -423,6 +423,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/chat/sessions", s.AuthMiddleware(s.handleCreateChatSession))
 	mux.HandleFunc("GET /api/v1/chat/sessions", s.AuthMiddleware(s.handleListChatSessions))
 	mux.HandleFunc("GET /api/v1/chat/sessions/{id}", s.AuthMiddleware(s.handleGetChatSession))
+	mux.HandleFunc("GET /api/v1/chat/sessions/{id}/capabilities", s.AuthMiddleware(s.handleGetChatSessionCapabilities))
 	mux.HandleFunc("DELETE /api/v1/chat/sessions/{id}", s.AuthMiddleware(s.handleDeleteChatSession))
 	mux.HandleFunc("PATCH /api/v1/chat/sessions/{id}", s.AuthMiddleware(s.handleUpdateChatSession))
 	mux.HandleFunc("GET /api/v1/chat/sessions/{id}/export", s.AuthMiddleware(s.handleExportSession))

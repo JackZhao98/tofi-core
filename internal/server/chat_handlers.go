@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -140,6 +141,116 @@ func (s *Server) handleGetChatSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// --- GET /api/v1/chat/sessions/{id}/capabilities ---
+//
+// Returns three lists for the session info panel:
+//   - builtin_tools:    always-available agent tools (no need to load)
+//   - available_skills: skills the agent can call tofi_load_skill on
+//   - loaded_skills:    skills already activated in this session (Session.LoadedSkills)
+//
+// Built-in tool names are kept in sync with what chat_handlers.go wires up
+// for chat sessions (buildBuiltinTools + memory + schedule + sub-agent etc).
+// They're enumerated here so the frontend can render them in the info panel
+// without having to mirror the agent harness internals.
+func (s *Server) handleGetChatSessionCapabilities(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+	sessionID := r.PathValue("id")
+
+	idx, err := s.chatStore.GetIndex(sessionID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrSessionNotFound, "session not found", "")
+		return
+	}
+	if idx.UserID != userID {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "forbidden", "")
+		return
+	}
+	session, err := s.chatStore.LoadByID(sessionID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrSessionNotFound, "session not found", "")
+		return
+	}
+
+	type toolInfo struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	type skillInfo struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Scope       string `json:"scope"`
+	}
+
+	// Built-in tools — same set the agent loop registers for chat sessions.
+	// Names match what's exposed to the model so the user can correlate
+	// tool calls in the transcript with this list.
+	builtin := []toolInfo{
+		{"tofi_load_skill", "Load the full instructions for a skill on demand"},
+		{"tofi_sub_agent", "Spawn a fresh sub-agent in an isolated context"},
+		{"tofi_get_time", "Get current date, time, and timezone"},
+		{"tofi_get_user", "Get the current user's identity"},
+		{"tofi_session_info", "Get token usage, cost, and session statistics"},
+		{"tofi_memory_read", "Read persistent memory entries for the user"},
+		{"tofi_memory_write", "Write a persistent memory entry for the user"},
+		{"tofi_memory_search", "Search persistent memory entries"},
+		{"tofi_schedule_create", "Schedule a task to run later"},
+		{"tofi_schedule_list", "List scheduled tasks"},
+		{"tofi_schedule_cancel", "Cancel a scheduled task"},
+		{"tofi_task_list", "List background tasks"},
+		{"tofi_task_stop", "Stop a running background task"},
+		{"tofi_notify", "Send a message via configured notification channels"},
+		{"tofi_skill_install", "Install a new skill from a source URL or zip"},
+		{"tofi_wish_grant", "Honor a /wish slash command result"},
+	}
+
+	// Available skills: system embed FS + this user's filesystem.
+	availableSet := make(map[string]skillInfo)
+	for name, sf := range skills.LoadAllSystemSkills() {
+		availableSet[name] = skillInfo{
+			Name:        name,
+			Description: sf.Manifest.Description,
+			Scope:       "system",
+		}
+	}
+	localStore := skills.NewLocalStore(s.config.HomeDir)
+	if userSkills, _ := localStore.ListUserSkills(userID); userSkills != nil {
+		for _, sk := range userSkills {
+			availableSet[sk.Name] = skillInfo{
+				Name:        sk.Name,
+				Description: sk.Desc,
+				Scope:       "user",
+			}
+		}
+	}
+	available := make([]skillInfo, 0, len(availableSet))
+	for _, v := range availableSet {
+		available = append(available, v)
+	}
+	sort.Slice(available, func(i, j int) bool { return available[i].Name < available[j].Name })
+
+	// Loaded skills for this session (Session.LoadedSkills, comma-separated).
+	var loaded []string
+	if session.LoadedSkills != "" {
+		for _, n := range strings.Split(session.LoadedSkills, ",") {
+			n = strings.TrimSpace(n)
+			if n != "" {
+				loaded = append(loaded, n)
+			}
+		}
+	}
+	if loaded == nil {
+		loaded = []string{}
+	}
+
+	resp := map[string]interface{}{
+		"builtin_tools":    builtin,
+		"available_skills": available,
+		"loaded_skills":    loaded,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // --- DELETE /api/v1/chat/sessions/{id} ---
