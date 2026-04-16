@@ -579,25 +579,39 @@ func (s *Server) handleGetAppRunLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePlanAgent POST /api/v1/agents/plan
-// Lightweight LLM call to generate an agent config from a description.
+// Multi-turn LLM call to generate/refine an agent config JSON from a
+// conversation. First turn is a single user message describing what the
+// agent should do; refine turns append user feedback and the previous
+// assistant JSON plan.
 func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
 	var req struct {
-		Description string `json:"description"`
+		Messages []provider.Message `json:"messages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "invalid request body", "")
 		return
 	}
-	if req.Description == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "description is required", "")
+	if len(req.Messages) == 0 {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "messages is required", "")
 		return
 	}
+	for i, m := range req.Messages {
+		if m.Role != "user" && m.Role != "assistant" {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest,
+				fmt.Sprintf("messages[%d].role must be 'user' or 'assistant'", i), "")
+			return
+		}
+		if m.Content == "" {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest,
+				fmt.Sprintf("messages[%d].content is empty", i), "")
+			return
+		}
+	}
 
-	systemPrompt := `You are an AI agent architect. Given a user's description, generate a complete agent configuration as JSON.
+	systemPrompt := `You are an AI agent architect. The user is designing an agent through conversation. On each turn, return ONLY a complete updated JSON configuration in this exact format:
 
-Output ONLY valid JSON in this exact format:
 {
   "name": "Short Name",
   "description": "One-line description of what the agent does",
@@ -607,11 +621,12 @@ Output ONLY valid JSON in this exact format:
 }
 
 Rules:
-- Keep name short (2-4 words)
-- prompt should be actionable and specific, using {{variable}} for user-supplied values
-- system_prompt defines the AI's persona and constraints
-- model should be "gpt-5-mini" unless the task needs strong reasoning (use "claude-sonnet-4-20250514")
-- Respond in the same language as the user's description`
+- ALWAYS return the full JSON — never say "here are the changes"; return the complete updated config every turn.
+- Keep name short (2-4 words).
+- prompt should be actionable and specific. Use {{variable}} for values the user supplies per run.
+- system_prompt defines the AI's persona and constraints.
+- model: "gpt-5-mini" by default, "claude-sonnet-4-20250514" if the task needs strong reasoning.
+- Respond in the same language as the user.`
 
 	model, apiKey, _, err := s.resolveModelAndKey(userID, "")
 	if err != nil {
@@ -625,11 +640,9 @@ Rules:
 		return
 	}
 	llmResp, err := p.Chat(r.Context(), &provider.ChatRequest{
-		Model:  model,
-		System: systemPrompt,
-		Messages: []provider.Message{
-			{Role: "user", Content: req.Description},
-		},
+		Model:    model,
+		System:   systemPrompt,
+		Messages: req.Messages,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("LLM call failed: %v", err), "")
