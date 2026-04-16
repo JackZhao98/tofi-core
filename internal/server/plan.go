@@ -17,7 +17,7 @@ var PlanDefs = map[string]PlanLimits{
 		MaxApps:        3,
 		DailyRuns:      20,
 		ConcurrentRuns: 1,
-		WebhookAPI:     false,
+		WebhookAPI:     true,
 		CustomCron:     false,
 		EmailNotify:    false,
 		RunHistoryDays: 1,
