@@ -162,12 +162,16 @@ func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverri
 		}
 	}
 
+	// Pre-allocate a chat session ID so the HTTP caller can immediately
+	// navigate to /chat/{session_id} — the session object itself is built
+	// later inside dispatchRun's goroutine.
 	run := &storage.AppRunRecord{
 		ID:          uuid.New().String(),
 		AppID:       app.ID,
 		ScheduledAt: time.Now().UTC().Format("2006-01-02 15:04:05"),
 		Status:      "running",
 		Trigger:     trigger,
+		SessionID:   "s_" + uuid.New().String()[:12],
 		UserID:      userID,
 	}
 	if err := as.server.db.CreateAppRun(run); err != nil {
@@ -215,9 +219,13 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 		prompt = prompt + "\n\n## Context from Previous Runs\n" + storage.FormatMemoriesForAgent(memories)
 	}
 
-	// Create a Chat Session for this app run
+	// Create a Chat Session for this app run. Use the session ID pre-allocated
+	// in DispatchRun so the HTTP caller's navigation target stays stable.
 	scope := chat.AgentScope("app-" + app.ID[:8])
-	sessionID := "s_" + uuid.New().String()[:12]
+	sessionID := run.SessionID
+	if sessionID == "" {
+		sessionID = "s_" + uuid.New().String()[:12]
+	}
 
 	// Build skills string from app config
 	var skillNames []string

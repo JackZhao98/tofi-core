@@ -350,9 +350,9 @@ func (db *DB) CreateAppRun(run *AppRunRecord) error {
 	if run.Trigger == "" {
 		run.Trigger = "scheduled"
 	}
-	query := `INSERT INTO app_runs (id, app_id, scheduled_at, status, trigger_type, result, user_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-	_, err := db.conn.Exec(query, run.ID, run.AppID, run.ScheduledAt, run.Status, run.Trigger, run.Result, run.UserID)
+	query := `INSERT INTO app_runs (id, app_id, scheduled_at, status, trigger_type, session_id, result, user_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+	_, err := db.conn.Exec(query, run.ID, run.AppID, run.ScheduledAt, run.Status, run.Trigger, run.SessionID, run.Result, run.UserID)
 	return err
 }
 
