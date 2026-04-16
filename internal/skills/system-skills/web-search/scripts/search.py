@@ -22,6 +22,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _usage import report_usage
+
 
 def _strip_search_operators(query):
     """Strip Brave-specific search operators that DDGS doesn't support."""
@@ -122,6 +125,7 @@ def main():
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        report_usage()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         # Fallback to regular web search if LLM Context is not available
@@ -186,6 +190,7 @@ def fallback_web_search(api_key, query, count, freshness="", search_lang="en", r
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        report_usage()
     except Exception as e:
         print(f"Web search also failed: {e}")
         sys.exit(1)

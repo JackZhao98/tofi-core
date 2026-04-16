@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"tofi-core/internal/capability"
 	"tofi-core/internal/crypto"
@@ -40,28 +41,76 @@ func (s *Server) buildSkillToolsFromRecords(userID string, skillRecords []*stora
 		}
 		skillTools = append(skillTools, st)
 
-		// Resolve secrets
+		// Resolve secrets with the shared 3-tier (user → service key → env) logic.
 		for _, secretName := range skill.RequiredSecretsList() {
 			if _, ok := secretEnv[secretName]; ok {
-				continue // already resolved
-			}
-			secretRec, err := s.db.GetSecret(userID, secretName)
-			if err != nil {
-				log.Printf("secret %q for skill %q not found", secretName, skill.Name)
-				missingSecrets = append(missingSecrets, fmt.Sprintf("Skill '%s' requires secret '%s'", skill.Name, secretName))
 				continue
 			}
-			val, err := crypto.Decrypt(secretRec.EncryptedValue)
-			if err != nil {
-				log.Printf("decrypt secret %q failed: %v", secretName, err)
-				missingSecrets = append(missingSecrets, fmt.Sprintf("Skill '%s': failed to decrypt secret '%s'", skill.Name, secretName))
+			val, source := s.resolveSecret(userID, secretName)
+			if val == "" {
+				missingSecrets = append(missingSecrets,
+					fmt.Sprintf("Skill '%s' requires secret '%s'", skill.Name, secretName))
 				continue
 			}
 			secretEnv[secretName] = val
+			s.injectUsageCallback(userID, secretName, secretEnv)
+			_ = source
 		}
 	}
 
 	return skillTools, secretEnv, missingSecrets
+}
+
+// resolveSecret finds a secret value for a given user, walking the 3-tier
+// resolution: encrypted user DB → system service key (for known services)
+// → TOFI process env. Returns ("", "") if nothing is configured.
+func (s *Server) resolveSecret(userID, secretName string) (value string, source string) {
+	// 1. User-scope encrypted secret.
+	if userID != "" {
+		if rec, err := s.db.GetSecret(userID, secretName); err == nil {
+			if plain, err := crypto.Decrypt(rec.EncryptedValue); err == nil && plain != "" {
+				return plain, "user"
+			}
+		}
+	}
+	// 2. System-scope service key (admin-configured via /admin/service-keys).
+	//    Only triggered for secrets a skill declared as a known service
+	//    provider, so we never accidentally silently surface one user's
+	//    personal secret to another caller.
+	if provider, ok := storage.KnownServiceSecrets[secretName]; ok {
+		if plain, err := s.db.GetServiceKey(provider, ""); err == nil && plain != "" {
+			return plain, "system"
+		}
+	}
+	// 3. TOFI process env (last-resort fallback for local dev).
+	if v := os.Getenv(secretName); v != "" {
+		return v, "env"
+	}
+	return "", ""
+}
+
+// injectUsageCallback issues a short-lived callback token for the resolved
+// secret's provider and writes TOFI_USAGE_URL + TOFI_USAGE_TOKEN into the
+// env map so the skill script can POST usage events back on loopback. No-op
+// when the secret isn't mapped to a known service provider.
+func (s *Server) injectUsageCallback(userID, secretName string, secretEnv map[string]string) {
+	if s.usageTokens == nil {
+		return
+	}
+	provider, ok := storage.KnownServiceSecrets[secretName]
+	if !ok {
+		return
+	}
+	if _, exists := secretEnv["TOFI_USAGE_TOKEN"]; exists {
+		return
+	}
+	token := s.usageTokens.issue(userID, provider, 2*time.Hour)
+	if token == "" {
+		return
+	}
+	secretEnv["TOFI_USAGE_TOKEN"] = token
+	secretEnv["TOFI_USAGE_PROVIDER"] = provider
+	secretEnv["TOFI_USAGE_URL"] = fmt.Sprintf("http://127.0.0.1:%d/api/v1/internal/usage", s.config.Port)
 }
 
 // buildSkillToolsFromNames loads skills by name and builds tools.
@@ -154,25 +203,19 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]agent.Sk
 			skillInstructions = append(skillInstructions, st.Instructions)
 		}
 
-		// Resolve secrets: user DB first, then system env fallback
+		// Resolve secrets via shared 3-tier helper. Silently skip unresolved
+		// secrets — this path is used by chat where scripts often handle
+		// missing keys with a DuckDuckGo-style fallback.
 		for _, secretName := range requiredSecrets {
 			if _, ok := secretEnv[secretName]; ok {
 				continue
 			}
-			// 1. Try user's own key from encrypted DB
-			secretRec, err := s.db.GetSecret(userID, secretName)
-			if err == nil {
-				val, err := crypto.Decrypt(secretRec.EncryptedValue)
-				if err == nil && val != "" {
-					secretEnv[secretName] = val
-					continue
-				}
+			val, _ := s.resolveSecret(userID, secretName)
+			if val == "" {
+				continue
 			}
-			// 2. Fallback to system environment variable
-			if sysVal := os.Getenv(secretName); sysVal != "" {
-				secretEnv[secretName] = sysVal
-			}
-			// 3. If neither exists, don't inject — let the script handle fallback
+			secretEnv[secretName] = val
+			s.injectUsageCallback(userID, secretName, secretEnv)
 		}
 	}
 

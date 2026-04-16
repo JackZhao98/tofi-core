@@ -81,6 +81,9 @@ type Server struct {
 	// Per-user rate limiter
 	rateLimiter *RateLimiter
 
+	// Short-lived tokens issued to skills for the internal usage callback.
+	usageTokens *usageTokenStore
+
 	// Access token for token-mode auth (read from config.yaml)
 	accessToken string
 }
@@ -137,6 +140,7 @@ func NewServer(config Config) (*Server, error) {
 		previewSessions: make(map[string]*PreviewSession),
 		chatStore:       chat.NewStore(config.HomeDir, db),
 		rateLimiter:     NewRateLimiter(rpm),
+		usageTokens:     newUsageTokenStore(),
 	}, nil
 }
 
@@ -522,6 +526,16 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/secrets", s.AdminMiddleware(s.handleAdminListSecrets))
 	mux.HandleFunc("DELETE /api/v1/admin/secrets/{id}", s.AdminMiddleware(s.handleAdminDeleteSecret))
 	mux.HandleFunc("GET /api/v1/admin/usage", s.AdminMiddleware(s.handleAdminGetUsage))
+
+	// Admin: 3rd-party service keys (Brave, etc.) + usage tracking
+	mux.HandleFunc("GET /api/v1/admin/service-keys", s.AdminMiddleware(s.handleAdminListServiceKeys))
+	mux.HandleFunc("PUT /api/v1/admin/service-keys/{provider}", s.AdminMiddleware(s.handleAdminSetServiceKey))
+	mux.HandleFunc("DELETE /api/v1/admin/service-keys/{provider}", s.AdminMiddleware(s.handleAdminDeleteServiceKey))
+	mux.HandleFunc("GET /api/v1/admin/service-keys/{provider}/usage", s.AdminMiddleware(s.handleAdminServiceKeyUsage))
+
+	// Internal loopback endpoint used by skills to report API usage. No
+	// AuthMiddleware — gated by a per-run token + loopback-only check.
+	mux.HandleFunc("POST /api/v1/internal/usage", s.handleInternalUsage)
 
 	// API Documentation
 	s.registerDocsRoutes(mux)

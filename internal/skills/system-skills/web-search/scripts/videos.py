@@ -20,6 +20,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _usage import report_usage
+
 
 def main():
     api_key = os.environ.get("BRAVE_API_KEY", "")
@@ -72,6 +75,7 @@ def main():
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        report_usage()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         print(f"Brave Videos API error (HTTP {e.code}): {body}")
