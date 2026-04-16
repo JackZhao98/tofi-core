@@ -110,6 +110,12 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetSkill GET /api/v1/skills/{id} — 获取 Skill 详情
+//
+// id formats supported:
+//   "<bare-name>"          — try DB; then system embed FS; then user filesystem
+//   "system/<name>"        — embed FS only
+//   "user/<name>"          — current user's filesystem only
+//   "public/<name>"        — DB (public scope)
 func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -117,14 +123,76 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	skill, err := s.db.GetSkill(id)
-	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrSkillNotFound, "skill not found", "")
+	// 1) DB lookup (covers public/* and any DB-registered skills).
+	if skill, err := s.db.GetSkill(id); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(skill)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(skill)
+	// Strip optional "system/" or "user/" prefix to derive bare name.
+	bareName := id
+	scope := ""
+	if idx := strings.Index(id, "/"); idx > 0 {
+		scope = id[:idx]
+		bareName = id[idx+1:]
+	}
+
+	// 2) System (embed FS) — only when scope is empty or "system".
+	if scope == "" || scope == "system" {
+		sysSkills := skills.LoadAllSystemSkills()
+		if sf, ok := sysSkills[bareName]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(skillFileToRecord("system/"+bareName, "system", "builtin", "system", sf))
+			return
+		}
+	}
+
+	// 3) User filesystem — needs auth context.
+	if scope == "" || scope == "user" {
+		if userIDVal := r.Context().Value(UserContextKey); userIDVal != nil {
+			if userID, ok := userIDVal.(string); ok && userID != "" {
+				localStore := skills.NewLocalStore(s.config.HomeDir)
+				if sf, err := localStore.LoadSkill(userID, bareName); err == nil && sf != nil {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(skillFileToRecord("user/"+bareName, "user", "local", userID, sf))
+					return
+				}
+			}
+		}
+	}
+
+	writeJSONError(w, http.StatusNotFound, ErrSkillNotFound, "skill not found", "")
+}
+
+// skillFileToRecord adapts an in-memory SkillFile (system/embed or user/disk)
+// into the same SkillRecord JSON shape the DB-backed branch returns, so the
+// frontend doesn't have to deal with two response variants.
+func skillFileToRecord(id, scope, source, userID string, sf *models.SkillFile) *storage.SkillRecord {
+	manifestJSON := ""
+	if b, err := json.Marshal(sf.Manifest); err == nil {
+		manifestJSON = string(b)
+	}
+	required := ""
+	if len(sf.Manifest.RequiredSecrets) > 0 {
+		if b, err := json.Marshal(sf.Manifest.RequiredSecrets); err == nil {
+			required = string(b)
+		}
+	}
+	return &storage.SkillRecord{
+		ID:              id,
+		Name:            sf.Manifest.Name,
+		Description:     sf.Manifest.Description,
+		Version:         sf.Manifest.Version,
+		Scope:           scope,
+		Source:          source,
+		ManifestJSON:    manifestJSON,
+		Instructions:    sf.Body,
+		AllowedTools:    sf.Manifest.AllowedTools,
+		RequiredSecrets: required,
+		HasScripts:      len(sf.ScriptDirs) > 0,
+		UserID:          userID,
+	}
 }
 
 // handleCreateSkill POST /api/v1/skills/create — 表单式创建 Skill
