@@ -206,7 +206,6 @@ func (s *Server) handleGetChatSessionCapabilities(w http.ResponseWriter, r *http
 		{"tofi_get_time", "Get current date, time, and timezone"},
 		{"tofi_get_user", "Get the current user's identity"},
 		{"tofi_session_info", "Get token usage, cost, and session stats"},
-		{"tofi_list_models", "List models available to this user"},
 		// Memory
 		{"tofi_save_memory", "Save a persistent memory entry"},
 		{"tofi_recall_memory", "Recall persistent memory entries"},
@@ -229,7 +228,6 @@ func (s *Server) handleGetChatSessionCapabilities(w http.ResponseWriter, r *http
 		{"tofi_list_app_runs", "List recent runs for an app"},
 		{"tofi_get_run_detail", "Get details for a specific run"},
 		{"tofi_display_app_plan", "Render the app creation plan to the user"},
-		{"tofi_update_progress", "Push a progress update to the UI"},
 	}
 
 	// Available skills: system embed FS + this user's filesystem.
@@ -928,6 +926,7 @@ Your text output is your ONLY deliverable. The platform runtime captures your fi
 
 	// User main chat: minimal system prompt — all detailed instructions live in skills
 	prompt := fmt.Sprintf(`You are Tofi, a capable AI assistant.
+You are speaking with user "%s". For richer profile info (locale, plan, etc.) call tofi_get_user.
 Respond in the same language as the user. Be concise and helpful.
 Think before acting. If a tool fails, try a different approach. Always deliver real results, never give up.
 
@@ -944,7 +943,7 @@ Tofi has built-in connectors for Telegram, Slack, Discord, and Email. These are 
 - If the user asks to "send results to Telegram" or similar, explain that they need to configure the Telegram connector in Settings, and then any App run will automatically notify them.
 - Do NOT try to search for or install third-party Telegram/Slack/notification skills — the functionality is built-in.
 
-Current time: %s`, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
+Current time: %s`, userID, time.Now().Format("2006-01-02 15:04:05 MST (Monday)"))
 
 	return prompt
 }

@@ -25,7 +25,6 @@ func (s *Server) buildAppTools(userID string) []agent.ExtraBuiltinTool {
 		s.buildListNotifyTargetsTool(userID),
 		s.buildSetNotifyTargetsTool(userID),
 		s.buildGetRunDetailTool(userID),
-		s.buildListModelsTool(userID),
 		buildDisplayAppPlanTool(),
 	}
 }
@@ -779,47 +778,8 @@ Use the session_id from tofi_list_app_runs. Returns the complete conversation in
 	}
 }
 
-// ── tofi_list_models ──
-
-func (s *Server) buildListModelsTool(userID string) agent.ExtraBuiltinTool {
-	return agent.ExtraBuiltinTool{
-		Schema: provider.Tool{
-			Name:        "tofi_list_models",
-			Description: "List all available AI models that the user has enabled. Returns model name, provider, context window, and cost. Use this when selecting a model for an App.",
-			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		Handler: func(args map[string]any) (string, error) {
-			// Get user's enabled models
-			val, _ := s.db.GetSetting("enabled_models", userID)
-			var enabledSet map[string]bool
-			if val != "" {
-				var enabledList []string
-				json.Unmarshal([]byte(val), &enabledList)
-				enabledSet = make(map[string]bool, len(enabledList))
-				for _, m := range enabledList {
-					enabledSet[m] = true
-				}
-			}
-
-			all := provider.ListAllModels()
-			var out strings.Builder
-			for name, info := range all {
-				if enabledSet != nil && !enabledSet[name] {
-					continue
-				}
-				out.WriteString(fmt.Sprintf("- %s (provider: %s, context: %dk, cost: $%.2f/$%.2f per 1M in/out)\n",
-					name, info.Provider, info.ContextWindow/1000, info.InputCostPer1M, info.OutputCostPer1M))
-			}
-			if out.Len() == 0 {
-				return "No models enabled. User needs to configure models via 'tofi config'.", nil
-			}
-			return out.String(), nil
-		},
-	}
-}
+// tofi_list_models removed — model selection happens in the UI's ModelPicker,
+// not via the AI. Removed 2026-04-16 along with tofi_update_progress.
 
 // ── Helpers ──
 

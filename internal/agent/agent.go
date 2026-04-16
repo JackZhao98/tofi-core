@@ -165,32 +165,8 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		},
 	})
 
-	// Add built-in 'update_progress' tool (if progress callback is configured)
-	if cfg.OnProgress != nil {
-		allTools = append(allTools, provider.Tool{
-			Name:        "tofi_update_progress",
-			Description: "Update the progress of the current task. Use this to report your progress as you work through the task.",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"progress": map[string]interface{}{
-						"type":        "number",
-						"description": "Progress percentage (0-100)",
-					},
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Task status: 'working', 'done', or 'failed'",
-						"enum":        []string{"working", "done", "failed"},
-					},
-					"message": map[string]interface{}{
-						"type":        "string",
-						"description": "Brief status message or result summary",
-					},
-				},
-				"required": []string{"progress"},
-			},
-		})
-	}
+	// tofi_update_progress was removed — never wired to anything visible in
+	// the web UI; the AI's narration in chunks already communicates progress.
 
 	// Unified tool registry — replaces the old extraHandlers map
 	registry := NewToolRegistry()
@@ -871,7 +847,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 
 			// Log step start (skip internal tools like wait and update_progress)
 			toolStartTime := time.Now()
-			if fnName != "tofi_wait" && fnName != "tofi_update_progress" && cfg.OnStepStart != nil {
+			if fnName != "tofi_wait" && cfg.OnStepStart != nil {
 				argsStr := fnArgs
 				if len(argsStr) > 1000 {
 					argsStr = argsStr[:1000] + "..."
@@ -916,7 +892,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				}
 				// Record in trace
 				state.Trace.RecordToolExec(state.Step, fnName, fnArgs, result, true, time.Since(toolStartTime))
-				if fnName != "tofi_wait" && fnName != "tofi_update_progress" && cfg.OnStepDone != nil {
+				if fnName != "tofi_wait" && cfg.OnStepDone != nil {
 					cfg.OnStepDone(fnName, result, durationMs)
 				}
 				if cfg.OnToolCall != nil {
@@ -936,34 +912,6 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				messages = append(messages, provider.Message{
 					Role:       "tool",
 					Content:    fmt.Sprintf("Waited for %.1f seconds.", secVal),
-					ToolCallID: callID,
-					ToolName:   fnName,
-				})
-				continue
-			}
-
-			// Handle Built-in 'update_progress'
-			if fnName == "tofi_update_progress" && cfg.OnProgress != nil {
-				progress := 0
-				if p, ok := argsMap["progress"].(float64); ok {
-					progress = int(p)
-				}
-				status := "working"
-				if s, ok := argsMap["status"].(string); ok && s != "" {
-					status = s
-				}
-				message := ""
-				if m, ok := argsMap["message"].(string); ok {
-					message = m
-				}
-
-				cfg.OnProgress(status, progress, message)
-				resultMsg := fmt.Sprintf("Progress updated: %d%% — %s", progress, message)
-				ctx.Log("[Progress] %s", resultMsg)
-
-				messages = append(messages, provider.Message{
-					Role:       "tool",
-					Content:    resultMsg,
 					ToolCallID: callID,
 					ToolName:   fnName,
 				})

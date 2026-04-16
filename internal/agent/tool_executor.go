@@ -40,8 +40,6 @@ func isToolConcurrencySafe(name string) bool {
 		return true
 	case name == "file_list":
 		return true
-	case name == "tofi_update_progress":
-		return true
 	}
 
 	// MCP tools and extra handlers are generally safe (independent API calls)
