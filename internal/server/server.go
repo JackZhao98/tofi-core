@@ -489,6 +489,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/plans/{planId}", s.AuthMiddleware(s.handleGetPlan))
 	mux.HandleFunc("POST /api/v1/plans/{planId}/approve", s.AuthMiddleware(s.handleApprovePlan))
 	mux.HandleFunc("DELETE /api/v1/plans/{planId}", s.AuthMiddleware(s.handleDeletePlan))
+	mux.HandleFunc("POST /api/v1/agents/plan", s.AuthMiddleware(s.handlePlanAgent))
 	mux.HandleFunc("POST /api/v1/agents/parse-schedule", s.AuthMiddleware(s.handleParseSchedule))
 	mux.HandleFunc("POST /api/v1/agents/manager/chat", s.AuthMiddleware(s.handleManagerChat))
 	mux.HandleFunc("GET /api/v1/agents", s.AuthMiddleware(s.handleListApps))

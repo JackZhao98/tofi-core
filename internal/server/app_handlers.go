@@ -578,6 +578,80 @@ func (s *Server) handleGetAppRunLog(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// handlePlanAgent POST /api/v1/agents/plan
+// Lightweight LLM call to generate an agent config from a description.
+func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+
+	var req struct {
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "invalid request body", "")
+		return
+	}
+	if req.Description == "" {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "description is required", "")
+		return
+	}
+
+	systemPrompt := `You are an AI agent architect. Given a user's description, generate a complete agent configuration as JSON.
+
+Output ONLY valid JSON in this exact format:
+{
+  "name": "Short Name",
+  "description": "One-line description of what the agent does",
+  "prompt": "The task prompt template. Use {{variable}} for runtime parameters.",
+  "system_prompt": "Persona and behavior rules for the AI",
+  "model": "gpt-5-mini"
+}
+
+Rules:
+- Keep name short (2-4 words)
+- prompt should be actionable and specific, using {{variable}} for user-supplied values
+- system_prompt defines the AI's persona and constraints
+- model should be "gpt-5-mini" unless the task needs strong reasoning (use "claude-sonnet-4-20250514")
+- Respond in the same language as the user's description`
+
+	model, apiKey, _, err := s.resolveModelAndKey(userID, "")
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("no API key available: %v", err), "")
+		return
+	}
+
+	p, err := provider.NewForModel(model, apiKey, provider.WithDefaultRetry())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("failed to create provider: %v", err), "")
+		return
+	}
+	llmResp, err := p.Chat(r.Context(), &provider.ChatRequest{
+		Model:  model,
+		System: systemPrompt,
+		Messages: []provider.Message{
+			{Role: "user", Content: req.Description},
+		},
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("LLM call failed: %v", err), "")
+		return
+	}
+
+	cleaned := cleanJSONResponse(llmResp.Content)
+
+	var parsed json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"raw":   llmResp.Content,
+			"error": "LLM response is not valid JSON, please try again",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(parsed)
+}
+
 // handleParseSchedule POST /api/v1/agents/parse-schedule
 func (s *Server) handleParseSchedule(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
