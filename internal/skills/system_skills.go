@@ -14,7 +14,11 @@ import (
 	"tofi-core/internal/storage"
 )
 
-//go:embed system-skills/*
+// all: prefix is required so embed includes files starting with "_" (e.g.
+// scripts/_usage.py — Python helper modules conventionally use a leading
+// underscore). Default embed semantics skip them, which silently breaks
+// scripts that import them at runtime.
+//go:embed all:system-skills/*
 var systemSkillsFS embed.FS
 
 // GetSystemSkillsFS returns the embedded filesystem for external verification (e.g., doctor checks).
