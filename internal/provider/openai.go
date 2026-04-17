@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+// supportsReasoning returns true for OpenAI models with reasoning capability
+// (the o-series and gpt-5.x family). Other Responses-API models like gpt-4o
+// reject the reasoning + include payload fields.
+func supportsReasoning(model string) bool {
+	if strings.HasPrefix(model, "gpt-5") {
+		return true
+	}
+	if strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "o4") {
+		return true
+	}
+	return false
+}
+
 // openaiResponses implements Provider using the OpenAI Responses API.
 // This is the primary API for all OpenAI native models.
 // It includes an automatic fallback to Chat Completions API when the
@@ -114,14 +127,17 @@ func (o *openaiResponses) buildPayload(req *ChatRequest, stream bool) map[string
 		payload["stream"] = true
 	}
 
-	// Enable reasoning with summary for models that support it.
-	// include: ["reasoning.encrypted_content"] is critical — without it,
-	// OpenAI often returns empty summary arrays.
-	payload["reasoning"] = map[string]interface{}{
-		"effort":  "medium",
-		"summary": "auto",
+	// Enable reasoning with summary ONLY for models that support it.
+	// gpt-4o / gpt-4-turbo etc. reject the include + reasoning fields with
+	// "Encrypted content is not supported with this model.". Reasoning is
+	// the o-series (o1, o3, o4) and gpt-5.x family.
+	if supportsReasoning(req.Model) {
+		payload["reasoning"] = map[string]interface{}{
+			"effort":  "medium",
+			"summary": "auto",
+		}
+		payload["include"] = []string{"reasoning.encrypted_content"}
 	}
-	payload["include"] = []string{"reasoning.encrypted_content"}
 
 	// Convert messages to Responses API input format
 	input := o.convertMessages(req.Messages)
