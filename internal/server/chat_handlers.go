@@ -738,6 +738,22 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 	}
 
+	// Emit a "tool_call started" event the instant the agent decides to
+	// invoke a tool, BEFORE we run it. Without this, long-running tools
+	// (notably tofi_sub_agent) leave the parent stream silent for minutes
+	// and the UI has no way to render a "running…" badge — the user sees
+	// nothing happening and assumes the chat froze.
+	if agentCfg.OnStepStart == nil {
+		agentCfg.OnStepStart = func(toolName, args string) {
+			emit("tool_call", map[string]any{
+				"tool":  toolName,
+				"input": args,
+				// no output, no duration — the matching OnToolCall fill-in
+				// arrives when the tool finishes.
+			})
+		}
+	}
+
 	if opts != nil && opts.OnContextCompact != nil {
 		agentCfg.OnContextCompact = opts.OnContextCompact
 	} else {
