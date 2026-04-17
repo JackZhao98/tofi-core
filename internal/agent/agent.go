@@ -69,6 +69,11 @@ type AgentConfig struct {
 	Hooks            *Hooks                                                    // Optional: pre/post hooks for tool calls, API calls, compaction
 	AskUserFn        func(question string, options []string) (string, error)   // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
 	IsSubAgent       bool                                                      // True when running as a sub-agent (prevents recursive spawning)
+	// OnSubAgentEvent forwards live sub-agent activity (chunks, tool starts,
+	// tool completions) up to the parent's emit channel. The sub-agent's
+	// own loop wires its hooks through this so the parent UI can render a
+	// live progress view inside the SubAgentRunCard. nil = no forwarding.
+	OnSubAgentEvent func(eventType string, data map[string]interface{})
 }
 
 type MCPServerConfig struct {

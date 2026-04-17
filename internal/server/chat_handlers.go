@@ -754,6 +754,13 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 	}
 
+	// Forward live sub-agent activity (chunks, tool starts, tool finishes)
+	// so the SubAgentRunCard in the UI can render an in-flight log instead
+	// of a faceless 'sub-agent running…' spinner.
+	agentCfg.OnSubAgentEvent = func(eventType string, data map[string]interface{}) {
+		emit(eventType, data)
+	}
+
 	if opts != nil && opts.OnContextCompact != nil {
 		agentCfg.OnContextCompact = opts.OnContextCompact
 	} else {

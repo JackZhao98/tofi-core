@@ -90,6 +90,7 @@ func buildSubAgentTool(parentCfg AgentConfig) ToolDef {
 			)
 
 			parentOnTool := parentCfg.OnToolCall
+			forwardEvent := parentCfg.OnSubAgentEvent
 			subOnTool := func(toolName, input, output string, durationMs int64) {
 				mu.Lock()
 				toolTrace = append(toolTrace, subAgentToolEntry{
@@ -98,10 +99,34 @@ func buildSubAgentTool(parentCfg AgentConfig) ToolDef {
 					DurationMs: durationMs,
 				})
 				mu.Unlock()
-				// Don't forward to parent's OnToolCall — those are wired to
-				// the parent session's persistence, and we don't want sub-
-				// agent tool calls written into the parent transcript.
+				// Forward as a live event so the parent UI can show what
+				// the sub-agent is actually doing while it runs. Don't
+				// invoke parent's OnToolCall — that would write the call
+				// into the parent's transcript, polluting context.
+				if forwardEvent != nil {
+					forwardEvent("sub_agent_tool_call", map[string]interface{}{
+						"tool":        toolName,
+						"input":       input,
+						"output":      output,
+						"duration_ms": durationMs,
+					})
+				}
 				_ = parentOnTool
+			}
+			subOnStepStart := func(toolName, args string) {
+				if forwardEvent != nil {
+					forwardEvent("sub_agent_tool_call", map[string]interface{}{
+						"tool":  toolName,
+						"input": args,
+					})
+				}
+			}
+			subOnChunk := func(_, delta string) {
+				if forwardEvent != nil {
+					forwardEvent("sub_agent_chunk", map[string]interface{}{
+						"delta": delta,
+					})
+				}
 			}
 
 			subCfg := AgentConfig{
@@ -123,8 +148,24 @@ func buildSubAgentTool(parentCfg AgentConfig) ToolDef {
 				SecretEnv:       parentCfg.SecretEnv,
 				Hooks:           parentCfg.Hooks,
 				OnToolCall:      subOnTool,
+				OnStepStart:     subOnStepStart,
+				OnStreamChunk:   subOnChunk,
 				IsSubAgent:      true, // prevent recursive spawning
 			}
+
+			// Announce start so the UI can mark the SubAgentRunCard as live.
+			if forwardEvent != nil {
+				forwardEvent("sub_agent_started", map[string]interface{}{
+					"description": description,
+				})
+			}
+			defer func() {
+				if forwardEvent != nil {
+					forwardEvent("sub_agent_finished", map[string]interface{}{
+						"description": description,
+					})
+				}
+			}()
 
 			if m, _ := args["model"].(string); m != "" {
 				subCfg.Model = m
