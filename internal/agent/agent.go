@@ -200,27 +200,11 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			skillMap[cfg.SkillTools[i].Name] = &cfg.SkillTools[i]
 		}
 
-		// Pre-activate skills from previous turns in the same session
-		for _, preloadName := range cfg.PreloadedSkills {
-			if skill, ok := skillMap[preloadName]; ok && !loadedSkills[preloadName] {
-				loadedSkills[preloadName] = true
-				// Activate bundled tools silently (AI already saw instructions in previous turns)
-				for _, bt := range skill.BundledTools {
-					alreadyRegistered := false
-					for _, t := range allTools {
-						if t.Name == bt.Schema.Name {
-							alreadyRegistered = true
-							break
-						}
-					}
-					if !alreadyRegistered {
-						registry.Register(WrapExtraBuiltin(bt))
-						allTools = append(allTools, bt.Schema)
-					}
-				}
-				log.Printf("[chat] [Agent] Pre-activated skill '%s' (%d tools)", preloadName, len(skill.BundledTools))
-			}
-		}
+		// PreloadedSkills handling moved into the eager-load loop below — that
+		// path also registers DirectTools (script-backed tools defined in
+		// SKILL.md's `tools:` block). The previous Pre-activate loop only
+		// registered BundledTools and then short-circuited tofi_load_skill,
+		// so DirectTools like web_search / web_fetch never reached the model.
 
 		// Skill loader closure — does all the side effects (registers bundled
 		// tools, sets up symlinks, registers DirectTools, etc) and returns the
