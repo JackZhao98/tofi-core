@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // sessionEvent represents a single SSE event emitted during a chat agent run.
@@ -140,6 +141,16 @@ func (h *sessionHub) close() {
 // open would just hang the client. The client re-subscribes via GET /stream
 // after responding.
 func forwardHubToSSE(w http.ResponseWriter, flusher http.Flusher, ch <-chan sessionEvent, done <-chan struct{}) {
+	// Heartbeat keeps the SSE connection alive during long-running tool
+	// executions (notably tofi_sub_agent, which can block for minutes with
+	// no chunks emitted). Without this, browsers / Caddy / nginx drop idle
+	// SSE after ~60-90s and the frontend renders the assistant message as
+	// a "Connection lost" error even though the agent is still working.
+	// SSE comments (lines starting with ':') are ignored by EventSource
+	// but reset proxy idle timers.
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case e, ok := <-ch:
@@ -155,6 +166,11 @@ func forwardHubToSSE(w http.ResponseWriter, flusher http.Flusher, ch <-chan sess
 			if e.Type == "hold" {
 				return
 			}
+		case <-heartbeat.C:
+			// SSE comment — keeps proxies + browser EventSource alive,
+			// not visible to the client's event handlers.
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
 		case <-done:
 			return
 		}
