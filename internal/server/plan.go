@@ -50,6 +50,21 @@ var PlanDefs = map[string]PlanLimits{
 		RunHistoryDays:    0, // unlimited
 		AllowedSkillTiers: []string{"free", "developer"},
 	},
+	// Pro unlocks higher-margin skills (pro_pack) + higher concurrency
+	// for teams/power users. Numbers were sized against a ~$0.018
+	// average cost/run: E[cost] ~ $18 leaves ~25-40% margin at the
+	// $29.99 founding / $39.99 steady-state prices.
+	"pro": {
+		MaxApps:           0, // unlimited
+		DailyRuns:         100,
+		MonthlyRuns:       3000,
+		ConcurrentRuns:    5,
+		WebhookAPI:        true,
+		CustomCron:        true,
+		EmailNotify:       true,
+		RunHistoryDays:    0, // unlimited
+		AllowedSkillTiers: []string{"free", "developer", "pro"},
+	},
 	// Admin is a non-purchasable, invite-only tier. No limits of any kind.
 	// AdminLimits mirrors this so legacy callers that reach for the
 	// package-level var instead of PlanDefs["admin"] still get zeros.
@@ -66,11 +81,16 @@ var PlanDefs = map[string]PlanLimits{
 	},
 }
 
-// PlanPrice maps plan names to their monthly price in USD cents. Admin is
-// not purchasable so it contributes $0 to MRR.
+// PlanPrice maps plan names to their monthly price in USD cents at the
+// current sale rate. This is the price we accrue against COGS for margin
+// math; it is NOT the price users see at checkout — that's driven by
+// Stripe price IDs (see stripe.go), which can differ per-user (founding
+// rate grandfathered forever). Admin is not purchasable so it contributes
+// $0 to MRR.
 var PlanPrice = map[string]int64{
 	"free":      0,
-	"developer": 500, // $5.00
+	"developer": 999,  // $9.99 founding / $13.99 launch (founding rate shown here)
+	"pro":       2999, // $29.99 founding / $39.99 launch
 	"admin":     0,
 }
 

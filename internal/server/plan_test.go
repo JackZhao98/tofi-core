@@ -60,6 +60,24 @@ func TestPlanAllowsSkill(t *testing.T) {
 			want:      false,
 		},
 		{
+			name:      "pro plan allows free skill",
+			plan:      PlanDefs["pro"],
+			skillTier: "free",
+			want:      true,
+		},
+		{
+			name:      "pro plan allows developer skill",
+			plan:      PlanDefs["pro"],
+			skillTier: "developer",
+			want:      true,
+		},
+		{
+			name:      "pro plan allows pro skill",
+			plan:      PlanDefs["pro"],
+			skillTier: "pro",
+			want:      true,
+		},
+		{
 			name:      "admin bypass (nil) allows anything",
 			plan:      PlanDefs["admin"],
 			skillTier: "pro",
