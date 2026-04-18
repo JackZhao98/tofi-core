@@ -8,6 +8,67 @@ import (
 	"time"
 )
 
+// --- Per-run budget caps (the "single runaway run can't burn a day" guard) ---
+//
+// These are the defaults applied to every chat / app run that does not have
+// a user-scoped or system-scoped override. They are deliberately tight for
+// free tier; scaling up for paid tier is a config change, not a code change.
+const (
+	defaultMaxRunCost     = 0.20             // $0.20 real USD cost per run
+	defaultMaxRunLLMCalls = 15               // 15 LLM API calls per run
+	defaultMaxRunDuration = 3 * time.Minute  // 3 minutes wall-clock per run
+)
+
+// resolveRunCaps returns the per-run budget to enforce for userID. The
+// resolution order is:
+//  1. Hard-coded defaults (free tier).
+//  2. System-scoped settings (admin default for all users).
+//  3. User-scoped settings (admin override for a specific user).
+// Each later layer overrides the earlier one per-field. A negative or
+// unparseable value is ignored.
+func (s *Server) resolveRunCaps(userID string) (float64, int, time.Duration) {
+	cost := defaultMaxRunCost
+	llm := defaultMaxRunLLMCalls
+	dur := defaultMaxRunDuration
+
+	readFloat := func(scope, key string) (float64, bool) {
+		v, err := s.db.GetSetting(key, scope)
+		if err != nil || v == "" {
+			return 0, false
+		}
+		x, err := strconv.ParseFloat(v, 64)
+		if err != nil || x <= 0 {
+			return 0, false
+		}
+		return x, true
+	}
+	readInt := func(scope, key string) (int, bool) {
+		v, err := s.db.GetSetting(key, scope)
+		if err != nil || v == "" {
+			return 0, false
+		}
+		x, err := strconv.Atoi(v)
+		if err != nil || x <= 0 {
+			return 0, false
+		}
+		return x, true
+	}
+
+	for _, scope := range []string{"system", userID} {
+		if x, ok := readFloat(scope, "run_cap_cost"); ok {
+			cost = x
+		}
+		if x, ok := readInt(scope, "run_cap_llm_calls"); ok {
+			llm = x
+		}
+		if x, ok := readInt(scope, "run_cap_duration_sec"); ok {
+			dur = time.Duration(x) * time.Second
+		}
+	}
+
+	return cost, llm, dur
+}
+
 // checkSpendCap checks if user has exceeded daily or monthly spend limits.
 // Returns nil if within limits or no limits are set.
 func (s *Server) checkSpendCap(userID string) error {

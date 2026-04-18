@@ -692,6 +692,12 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 	}
 
+	// Resolve this user's per-run budget (free-tier defaults unless admin
+	// overrode system-wide or user-specific settings). These caps prevent
+	// any single agent loop from burning through the user's daily quota in
+	// one runaway "deep research" session.
+	maxRunCost, maxRunLLMCalls, maxRunDuration := s.resolveRunCaps(userID)
+
 	agentCfg := agent.AgentConfig{
 		System:          systemPrompt,
 		Messages:        providerMessages,
@@ -704,6 +710,9 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		UserDir:         userID,
 		Executor:        s.executor,
 		SecretEnv:       secretEnv,
+		MaxRunCost:      maxRunCost,
+		MaxRunLLMCalls:  maxRunLLMCalls,
+		MaxRunDuration:  maxRunDuration,
 		// Incremental persistence: every assistant/tool message is written to
 		// the session XML the moment the agent produces it. This keeps the
 		// stored conversation in lockstep with what the UI streamed so that

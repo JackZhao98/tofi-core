@@ -68,6 +68,13 @@ type AgentConfig struct {
 	LiveUsage        *provider.Usage                                           // Optional: updated in real-time during agent loop for tools to read
 	Hooks            *Hooks                                                    // Optional: pre/post hooks for tool calls, API calls, compaction
 	OnMessage        func(msg provider.Message)                                // Optional: called immediately after each assistant/tool message is appended. Used for incremental chat session persistence so a browser refresh or hold doesn't lose in-progress turns. Internal synthetic user continuations are NOT emitted.
+	// Per-run budget caps. Zero = no limit. When exceeded, the loop injects a
+	// "wrap up now" directive and denies further tool calls, forcing the model
+	// to produce a final answer with what it already has. Prevents a single
+	// runaway "deep research" loop from burning through the user's daily quota.
+	MaxRunCost       float64                                                   // Optional: max real USD cost for this run (uses Tracker.TotalCost())
+	MaxRunLLMCalls   int                                                       // Optional: max number of LLM API calls before forced wrap-up
+	MaxRunDuration   time.Duration                                             // Optional: max wall-clock duration before forced wrap-up
 	AskUserFn        func(question string, options []string) (string, error)   // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
 	IsSubAgent       bool                                                      // True when running as a sub-agent (prevents recursive spawning)
 	// OnSubAgentEvent forwards live sub-agent activity (chunks, tool starts,
@@ -598,6 +605,13 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		allTools = append(allTools, subAgentTool.Schema())
 	}
 
+	// Per-run budget tracking. Once any budget is crossed we flip
+	// budgetWrapUp=true, inject a "wrap up now" user directive, and disallow
+	// further tool calls. If the model still tries to call tools on the next
+	// iteration we force-terminate with whatever text content we have.
+	runStart := time.Now()
+	budgetWrapUp := false
+
 	for !state.Phase.IsTerminal() {
 		state.Step++
 		if state.Step > maxSteps {
@@ -731,6 +745,62 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		cfg.Hooks.callPostAPICall(state.Step, resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.HasToolCalls())
 		if cfg.LiveUsage != nil {
 			*cfg.LiveUsage = state.TotalUsage
+		}
+
+		// Per-run budget guard. After each LLM call we check whether this
+		// specific run has crossed any of its caps. The first time it does,
+		// we flip budgetWrapUp, strip any pending tool calls from the
+		// assistant response, and inject a user directive instructing the
+		// model to produce a final answer now. If the next LLM call STILL
+		// returns tool calls (model ignored the directive), we force-terminate
+		// with whatever text content is available — no more tool execution,
+		// no more LLM calls — so one runaway research loop can't burn through
+		// the user's day.
+		// Budget guard fires only when the model wants to go deeper (i.e.
+		// asked for more tool calls). If the model already produced a
+		// tool-call-free final answer, let the normal termination path
+		// downstream handle it — even over budget, accepting the final
+		// answer is the friendliest outcome.
+		if resp.HasToolCalls() {
+			if exceeded, reason := checkRunBudget(&cfg, state.LLMCalls, state.Tracker.TotalCost(), runStart); exceeded {
+				if !budgetWrapUp {
+					budgetWrapUp = true
+					ctx.Log("[Agent] Per-run budget exceeded (%s) — injecting wrap-up directive", reason)
+					// Keep the assistant text but drop tool calls, so the
+					// history is consistent (no dangling tool_call without
+					// a matching tool result).
+					messages = appendAndEmit(messages, provider.Message{
+						Role:    "assistant",
+						Content: resp.Content,
+					})
+					// Synthetic user directive — intentionally NOT emitted
+					// via OnMessage so it doesn't clutter the persisted
+					// session with system bookkeeping the user never typed.
+					messages = append(messages, provider.Message{
+						Role:    "user",
+						Content: fmt.Sprintf("You have reached this run's budget (%s). Do not call any more tools. Provide your best final answer now using only the information you already have.", reason),
+					})
+					// Persist the appends into state BEFORE continuing so
+					// the next iteration's `messages := state.Messages`
+					// reload doesn't lose what we just wrote.
+					state = state.WithMessages(messages)
+					continue
+				}
+				// Already in wrap-up mode AND the model came back with
+				// more tool calls. Force termination to honor the cap.
+				ctx.Log("[Agent] Model ignored wrap-up directive — forcing termination")
+				finalContent := stripThinkTags(resp.Content)
+				if finalContent == "" {
+					finalContent = fmt.Sprintf("[Run stopped — %s. Partial results only; no final answer produced.]", reason)
+				}
+				messages = appendAndEmit(messages, provider.Message{
+					Role:    "assistant",
+					Content: finalContent,
+				})
+				state = state.WithMessages(messages)
+				state = state.WithResult(finalContent)
+				return state.ToResult(cfg.Model), nil
+			}
 		}
 
 		// Append Assistant Message
