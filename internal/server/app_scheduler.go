@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"tofi-core/internal/apps"
+	"tofi-core/internal/bridge"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/connect"
 	"tofi-core/internal/agent"
@@ -122,7 +124,18 @@ func (as *AppScheduler) pollAndDispatch() {
 				log.Printf("[app-scheduler] Failed to mark run %s as running: %v", r.ID[:8], err)
 				continue
 			}
-			go as.dispatchRun(r, "", nil)
+			// Scheduled runs get a session hub too so any browser watching
+			// /chat/{id} can tune into the SSE stream mid-execution. No HTTP
+			// client is racing here (the trigger is the cron loop itself),
+			// but the contract is symmetric with DispatchRun for manual /
+			// webhook triggers — every agent loop gets one hub.
+			agentCtx, cancel := context.WithCancel(context.Background())
+			hub, hubErr := as.server.createSessionHub(r.SessionID, cancel)
+			if hubErr != nil {
+				log.Printf("[app-scheduler] session hub registration failed for %s: %v", r.ID[:8], hubErr)
+				cancel()
+			}
+			go as.dispatchRun(r, "", nil, hub, agentCtx)
 		}
 	}
 
@@ -192,12 +205,39 @@ func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverri
 	// Mark running (started_at)
 	as.server.db.UpdateAppRunStatus(run.ID, "running")
 
-	go as.dispatchRun(run, promptOverride, runtimeParams)
+	// Register the session hub SYNCHRONOUSLY here, before starting the
+	// goroutine. The HTTP response returns the session_id to the client,
+	// which then navigates to /chat/{session_id} and almost immediately
+	// POSTs /chat/sessions/{id}/stream to resume live SSE. If we registered
+	// the hub inside the goroutine, there'd be a race where the client's
+	// stream request lands before the hub exists and gets an 'idle' event
+	// (nothing to subscribe to). Registering here eliminates that race —
+	// by the time the HTTP response hits the wire, the hub is discoverable.
+	agentCtx, cancel := context.WithCancel(context.Background())
+	hub, hubErr := as.server.createSessionHub(run.SessionID, cancel)
+	if hubErr != nil {
+		// Collision means a hub already exists for this session ID —
+		// shouldn't happen with a fresh UUID, but don't block the run.
+		log.Printf("[app-run:%s] session hub already exists: %v", run.ID[:8], hubErr)
+		cancel()
+	}
+
+	go as.dispatchRun(run, promptOverride, runtimeParams, hub, agentCtx)
 	return run, nil
 }
 
-func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride string, runtimeParams map[string]interface{}) {
+func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride string, runtimeParams map[string]interface{}, hub *sessionHub, agentCtx context.Context) {
 	log.Printf("[app-run:%s] Dispatching %s run for app %s", run.ID[:8], run.Trigger, run.AppID[:8])
+
+	// Clean up the session hub on any exit path (success, failure, panic).
+	// The hub was registered synchronously in DispatchRun to avoid a race
+	// with the HTTP client's /stream resume — see the note there.
+	defer func() {
+		if hub != nil {
+			as.server.removeSessionHub(run.SessionID)
+			hub.close()
+		}
+	}()
 
 	// Check monthly run quota
 	if quotaStr, err := as.server.db.GetSetting("run_quota_monthly", run.UserID); err == nil && quotaStr != "" {
@@ -258,8 +298,17 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 	// Link run to session
 	as.server.db.UpdateAppRunStatusWithSession(run.ID, "running", sessionID)
 
+	// Forward every onEvent from the agent loop through the session hub
+	// registered in DispatchRun. The hub itself is cleaned up by our
+	// top-level defer; we just publish here.
+	onEvent := func(eventType string, data any) {
+		if hub != nil {
+			hub.publish(eventType, data)
+		}
+	}
+
 	log.Printf("[app-run:%s] Executing with chat session %s", run.ID[:8], sessionID[:8])
-	result, err := as.server.executeChatSession(run.UserID, scope, session, prompt, nil, nil)
+	result, err := as.server.executeChatSession(run.UserID, scope, session, prompt, onEvent, &bridge.ExecuteOptions{Ctx: agentCtx})
 
 	status := "done"
 	var failReason string
