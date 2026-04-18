@@ -131,12 +131,31 @@ func (s *Server) handleGetChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Activity metrics derived from message roles. These are the user-
+	// facing transparency numbers (no dollar amounts — admin only sees
+	// those via /admin/cost). A developer opening a chat detail can now
+	// tell "this run used 12 LLM calls and 47 tool invocations" and form
+	// an intuition for depth without ever seeing real cost.
+	var llmCalls, toolCalls int
+	for _, m := range session.Messages {
+		switch m.Role {
+		case "assistant":
+			llmCalls++
+		case "tool":
+			toolCalls++
+		}
+	}
+
 	response := struct {
 		*chat.Session
 		ContextUsagePercent int `json:"context_usage_percent"`
+		LLMCalls            int `json:"llm_calls"`
+		ToolCalls           int `json:"tool_calls"`
 	}{
 		Session:             session,
 		ContextUsagePercent: chat.ContextUsagePercent(session.Messages, session.Model),
+		LLMCalls:            llmCalls,
+		ToolCalls:           toolCalls,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
