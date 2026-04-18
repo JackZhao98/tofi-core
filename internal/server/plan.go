@@ -81,16 +81,16 @@ var PlanDefs = map[string]PlanLimits{
 	},
 }
 
-// PlanPrice maps plan names to their monthly price in USD cents at the
-// current sale rate. This is the price we accrue against COGS for margin
-// math; it is NOT the price users see at checkout — that's driven by
-// Stripe price IDs (see stripe.go), which can differ per-user (founding
-// rate grandfathered forever). Admin is not purchasable so it contributes
-// $0 to MRR.
+// PlanPrice maps plan names to their monthly price in USD cents. This is
+// the number the admin revenue dashboard accrues against, so it must
+// track the price users are *actually* charged — not the designed /
+// aspirational / launch price. Update this in lock-step with the Stripe
+// price ID migration, not before. Admin is not purchasable so it
+// contributes $0 to MRR.
 var PlanPrice = map[string]int64{
 	"free":      0,
-	"developer": 999,  // $9.99 founding / $13.99 launch (founding rate shown here)
-	"pro":       2999, // $29.99 founding / $39.99 launch
+	"developer": 500, // $5.00 — current Stripe price (early adopter rate)
+	"pro":       0,   // no Stripe price yet — migration pending
 	"admin":     0,
 }
 
