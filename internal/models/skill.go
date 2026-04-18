@@ -57,6 +57,10 @@ type SkillManifest struct {
 
 	// Output 输出格式定义
 	Output *SkillOutput `yaml:"output,omitempty" json:"output,omitempty"`
+
+	// Tier 订阅层级门槛: "" / "free" = 所有人可用, "developer" / "pro" = 付费解锁
+	// 空值等价于 "free" —— 默认所有 skill 所有人可用，只有显式标记才会被锁
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
 }
 
 // SkillInput 定义 Skill 的一个输入参数

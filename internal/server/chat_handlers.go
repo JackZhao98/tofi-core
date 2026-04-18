@@ -613,6 +613,33 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 	}
 	skillNames = deduped
+
+	// Plan tier gating: drop skills the user's plan doesn't entitle them
+	// to use, and surface the drop to the agent so it explains the gap
+	// instead of silently missing a capability (mirrors the missing-secret
+	// path below — same shape, same UX).
+	planLimits := s.getUserPlanLimits(userID)
+	var tierLocked []struct{ Name, Tier string }
+	if planLimits.AllowedSkillTiers != nil {
+		allSkills := skills.LoadAllSystemSkills()
+		kept := skillNames[:0]
+		for _, name := range skillNames {
+			sf, ok := allSkills[name]
+			if !ok {
+				// Unknown skill — let downstream buildSkillTools decide;
+				// tier gating doesn't cover it.
+				kept = append(kept, name)
+				continue
+			}
+			if PlanAllowsSkill(planLimits, sf.Manifest.Tier) {
+				kept = append(kept, name)
+				continue
+			}
+			tierLocked = append(tierLocked, struct{ Name, Tier string }{name, sf.Manifest.Tier})
+		}
+		skillNames = kept
+	}
+
 	skillTools, _, secretEnv, unavailableSkills := s.buildSkillTools(userID, skillNames)
 
 	// Fail-fast on missing secrets — the skill is dropped from the tool set
@@ -627,6 +654,15 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 		systemPrompt += "\n\n## Unavailable skills\nThe following skills were requested but cannot be used because required secrets aren't configured:\n" + strings.Join(lines, "\n") +
 			"\nWhen the user asks for something that would need one of these skills, tell them clearly why it isn't available, rather than attempting a workaround or pretending you tried."
+	}
+
+	if len(tierLocked) > 0 {
+		var lines []string
+		for _, t := range tierLocked {
+			lines = append(lines, fmt.Sprintf("- %s (requires %s plan)", t.Name, t.Tier))
+		}
+		systemPrompt += "\n\n## Plan-locked skills\nThe following skills were requested but are not included in the user's current subscription:\n" + strings.Join(lines, "\n") +
+			"\nWhen the user asks for something that would need one of these skills, complete as much of the task as you can without them and tell the user clearly that those specific capabilities require a plan upgrade. Do not pretend the skill is available."
 	}
 
 	// 4. Build provider messages from session history

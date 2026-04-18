@@ -646,17 +646,34 @@ func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
 	// the frontend then hard-coded `skills: []` during create, and every
 	// AI-made agent launched with zero tools attached — then mysteriously
 	// "couldn't reach the web" mid-run.
+	//
+	// Tier gating: only skills the user's plan entitles them to reach the
+	// planner prompt. An AI that's allowed to pick from the pro_pack will
+	// happily pick from it — filtering at the catalog-source kills the
+	// problem before it appears, so we never have to tell the user "your
+	// AI picked something you can't afford".
+	planLimits := s.getUserPlanLimits(userID)
+	allSkills := skills.LoadAllSystemSkills()
+	manifests := make([]models.SkillManifest, 0, len(allSkills))
+	for _, sf := range allSkills {
+		manifests = append(manifests, sf.Manifest)
+	}
+	entitled := FilterSkillsByPlan(manifests, planLimits)
+
 	var skillCatalogLines []string
-	for _, name := range skills.ListSystemSkillNames() {
+	for _, m := range entitled {
 		// System skills carry a short Description in their SKILL.md frontmatter,
-		// but ListSystemSkillNames only returns names. The descriptions in the
-		// system prompt are hard to drift with the filesystem so we hand-curate
-		// a short blurb for the ones the planner will want to pick from.
-		desc := systemSkillPlannerBlurb(name)
+		// but we hand-curate a terse planner blurb so marketing prose doesn't
+		// bloat the prompt. Fall back to the manifest description if no blurb
+		// is defined (e.g. third-party skills).
+		desc := systemSkillPlannerBlurb(m.Name)
 		if desc == "" {
-			desc = name
+			desc = m.Description
 		}
-		skillCatalogLines = append(skillCatalogLines, fmt.Sprintf("- %s — %s", name, desc))
+		if desc == "" {
+			desc = m.Name
+		}
+		skillCatalogLines = append(skillCatalogLines, fmt.Sprintf("- %s — %s", m.Name, desc))
 	}
 	skillsSection := ""
 	if len(skillCatalogLines) > 0 {
