@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,10 +12,6 @@ import (
 
 	"github.com/google/uuid"
 )
-
-// intStr converts an int to a string. Tiny helper kept inline so the
-// short-brief guard error message doesn't need a heavyweight fmt call.
-func intStr(n int) string { return strconv.Itoa(n) }
 
 // buildSubAgentTool creates the tofi_sub_agent tool that spawns a child agent
 // to handle a focused sub-task. The child agent inherits the parent's provider,
@@ -40,33 +35,25 @@ func buildSubAgentTool(parentCfg AgentConfig) ToolDef {
 		ToolDisplayName: "Sub-Agent",
 		ToolSchema: provider.Tool{
 			Name: "tofi_sub_agent",
-			Description: "DEFAULT TO NOT USING THIS TOOL. Call directly-available tools (web-fetch, web-search, skill runs, file ops) first — they're faster, cheaper, and visible to the user. " +
-				"Sub-agents are heavy: they render as a silent ⋯ in the parent chat while they run, consuming the user's patience and budget. " +
+			Description: "Hand off a substantial multi-step task to a fresh agent that runs in an isolated conversation and returns a structured report. " +
+				"The sub-agent starts with no memory of your conversation — the brief you provide is its complete context. It shares your tools, skills, and sandbox, and uses the same model you are. " +
 				"\n\n" +
-				"USE ONLY when ALL of the following are true: " +
-				"(a) the task needs 5+ tool calls to complete; " +
-				"(b) those tool calls are independent and would clutter the parent's context with irrelevant intermediate results; " +
-				"(c) the final deliverable is a structured report, not a single fact or value. " +
-				"\n\n" +
-				"NEVER USE FOR: " +
-				"(a) looking up a single value (price, date, status) — use web-search / web-fetch directly; " +
-				"(b) fetching one URL or reading one file; " +
-				"(c) anything where the user is actively waiting — delays feel like a freeze; " +
-				"(d) tasks you could complete yourself in 1-3 tool calls.",
+				"Suitable for work that spans many tool calls whose intermediate results don't need to appear in your conversation: surveying multiple sources to synthesize a summary, running a plan-and-execute loop to produce a structured deliverable, evaluating several options side by side. " +
+				"The parent chat shows a single progress indicator while the sub-agent works; the sub-agent's final report is this tool's return value.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"description": map[string]interface{}{
 						"type":        "string",
-						"description": "Short 3-5 word label shown to the user (e.g. 'Audit ship readiness', 'Compare 3 vendors'). Required.",
+						"description": "Short 3-5 word label shown to the user in the progress indicator (e.g. 'Audit ship readiness', 'Compare 3 vendors').",
 					},
 					"prompt": map[string]interface{}{
 						"type":        "string",
-						"description": "Full task brief. Self-contained — the sub-agent has NO access to your conversation. Be specific about scope, what's in/out, and the exact deliverable. Minimum ~200 characters; briefer tasks should be done directly by you. Terse instructions produce shallow work.",
+						"description": "The complete task brief. Self-contained — the sub-agent cannot see your conversation. State the scope, inputs, exact deliverable, and any constraints. Vague briefs produce vague reports.",
 					},
 					"model": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional model override. STRONGLY PREFER omitting this — the sub-agent defaults to the parent's model, which the user chose deliberately. Override only when the task clearly needs a stronger reasoning model than the parent (almost never).",
+						"description": "Override the model. Defaults to the parent's model.",
 					},
 				},
 				"required": []string{"description", "prompt"},
@@ -80,18 +67,6 @@ func buildSubAgentTool(parentCfg AgentConfig) ToolDef {
 			}
 			if description == "" {
 				description = "Unnamed sub-task"
-			}
-
-			// Short-brief guard: tasks small enough to fit in a single
-			// tweet don't deserve a sub-agent. Returning an error teaches
-			// the parent to route to direct tools next time and avoids
-			// burning tokens on a spawn that would've been one web-fetch.
-			const minPromptLen = 200
-			if len(strings.TrimSpace(prompt)) < minPromptLen {
-				return "Error: sub-agent declined — this task is too short (< " +
-					intStr(minPromptLen) + " chars) to justify the overhead. " +
-					"Call web-search / web-fetch / tofi_load_skill / file tools directly instead. " +
-					"Sub-agents are only for multi-step research producing a structured report.", nil
 			}
 
 			// Capture the sub-agent's tool calls so we can show the parent
