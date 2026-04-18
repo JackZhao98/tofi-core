@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -151,6 +152,59 @@ func (s *Server) handleAdminGetStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// handleAdminGetCostSummary returns the global-spend dashboard header:
+// today / this month / all-time real USD cost across all users, plus
+// active-user and run counts.
+// GET /api/v1/admin/cost/summary
+func (s *Server) handleAdminGetCostSummary(w http.ResponseWriter, r *http.Request) {
+	summary, err := s.db.GetGlobalSpendSummary()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
+}
+
+// handleAdminListUserSpending returns every user ranked by all-time spend
+// (desc) with today/month/all-time cost and today's run count. This is the
+// main "who is costing me money" view.
+// GET /api/v1/admin/cost/users
+func (s *Server) handleAdminListUserSpending(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.ListUserSpending()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rows)
+}
+
+// handleAdminGetModelBreakdown returns global usage grouped by model for
+// an optional date range. Used for the "which provider is eating the most
+// budget" chart.
+// GET /api/v1/admin/cost/by-model?since=YYYY-MM-DD&until=YYYY-MM-DD
+func (s *Server) handleAdminGetModelBreakdown(w http.ResponseWriter, r *http.Request) {
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+
+	// Default window: start of this month through now + 1 day (inclusive).
+	if since == "" {
+		since = time.Now().UTC().Format("2006-01") + "-01"
+	}
+	if until == "" {
+		until = time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
+	}
+
+	usage, err := s.db.GetUsageByModel("", since, until)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(usage)
 }
 
 // handleAdminGetUsage returns usage statistics grouped by model

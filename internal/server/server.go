@@ -527,6 +527,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/secrets", s.AdminMiddleware(s.handleAdminListSecrets))
 	mux.HandleFunc("DELETE /api/v1/admin/secrets/{id}", s.AdminMiddleware(s.handleAdminDeleteSecret))
 	mux.HandleFunc("GET /api/v1/admin/usage", s.AdminMiddleware(s.handleAdminGetUsage))
+	mux.HandleFunc("GET /api/v1/admin/cost/summary", s.AdminMiddleware(s.handleAdminGetCostSummary))
+	mux.HandleFunc("GET /api/v1/admin/cost/users", s.AdminMiddleware(s.handleAdminListUserSpending))
+	mux.HandleFunc("GET /api/v1/admin/cost/by-model", s.AdminMiddleware(s.handleAdminGetModelBreakdown))
 
 	// Admin: 3rd-party service keys (Brave, etc.) + usage tracking
 	mux.HandleFunc("GET /api/v1/admin/service-keys", s.AdminMiddleware(s.handleAdminListServiceKeys))
