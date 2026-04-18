@@ -613,7 +613,21 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		}
 	}
 	skillNames = deduped
-	skillTools, _, secretEnv := s.buildSkillTools(userID, skillNames)
+	skillTools, _, secretEnv, unavailableSkills := s.buildSkillTools(userID, skillNames)
+
+	// Fail-fast on missing secrets — the skill is dropped from the tool set
+	// AND we inform the agent via the system prompt so it can explain the
+	// outage to the user ("I can't search the web because the admin hasn't
+	// configured BRAVE_API_KEY") instead of silently missing a capability
+	// and confabulating. Matches the QA #26 expectation.
+	if len(unavailableSkills) > 0 {
+		var lines []string
+		for _, u := range unavailableSkills {
+			lines = append(lines, fmt.Sprintf("- %s: missing %s (admin must configure it in System Settings → Service Keys)", u.SkillName, u.SecretName))
+		}
+		systemPrompt += "\n\n## Unavailable skills\nThe following skills were requested but cannot be used because required secrets aren't configured:\n" + strings.Join(lines, "\n") +
+			"\nWhen the user asks for something that would need one of these skills, tell them clearly why it isn't available, rather than attempting a workaround or pretending you tried."
+	}
 
 	// 4. Build provider messages from session history
 	providerMessages := chat.BuildProviderMessages(session, message, resolvedModel)

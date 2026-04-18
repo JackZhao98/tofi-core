@@ -141,15 +141,31 @@ func (s *Server) buildSkillToolsFromNames(userID string, skillNames []string) ([
 	return skillTools, skillInstructions, secretEnv
 }
 
+// SkillUnavailable records a skill that was requested but can't be used
+// because a required secret isn't configured anywhere in the 3-tier
+// resolver. The chat / app-run paths surface these to the agent via the
+// system prompt so it fails fast ("I can't search the web because the
+// admin hasn't configured Brave") instead of silently missing a tool
+// and confabulating its way through a research task.
+type SkillUnavailable struct {
+	SkillName  string
+	SecretName string
+}
+
 // buildSkillTools loads skills from embed FS (system) and filesystem (user).
 // Does not query the database — filesystem is the single source of truth.
-// Returns skillTools, skillInstructions, and secretEnv.
-func (s *Server) buildSkillTools(userID string, skillNames []string) ([]agent.SkillTool, []string, map[string]string) {
+// Returns skillTools, skillInstructions, secretEnv, and a list of skills
+// that could not be enabled because required secrets weren't configured.
+// Skills in the unavailable list are EXCLUDED from skillTools so the agent
+// never sees them as viable choices; the caller should still inform the
+// agent via system prompt so it can explain the outage to the user.
+func (s *Server) buildSkillTools(userID string, skillNames []string) ([]agent.SkillTool, []string, map[string]string, []SkillUnavailable) {
 	localStore := skills.NewLocalStore(s.config.HomeDir)
 	systemSkills := skills.LoadAllSystemSkills()
 
 	var skillTools []agent.SkillTool
 	var skillInstructions []string
+	var unavailable []SkillUnavailable
 	secretEnv := make(map[string]string)
 
 	for _, name := range skillNames {
@@ -198,28 +214,46 @@ func (s *Server) buildSkillTools(userID string, skillNames []string) ([]agent.Sk
 			requiredSecrets = sf.Manifest.RequiredSecrets
 		}
 
-		skillTools = append(skillTools, st)
-		if st.Instructions != "" {
-			skillInstructions = append(skillInstructions, st.Instructions)
-		}
-
-		// Resolve secrets via shared 3-tier helper. Silently skip unresolved
-		// secrets — this path is used by chat where scripts often handle
-		// missing keys with a DuckDuckGo-style fallback.
+		// Resolve secrets via shared 3-tier helper. If ANY required secret
+		// is missing, mark the skill unavailable and skip registering it
+		// — the agent shouldn't see a tool it can't actually call.
+		skipSkill := false
+		var localSecrets []struct{ name, value string }
 		for _, secretName := range requiredSecrets {
-			if _, ok := secretEnv[secretName]; ok {
+			if v, ok := secretEnv[secretName]; ok {
+				localSecrets = append(localSecrets, struct{ name, value string }{secretName, v})
 				continue
 			}
 			val, _ := s.resolveSecret(userID, secretName)
 			if val == "" {
-				continue
+				unavailable = append(unavailable, SkillUnavailable{
+					SkillName:  name,
+					SecretName: secretName,
+				})
+				skipSkill = true
+				break
 			}
-			secretEnv[secretName] = val
-			s.injectUsageCallback(userID, secretName, secretEnv)
+			localSecrets = append(localSecrets, struct{ name, value string }{secretName, val})
+		}
+		if skipSkill {
+			continue
+		}
+
+		// All required secrets resolved — commit the skill + its env.
+		for _, sec := range localSecrets {
+			if _, exists := secretEnv[sec.name]; !exists {
+				secretEnv[sec.name] = sec.value
+				s.injectUsageCallback(userID, sec.name, secretEnv)
+			}
+		}
+
+		skillTools = append(skillTools, st)
+		if st.Instructions != "" {
+			skillInstructions = append(skillInstructions, st.Instructions)
 		}
 	}
 
-	return skillTools, skillInstructions, secretEnv
+	return skillTools, skillInstructions, secretEnv, unavailable
 }
 
 // buildCapabilitiesFromJSON parses capabilities JSON and returns MCP servers + extra tools.
