@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"tofi-core/internal/storage"
+
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -205,6 +207,195 @@ func (s *Server) handleAdminGetModelBreakdown(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(usage)
+}
+
+// handleAdminGetRevenue returns the current month's revenue-vs-cost P/L
+// summary: active subscriptions × plan price = revenue, chat_sessions cost
+// sum = cost, net = the difference. Answers "am I making money yet?"
+// GET /api/v1/admin/cost/revenue
+func (s *Server) handleAdminGetRevenue(w http.ResponseWriter, r *http.Request) {
+	summary, err := s.db.GetMonthlyRevenue(PlanPrice)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, err.Error(), "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
+}
+
+// UserDetailResponse is the full profile the admin detail page shows:
+// basic account info + subscription state + usage buckets + favorite model
+// + recent subscription event history.
+type UserDetailResponse struct {
+	ID                   string                     `json:"id"`
+	Username             string                     `json:"username"`
+	Role                 string                     `json:"role"`
+	CreatedAt            string                     `json:"created_at"`
+	Plan                 string                     `json:"plan"`
+	Subscription         *SubscriptionInfo          `json:"subscription,omitempty"`
+	SpendToday           float64                    `json:"spend_today"`
+	SpendMonth           float64                    `json:"spend_month"`
+	SpendAllTime         float64                    `json:"spend_all_time"`
+	RunsToday            int                        `json:"runs_today"`
+	RunsBySource         map[string]int             `json:"runs_by_source"`
+	FavoriteModel        *storage.FavoriteModel     `json:"favorite_model,omitempty"`
+	LastActiveAt         string                     `json:"last_active_at"`
+	Events               []*storage.SubscriptionEvent `json:"events"`
+}
+
+// SubscriptionInfo is the UI-friendly subset of storage.SubscriptionRecord
+// — we hide stripe_subscription_id from the API response (it leaks Stripe
+// implementation detail without adding admin value).
+type SubscriptionInfo struct {
+	Plan                 string `json:"plan"`
+	Status               string `json:"status"`
+	CurrentPeriodStart   string `json:"current_period_start"`
+	CurrentPeriodEnd     string `json:"current_period_end"`
+	CancelAtPeriodEnd    bool   `json:"cancel_at_period_end"`
+	StripeCustomerID     string `json:"stripe_customer_id"`
+}
+
+// handleAdminGetUserDetails returns the full admin-view profile for one
+// user — identified by username in the path (that's the key every other
+// table uses; see the note in storage/admin_metrics.go).
+// GET /api/v1/admin/users/{username}/details
+func (s *Server) handleAdminGetUserDetails(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	if username == "" {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "username required", "")
+		return
+	}
+
+	user, err := s.db.GetUser(username)
+	if err != nil || user == nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user not found", "")
+		return
+	}
+
+	now := time.Now().UTC()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	epoch := time.Unix(0, 0)
+
+	plan, _ := s.db.GetUserPlan(username)
+	spendToday, _ := s.db.GetUserSpend(username, todayStart)
+	spendMonth, _ := s.db.GetUserSpend(username, monthStart)
+	spendAll, _ := s.db.GetUserSpend(username, epoch)
+	runsToday, _ := s.db.CountDailyAgentRuns(username)
+	runsBySource, _ := s.db.CountDailyAgentRunsBySource(username)
+	favorite, _ := s.db.GetUserFavoriteModel(username)
+	lastActive, _ := s.db.GetUserLastActive(username)
+	events, _ := s.db.ListSubscriptionEvents(username, 50)
+
+	var subInfo *SubscriptionInfo
+	if sub, _ := s.db.GetSubscription(username); sub != nil {
+		subInfo = &SubscriptionInfo{
+			Plan:               sub.Plan,
+			Status:             sub.Status,
+			CurrentPeriodStart: sub.CurrentPeriodStart,
+			CurrentPeriodEnd:   sub.CurrentPeriodEnd,
+			CancelAtPeriodEnd:  sub.CancelAtPeriodEnd,
+			StripeCustomerID:   sub.StripeCustomerID,
+		}
+	}
+
+	resp := UserDetailResponse{
+		ID:            user.ID,
+		Username:      user.Username,
+		Role:          user.Role,
+		CreatedAt:     user.CreatedAt.String,
+		Plan:          plan,
+		Subscription:  subInfo,
+		SpendToday:    spendToday,
+		SpendMonth:    spendMonth,
+		SpendAllTime:  spendAll,
+		RunsToday:     runsToday,
+		RunsBySource:  runsBySource,
+		FavoriteModel: favorite,
+		LastActiveAt:  lastActive,
+		Events:        events,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleAdminSetUserPlan gives admin manual override over a user's plan
+// and/or current_period_end. Every mutation logs a 'admin_override' row
+// into subscription_events so the audit trail stays complete.
+// PUT /api/v1/admin/users/{username}/plan
+//
+// Body: { plan?: "free"|"developer", current_period_end?: "YYYY-MM-DDTHH:MM:SSZ", cancel_at_period_end?: bool, status?: "active"|"canceled"|"past_due" }
+// Any subset of fields may be present. Fields omitted from the body are
+// left as-is.
+func (s *Server) handleAdminSetUserPlan(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	if username == "" {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "username required", "")
+		return
+	}
+
+	user, err := s.db.GetUser(username)
+	if err != nil || user == nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user not found", "")
+		return
+	}
+
+	var req struct {
+		Plan              *string `json:"plan"`
+		CurrentPeriodEnd  *string `json:"current_period_end"`
+		CancelAtPeriodEnd *bool   `json:"cancel_at_period_end"`
+		Status            *string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "invalid body: "+err.Error(), "")
+		return
+	}
+
+	// Validate plan if supplied.
+	if req.Plan != nil {
+		if _, ok := PlanDefs[*req.Plan]; !ok {
+			writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "unknown plan '"+*req.Plan+"'", "")
+			return
+		}
+	}
+
+	// Load-or-init the subscription row so partial updates merge cleanly.
+	existing, _ := s.db.GetSubscription(username)
+	if existing == nil {
+		existing = &storage.SubscriptionRecord{
+			UserID: username,
+			Plan:   "free",
+			Status: "active",
+		}
+	}
+
+	fromPlan := existing.Plan
+	if req.Plan != nil {
+		existing.Plan = *req.Plan
+	}
+	if req.CurrentPeriodEnd != nil {
+		existing.CurrentPeriodEnd = *req.CurrentPeriodEnd
+	}
+	if req.CancelAtPeriodEnd != nil {
+		existing.CancelAtPeriodEnd = *req.CancelAtPeriodEnd
+	}
+	if req.Status != nil {
+		existing.Status = *req.Status
+	}
+
+	if err := s.db.UpsertSubscription(existing); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "upsert failed: "+err.Error(), "")
+		return
+	}
+
+	// Audit event — keeps the immutable history the detail page shows.
+	admin := r.Context().Value(UserContextKey).(string)
+	metaJSON, _ := json.Marshal(map[string]any{"admin": admin, "request": req})
+	_ = s.db.LogSubscriptionEvent(username, "admin_override", fromPlan, existing.Plan, "", string(metaJSON))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 }
 
 // handleAdminGetUsage returns usage statistics grouped by model

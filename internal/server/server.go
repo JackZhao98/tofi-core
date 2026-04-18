@@ -530,6 +530,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/cost/summary", s.AdminMiddleware(s.handleAdminGetCostSummary))
 	mux.HandleFunc("GET /api/v1/admin/cost/users", s.AdminMiddleware(s.handleAdminListUserSpending))
 	mux.HandleFunc("GET /api/v1/admin/cost/by-model", s.AdminMiddleware(s.handleAdminGetModelBreakdown))
+	mux.HandleFunc("GET /api/v1/admin/cost/revenue", s.AdminMiddleware(s.handleAdminGetRevenue))
+	mux.HandleFunc("GET /api/v1/admin/users/{username}/details", s.AdminMiddleware(s.handleAdminGetUserDetails))
+	mux.HandleFunc("PUT /api/v1/admin/users/{username}/plan", s.AdminMiddleware(s.handleAdminSetUserPlan))
 
 	// Admin: 3rd-party service keys (Brave, etc.) + usage tracking
 	mux.HandleFunc("GET /api/v1/admin/service-keys", s.AdminMiddleware(s.handleAdminListServiceKeys))
