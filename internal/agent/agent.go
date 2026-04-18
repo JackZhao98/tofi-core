@@ -67,6 +67,7 @@ type AgentConfig struct {
 	OnStepDone       func(toolName, result string, durationMs int64)           // Generic step done
 	LiveUsage        *provider.Usage                                           // Optional: updated in real-time during agent loop for tools to read
 	Hooks            *Hooks                                                    // Optional: pre/post hooks for tool calls, API calls, compaction
+	OnMessage        func(msg provider.Message)                                // Optional: called immediately after each assistant/tool message is appended. Used for incremental chat session persistence so a browser refresh or hold doesn't lose in-progress turns. Internal synthetic user continuations are NOT emitted.
 	AskUserFn        func(question string, options []string) (string, error)   // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
 	IsSubAgent       bool                                                      // True when running as a sub-agent (prevents recursive spawning)
 	// OnSubAgentEvent forwards live sub-agent activity (chunks, tool starts,
@@ -537,6 +538,18 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 `
 	}
 
+	// appendAndEmit appends a message to the slice and fires OnMessage if set.
+	// Used for every assistant/tool message so downstream (e.g. chat session
+	// persistence) can checkpoint incrementally instead of waiting for the
+	// full loop to return. Synthetic user continuations bypass this and use
+	// a plain append to avoid polluting the persisted conversation.
+	appendAndEmit := func(list []provider.Message, msg provider.Message) []provider.Message {
+		if cfg.OnMessage != nil {
+			cfg.OnMessage(msg)
+		}
+		return append(list, msg)
+	}
+
 	// Build messages
 	var messages []provider.Message
 	if len(cfg.Messages) > 0 {
@@ -726,7 +739,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
 		}
-		messages = append(messages, assistantMsg)
+		messages = appendAndEmit(messages, assistantMsg)
 
 		// Log Thinking
 		if resp.Reasoning != "" {
@@ -814,7 +827,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 
 			// Append results in order + fire callbacks
 			for _, r := range results {
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
 					Content:    r.Content,
 					ToolCallID: r.CallID,
@@ -848,7 +861,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			var argsMap map[string]interface{}
 			if err := json.Unmarshal([]byte(fnArgs), &argsMap); err != nil {
 				errMsg := fmt.Sprintf("Error parsing arguments for %s: %v", fnName, err)
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
 					Content:    errMsg,
 					ToolCallID: callID,
@@ -861,7 +874,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			// PreToolCall hook — can modify args or block execution
 			if modifiedArgs, hookErr := cfg.Hooks.callPreToolCall(fnName, argsMap); hookErr != nil {
 				errMsg := fmt.Sprintf("PreToolCall hook blocked %s: %v", fnName, hookErr)
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role: "tool", Content: errMsg, ToolCallID: callID, ToolName: fnName,
 				})
 				ctx.Log("[Hook] %s", errMsg)
@@ -898,7 +911,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				ctx.Log("[Wait] Sleeping for %.1f seconds...", secVal)
 				time.Sleep(time.Duration(secVal * float64(time.Second)))
 
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
 					Content:    fmt.Sprintf("Waited for %.1f seconds.", secVal),
 					ToolCallID: callID,
@@ -937,7 +950,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				// Security validation (blocklist + regex patterns)
 				if err := executor.ValidateCommand(command, cfg.SandboxDir); err != nil {
 					resultMsg := "Security violation: " + err.Error()
-					messages = append(messages, provider.Message{
+					messages = appendAndEmit(messages, provider.Message{
 						Role: "tool", Content: resultMsg, ToolCallID: callID, ToolName: fnName,
 					})
 					markStepDone(resultMsg)
@@ -990,7 +1003,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				resultMsg = smartTruncate(resultMsg, 4000)
 
 				ctx.Log("[Shell] %s → %s (exit=%d, %dms)", truncate(command, 80), truncate(resultMsg, 200), shellResult.ExitCode, shellResult.DurationMs)
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
 					Content:    resultMsg,
 					ToolCallID: callID,
@@ -1014,7 +1027,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 					}
 				}
 				ctx.Log("[ExtraTool:%s] %s", fnName, truncate(resultMsg, 200))
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
 					Content:    resultMsg,
 					ToolCallID: callID,
@@ -1081,7 +1094,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 						resultMsg = result
 					}
 					ctx.Log("[Skill:%s] Result: %s", matchedSkill.Name, truncate(resultMsg, 200))
-					messages = append(messages, provider.Message{
+					messages = appendAndEmit(messages, provider.Message{
 						Role:       "tool",
 						Content:    resultMsg,
 						ToolCallID: callID,
@@ -1089,7 +1102,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 					})
 					markStepDone(resultMsg)
 				} else {
-					messages = append(messages, provider.Message{
+					messages = appendAndEmit(messages, provider.Message{
 						Role:       "tool",
 						Content:    fmt.Sprintf("Skill '%s' not found", skillKey),
 						ToolCallID: callID,
@@ -1103,7 +1116,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			cli, exists := clientMap[fnName]
 			if !exists {
 				errMsg := fmt.Sprintf("Tool '%s' not found.", fnName)
-				messages = append(messages, provider.Message{
+				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
 					Content:    errMsg,
 					ToolCallID: callID,
@@ -1143,7 +1156,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				ctx.Log("[Result] %s", truncate(outputText, 100))
 			}
 
-			messages = append(messages, provider.Message{
+			messages = appendAndEmit(messages, provider.Message{
 				Role:       "tool",
 				Content:    outputText,
 				ToolCallID: callID,

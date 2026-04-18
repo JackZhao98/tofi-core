@@ -704,6 +704,31 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		UserDir:         userID,
 		Executor:        s.executor,
 		SecretEnv:       secretEnv,
+		// Incremental persistence: every assistant/tool message is written to
+		// the session XML the moment the agent produces it. This keeps the
+		// stored conversation in lockstep with what the UI streamed so that
+		// a browser refresh, a hold-then-dismiss, an interrupt, or an agent
+		// panic never leaves the session with phantom "vanishing" turns that
+		// silently reappear when the loop eventually finishes.
+		OnMessage: func(msg provider.Message) {
+			chatMsg := chat.Message{
+				Role:       msg.Role,
+				Content:    msg.Content,
+				CallID:     msg.ToolCallID,
+				Name:       msg.ToolName,
+			}
+			for _, tc := range msg.ToolCalls {
+				chatMsg.ToolCalls = append(chatMsg.ToolCalls, chat.ToolCall{
+					ID:    tc.ID,
+					Name:  tc.Name,
+					Input: tc.Arguments,
+				})
+			}
+			session.AddMessage(chatMsg)
+			if err := s.chatStore.Save(userID, scope, session); err != nil {
+				log.Printf("⚠️  [chat:%s] incremental save failed: %v", sessionID[:8], err)
+			}
+		},
 	}
 
 	// Thread cancellation context
@@ -843,26 +868,10 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		return nil, fmt.Errorf("agent error: %w", err)
 	}
 
-	// 10. Persist assistant/tool messages to session XML.
-	// User message was already saved at step 7 before the agent loop ran.
-	for _, msg := range agentResult.Messages {
-		chatMsg := chat.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-		if msg.Role == "tool" {
-			chatMsg.CallID = msg.ToolCallID
-			chatMsg.Name = msg.ToolName
-		}
-		for _, tc := range msg.ToolCalls {
-			chatMsg.ToolCalls = append(chatMsg.ToolCalls, chat.ToolCall{
-				ID:    tc.ID,
-				Name:  tc.Name,
-				Input: tc.Arguments,
-			})
-		}
-		session.AddMessage(chatMsg)
-	}
+	// 10. Assistant/tool messages were persisted incrementally via OnMessage
+	// during the agent loop (see AgentConfig.OnMessage above). The user
+	// message was already saved at step 7 before the loop ran. No batch
+	// append needed here.
 
 	// Update usage
 	session.Usage.InputTokens += agentResult.TotalUsage.InputTokens
