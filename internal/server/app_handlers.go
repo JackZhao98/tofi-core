@@ -87,13 +87,16 @@ func (s *Server) handleGetApp(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
-	// Plan limit: max apps
+	// Plan limit: max agents (the internal API path still reads "apps"
+	// because the DB table / handler name are legacy — user-facing text
+	// uses "agent" everywhere).
 	limits := s.getUserPlanLimits(userID)
 	if limits.MaxApps > 0 {
 		count, _ := s.db.CountUserApps(userID)
 		if count >= limits.MaxApps {
 			writeJSONError(w, http.StatusForbidden, "PLAN_LIMIT",
-				fmt.Sprintf("App limit reached (%d/%d). Upgrade to Developer for unlimited apps.", count, limits.MaxApps), "")
+				fmt.Sprintf("Agent limit reached (%d/%d). Delete an existing agent or upgrade to Developer for unlimited agents.", count, limits.MaxApps),
+				"Visit /pricing to upgrade, or /agents to manage your existing agents.")
 			return
 		}
 	}
