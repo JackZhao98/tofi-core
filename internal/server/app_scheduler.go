@@ -335,9 +335,10 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 		// Auto-notify: send AI output to configured notify targets
 		if result.Content != "" {
 			sent, notifyErr := connect.SendNotification(run.UserID, app.ID, result.Content, connect.NotifyDeps{
-				ListConnectorsForApp:   as.server.db.ListConnectorsForApp,
-				ListConnectors:         as.server.db.ListConnectors,
-				ListConnectorReceivers: as.server.db.ListConnectorReceivers,
+				ListConnectorsLinkedToApp: as.server.db.ListConnectorsLinkedToApp,
+				ListConnectorsForApp:      as.server.db.ListConnectorsForApp,
+				ListConnectors:            as.server.db.ListConnectors,
+				ListConnectorReceivers:    as.server.db.ListConnectorReceivers,
 			})
 			if notifyErr != nil {
 				log.Printf("[app-run:%s] Notification error: %v", run.ID[:8], notifyErr)

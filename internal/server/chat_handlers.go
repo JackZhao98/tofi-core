@@ -722,9 +722,10 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 			}
 		}
 		notifyDeps := connect.NotifyDeps{
-			ListConnectorsForApp:   s.db.ListConnectorsForApp,
-			ListConnectors:         s.db.ListConnectors,
-			ListConnectorReceivers: s.db.ListConnectorReceivers,
+			ListConnectorsLinkedToApp: s.db.ListConnectorsLinkedToApp,
+			ListConnectorsForApp:      s.db.ListConnectorsForApp,
+			ListConnectors:            s.db.ListConnectors,
+			ListConnectorReceivers:    s.db.ListConnectorReceivers,
 		}
 		notifyTools := connect.InjectNotifyTool(nil, userID, notifyAppID, notifyDeps)
 		// Bundle with a "notify" skill entry

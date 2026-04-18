@@ -11,10 +11,17 @@ import (
 )
 
 // NotifyDeps 依赖注入：tofi_notify 工具需要的 DB 操作
+//
+// ListConnectorsLinkedToApp is the canonical routing path — it only
+// returns connectors the user has explicitly attached to the app via the
+// app_connectors join table. ListConnectorsForApp (scope-based) is kept
+// for legacy callers but notify decisions should go through
+// ListConnectorsLinkedToApp so users have explicit opt-in control.
 type NotifyDeps struct {
-	ListConnectorsForApp   func(userID, appID string) ([]*storage.Connector, error)
-	ListConnectors         func(userID string) ([]*storage.Connector, error)
-	ListConnectorReceivers func(connectorID string) ([]*storage.ConnectorReceiver, error)
+	ListConnectorsLinkedToApp func(userID, appID string) ([]*storage.Connector, error)
+	ListConnectorsForApp      func(userID, appID string) ([]*storage.Connector, error)
+	ListConnectors            func(userID string) ([]*storage.Connector, error)
+	ListConnectorReceivers    func(connectorID string) ([]*storage.ConnectorReceiver, error)
 }
 
 // BuildNotifyTool 基于 connector 系统构建 tofi_notify 工具
@@ -213,9 +220,14 @@ func SendNotification(userID, appID, message string, deps NotifyDeps) (int, erro
 	var err error
 
 	if appID != "" {
-		// Scope-based: returns both global:* and app:{appID} connectors
-		connectors, err = deps.ListConnectorsForApp(userID, appID)
+		// Explicit-binding routing: only notify connectors the user has
+		// attached to this specific agent via the Output section on the
+		// agent detail page. Creating a connector no longer implicitly
+		// subscribes every agent to it.
+		connectors, err = deps.ListConnectorsLinkedToApp(userID, appID)
 	} else {
+		// No app context (e.g. tofi_notify from a non-agent chat scope)
+		// — fall back to the user's full connector set.
 		connectors, err = deps.ListConnectors(userID)
 	}
 
@@ -257,7 +269,10 @@ func InjectNotifyTool(
 	var err error
 
 	if appID != "" {
-		connectors, err = deps.ListConnectorsForApp(userID, appID)
+		// Same explicit-binding routing as SendNotification — the
+		// tofi_notify tool only exposes connectors attached to this
+		// agent, not every global connector the user owns.
+		connectors, err = deps.ListConnectorsLinkedToApp(userID, appID)
 	} else {
 		connectors, err = deps.ListConnectors(userID)
 	}

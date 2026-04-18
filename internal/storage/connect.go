@@ -608,6 +608,38 @@ func (db *DB) DeleteConnectorReceiver(receiverID int64) error {
 
 // ===================== App-Connector 多对多 =====================
 
+// ListConnectorsLinkedToApp returns only the connectors that have been
+// EXPLICITLY linked to this app via the app_connectors join table. This is
+// the canonical source of truth for notification routing — an agent only
+// notifies channels the user explicitly attached via the agent detail
+// page's Output section. Contrast with ListConnectorsForApp (which also
+// includes global:* connectors) — that one is kept for legacy read paths
+// but is no longer used for notify decisions.
+func (db *DB) ListConnectorsLinkedToApp(userID, appID string) ([]*Connector, error) {
+	rows, err := db.conn.Query(
+		`SELECT c.id, c.user_id, c.scope, c.type, c.name, c.config, c.enabled, c.created_at
+		 FROM connectors c
+		 INNER JOIN app_connectors ac ON ac.connector_id = c.id
+		 WHERE ac.app_id = ? AND c.user_id = ?
+		 ORDER BY c.created_at`,
+		appID, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var connectors []*Connector
+	for rows.Next() {
+		c := &Connector{}
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Scope, &c.Type, &c.Name, &c.Config, &c.Enabled, &c.CreatedAt); err != nil {
+			continue
+		}
+		connectors = append(connectors, c)
+	}
+	return connectors, nil
+}
+
 // LinkAppConnector 绑定 app 到 connector
 func (db *DB) LinkAppConnector(appID, connectorID string) error {
 	_, err := db.conn.Exec(
