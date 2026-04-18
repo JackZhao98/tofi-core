@@ -82,7 +82,7 @@ func (db *DB) GetUserLastActive(userID string) (string, error) {
 		SELECT COALESCE(MAX(updated_at), '') FROM chat_sessions WHERE user_id = ?
 	`, userID).Scan(&chatTs)
 	_ = db.conn.QueryRow(`
-		SELECT COALESCE(MAX(created_at), '') FROM agent_runs WHERE user_id = ?
+		SELECT COALESCE(MAX(created_at), '') FROM run_events WHERE user_id = ?
 	`, userID).Scan(&runTs)
 
 	if runTs > chatTs {
@@ -123,13 +123,13 @@ func (db *DB) GetGlobalSpendSummary() (*GlobalSpendSummary, error) {
 
 	var activeUsers, totalUsers, runsToday, runsAllTime int
 	_ = db.conn.QueryRow(`
-		SELECT COUNT(DISTINCT user_id) FROM agent_runs WHERE DATE(created_at) = ?
+		SELECT COUNT(DISTINCT user_id) FROM run_events WHERE DATE(created_at) = ?
 	`, todayStart).Scan(&activeUsers)
 	_ = db.conn.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&totalUsers)
 	_ = db.conn.QueryRow(`
-		SELECT COUNT(*) FROM agent_runs WHERE DATE(created_at) = ?
+		SELECT COUNT(*) FROM run_events WHERE DATE(created_at) = ?
 	`, todayStart).Scan(&runsToday)
-	_ = db.conn.QueryRow(`SELECT COUNT(*) FROM agent_runs`).Scan(&runsAllTime)
+	_ = db.conn.QueryRow(`SELECT COUNT(*) FROM run_events`).Scan(&runsAllTime)
 
 	return &GlobalSpendSummary{
 		SpendToday:   today,

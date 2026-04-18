@@ -21,20 +21,27 @@ type AgentRunEvent struct {
 	CreatedAt string
 }
 
-// initAgentRunsTable creates the agent_runs table + an index on (user_id,
+// initRunEventsTable creates the run_events table + an index on (user_id,
 // created_at) so the daily-count query stays O(1) on growing data.
-func (db *DB) initAgentRunsTable() error {
+//
+// NOTE on the name: this table is deliberately NOT called agent_runs —
+// that name is already taken by a legacy table from the pre-rename
+// "agents → apps" era (agent_id, scheduled_at, status, … schema). Using
+// CREATE TABLE IF NOT EXISTS agent_runs against that legacy table is a
+// silent no-op, and subsequent INSERTs with the new columns fail with
+// "no such column: source". run_events is a fresh, unambiguous name.
+func (db *DB) initRunEventsTable() error {
 	_, err := db.conn.Exec(`
-		CREATE TABLE IF NOT EXISTS agent_runs (
+		CREATE TABLE IF NOT EXISTS run_events (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
 			source TEXT NOT NULL,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
-		CREATE INDEX IF NOT EXISTS idx_agent_runs_user_date ON agent_runs(user_id, created_at);
+		CREATE INDEX IF NOT EXISTS idx_run_events_user_date ON run_events(user_id, created_at);
 	`)
 	if err != nil {
-		return fmt.Errorf("init agent_runs table: %w", err)
+		return fmt.Errorf("init run_events table: %w", err)
 	}
 	return nil
 }
@@ -53,7 +60,7 @@ func (db *DB) RecordAgentRun(userID, source string) error {
 		source = "unknown"
 	}
 	_, err := db.conn.Exec(`
-		INSERT INTO agent_runs(id, user_id, source) VALUES(?, ?, ?)
+		INSERT INTO run_events(id, user_id, source) VALUES(?, ?, ?)
 	`, uuid.New().String(), userID, source)
 	if err != nil {
 		return fmt.Errorf("record agent run: %w", err)
@@ -68,7 +75,7 @@ func (db *DB) CountDailyAgentRuns(userID string) (int, error) {
 	today := time.Now().UTC().Format("2006-01-02")
 	var count int
 	err := db.conn.QueryRow(`
-		SELECT COUNT(*) FROM agent_runs
+		SELECT COUNT(*) FROM run_events
 		WHERE user_id = ? AND DATE(created_at) = ?
 	`, userID, today).Scan(&count)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -85,7 +92,7 @@ func (db *DB) CountDailyAgentRuns(userID string) (int, error) {
 func (db *DB) CountDailyAgentRunsBySource(userID string) (map[string]int, error) {
 	today := time.Now().UTC().Format("2006-01-02")
 	rows, err := db.conn.Query(`
-		SELECT source, COUNT(*) FROM agent_runs
+		SELECT source, COUNT(*) FROM run_events
 		WHERE user_id = ? AND DATE(created_at) = ?
 		GROUP BY source
 	`, userID, today)

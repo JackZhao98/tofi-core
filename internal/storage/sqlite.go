@@ -274,8 +274,8 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  subscriptions table creation: %v", err)
 	}
 
-	if err := db.initAgentRunsTable(); err != nil {
-		log.Printf("⚠️  agent_runs table creation: %v", err)
+	if err := db.initRunEventsTable(); err != nil {
+		log.Printf("⚠️  run_events table creation: %v", err)
 	}
 
 	return db, nil
