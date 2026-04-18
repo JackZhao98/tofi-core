@@ -314,8 +314,20 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 	var failReason string
 	if err != nil {
 		log.Printf("[app-run:%s] Chat session execution failed: %v", run.ID[:8], err)
-		status = "failed"
-		failReason = err.Error()
+		// Distinguish "the agent hit tofi_ask_user and couldn't get an
+		// answer" from genuine execution failures — the former shouldn't
+		// pollute success-rate stats or look like a crash in run history.
+		// Error strings come from chat_handlers.go's AskUserFn closure.
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "did not respond within"):
+			status = "timed_out"
+		case strings.Contains(msg, "user declined to answer"):
+			status = "aborted"
+		default:
+			status = "failed"
+		}
+		failReason = msg
 	} else {
 		log.Printf("[app-run:%s] Completed (tokens: %d in / %d out, cost: $%.4f)",
 			run.ID[:8], result.TotalUsage.InputTokens, result.TotalUsage.OutputTokens, result.TotalCost)

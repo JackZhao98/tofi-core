@@ -590,7 +590,11 @@ type AppStats struct {
 func (db *DB) GetAppStats(appID string) (*AppStats, error) {
 	var stats AppStats
 
-	// Total runs (excluding pending/skipped)
+	// Total runs counts only states that actually represent an attempted
+	// execution. Pending (scheduled, not yet run), cancelled (user
+	// cancelled before start), skipped (scheduler skipped past it),
+	// timed_out / aborted (agent needed user input that never came) are
+	// all excluded — they aren't "I tried and it worked/failed".
 	err := db.conn.QueryRow(
 		`SELECT COUNT(*) FROM app_runs WHERE app_id = ? AND status IN ('done','failed','running')`, appID,
 	).Scan(&stats.TotalRuns)
@@ -598,7 +602,9 @@ func (db *DB) GetAppStats(appID string) (*AppStats, error) {
 		return nil, fmt.Errorf("count total: %w", err)
 	}
 
-	// Done + failed counts
+	// Done + failed counts (denominator uses TotalRuns above — excludes
+	// timed_out/aborted so a user who never answered an ask_user prompt
+	// doesn't tank an otherwise-healthy success rate).
 	db.conn.QueryRow(`SELECT COUNT(*) FROM app_runs WHERE app_id = ? AND status = 'done'`, appID).Scan(&stats.DoneRuns)
 	db.conn.QueryRow(`SELECT COUNT(*) FROM app_runs WHERE app_id = ? AND status = 'failed'`, appID).Scan(&stats.FailedRuns)
 
@@ -618,11 +624,12 @@ func (db *DB) GetAppStats(appID string) (*AppStats, error) {
 		stats.AvgDuration = avgDur.Float64
 	}
 
-	// Last run
+	// Last run — include the new terminal states so Last Run reflects
+	// whatever happened most recently even if it was an abort/timeout.
 	var lastAt, lastStatus sql.NullString
 	db.conn.QueryRow(`
 		SELECT scheduled_at, status FROM app_runs
-		WHERE app_id = ? AND status IN ('done','failed')
+		WHERE app_id = ? AND status IN ('done','failed','timed_out','aborted')
 		ORDER BY scheduled_at DESC LIMIT 1
 	`, appID).Scan(&lastAt, &lastStatus)
 	if lastAt.Valid {
