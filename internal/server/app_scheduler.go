@@ -225,11 +225,13 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 		prompt = promptOverride
 	}
 
-	// Pre-load relevant memories for this app
-	memories, _ := as.server.db.RecallMemories(run.UserID, app.Name+" "+app.Description, 5)
-	if len(memories) > 0 {
-		prompt = prompt + "\n\n## Context from Previous Runs\n" + storage.FormatMemoriesForAgent(memories)
-	}
+	// Memory is now pull-only via the tofi_recall_memory tool. We used to
+	// auto-prepend "## Context from Previous Runs" with the top-5 recalled
+	// rows to every prompt, but that leaked unrelated other-agent context
+	// (site-health-check output bleeding into a VOO price query, etc.)
+	// straight into the user-visible message bubble — making the product
+	// look hallucinatory. Agents that want memory now have to ask for it,
+	// which is the same contract they already follow for every other tool.
 
 	// Create a Chat Session for this app run. Use the session ID pre-allocated
 	// in DispatchRun so the HTTP caller's navigation target stays stable.
