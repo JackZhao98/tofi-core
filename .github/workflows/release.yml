@@ -88,36 +88,43 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # systemctl --user requires an active user manager + XDG_RUNTIME_DIR.
+          # Non-interactive SSH doesn't set this up by default, so we point it
+          # explicitly at /run/user/$UID. The tofi-engine unit holds the real
+          # env (TOFI_ENCRYPTION_KEY etc.), so restart alone is enough — no
+          # need to source secrets in this script.
           script: |
             set -e
             cd ~/server
             echo "=== Deploying Tofi $(date) ==="
 
-            # Backup current binary
+            # Backup current binary (for manual rollback if needed)
             [ -f tofi ] && cp tofi tofi.bak
 
-            # Stop daemon
-            ./tofi stop 2>/dev/null || true
-            sleep 1
-
-            # Replace binary
+            # Replace binary in place — systemctl will pick it up on restart
             mv /tmp/tofi-deploy/tofi-linux-arm64 ./tofi
             chmod +x ./tofi
             rm -rf /tmp/tofi-deploy
 
-            # Start daemon
-            ./tofi start
+            # Restart via systemd user unit (has TOFI_ENCRYPTION_KEY configured)
+            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+            systemctl --user restart tofi-engine
 
-            # Verify
-            sleep 2
-            if curl -sf http://localhost:8321/health > /dev/null; then
-              echo "=== Deploy SUCCESS ==="
-              curl -s http://localhost:8321/health | head -1
-            else
-              echo "=== Deploy FAILED — rolling back ==="
-              ./tofi stop 2>/dev/null || true
-              [ -f tofi.bak ] && mv tofi.bak tofi && ./tofi start
-              exit 1
+            # Verify health (give systemd a moment to come up)
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -sf http://localhost:8321/health > /dev/null; then
+                echo "=== Deploy SUCCESS ==="
+                curl -s http://localhost:8321/health | head -1
+                rm -f tofi.bak
+                exit 0
+              fi
+              sleep 1
+            done
+
+            echo "=== Deploy FAILED — rolling back ==="
+            if [ -f tofi.bak ]; then
+              mv tofi.bak tofi
+              systemctl --user restart tofi-engine
             fi
-
-            rm -f tofi.bak
+            systemctl --user status tofi-engine --no-pager | head -20 || true
+            exit 1
