@@ -35,14 +35,19 @@ func (db *DB) ListUserSpending() ([]UserSpendRow, error) {
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	epoch := time.Unix(0, 0)
 
+	// Historical quirk: the users table keys by UUID (users.id), but every
+	// downstream table — chat_sessions, user_subscriptions, agent_runs —
+	// keys by the username/email string that the auth middleware sets as
+	// the request userID. So to look up a user's rows we pass Username,
+	// not ID. (Fixing the schema to be consistent is a separate migration.)
 	out := make([]UserSpendRow, 0, len(users))
 	for _, u := range users {
-		plan, _ := db.GetUserPlan(u.ID)
-		today, _ := db.GetUserSpend(u.ID, todayStart)
-		month, _ := db.GetUserSpend(u.ID, monthStart)
-		all, _ := db.GetUserSpend(u.ID, epoch)
-		runsToday, _ := db.CountDailyAgentRuns(u.ID)
-		lastActive, _ := db.GetUserLastActive(u.ID)
+		plan, _ := db.GetUserPlan(u.Username)
+		today, _ := db.GetUserSpend(u.Username, todayStart)
+		month, _ := db.GetUserSpend(u.Username, monthStart)
+		all, _ := db.GetUserSpend(u.Username, epoch)
+		runsToday, _ := db.CountDailyAgentRuns(u.Username)
+		lastActive, _ := db.GetUserLastActive(u.Username)
 
 		out = append(out, UserSpendRow{
 			UserID:       u.ID,

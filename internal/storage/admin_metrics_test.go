@@ -48,13 +48,15 @@ func TestAdminMetrics_WithUsersAndRuns(t *testing.T) {
 		t.Fatalf("SaveUser bob: %v", err)
 	}
 
-	// Alice gets 3 runs, Bob gets 1
+	// Alice gets 3 runs, Bob gets 1. Record by username — that's the
+	// convention used by chat_sessions / agent_runs / user_subscriptions
+	// (see the note in storage/admin_metrics.go about the schema quirk).
 	for i := 0; i < 3; i++ {
-		if err := db.RecordAgentRun("u1", "chat"); err != nil {
+		if err := db.RecordAgentRun("alice", "chat"); err != nil {
 			t.Fatalf("RecordAgentRun for alice: %v", err)
 		}
 	}
-	if err := db.RecordAgentRun("u2", "app"); err != nil {
+	if err := db.RecordAgentRun("bob", "app"); err != nil {
 		t.Fatalf("RecordAgentRun for bob: %v", err)
 	}
 
