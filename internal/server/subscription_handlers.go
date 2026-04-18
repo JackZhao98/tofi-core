@@ -50,15 +50,18 @@ func (s *Server) handleGetUsage(w http.ResponseWriter, r *http.Request) {
 	limits := s.getUserPlanLimits(userID)
 
 	appsUsed, _ := s.db.CountUserApps(userID)
-	// Daily runs come from the unified agent_runs ledger so chat turns,
-	// webhook calls, and scheduled runs are all counted in the same bucket.
+	// Daily + monthly runs come from the unified agent_runs ledger so chat
+	// turns, webhook calls, and scheduled runs are all counted in the same
+	// bucket.
 	dailyUsed, _ := s.db.CountDailyAgentRuns(userID)
+	monthlyUsed, _ := s.db.CountMonthlyAgentRuns(userID)
 	concurrentUsed, _ := s.db.CountRunningRuns(userID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"apps":            map[string]int{"used": appsUsed, "limit": limits.MaxApps},
 		"daily_runs":      map[string]int{"used": dailyUsed, "limit": limits.DailyRuns},
+		"monthly_runs":    map[string]int{"used": monthlyUsed, "limit": limits.MonthlyRuns},
 		"concurrent_runs": map[string]int{"used": concurrentUsed, "limit": limits.ConcurrentRuns},
 	})
 }

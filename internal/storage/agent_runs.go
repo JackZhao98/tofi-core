@@ -87,6 +87,27 @@ func (db *DB) CountDailyAgentRuns(userID string) (int, error) {
 	return count, nil
 }
 
+// CountMonthlyAgentRuns returns the number of agent runs dispatched for
+// this user in the current UTC calendar month. Used to enforce the
+// MonthlyRuns plan cap — the hard ceiling that complements DailyRuns so
+// steady grinders can't sustain a cap-saturating pace for 30 days in a
+// row. Resets at the start of each UTC month.
+func (db *DB) CountMonthlyAgentRuns(userID string) (int, error) {
+	month := time.Now().UTC().Format("2006-01")
+	var count int
+	err := db.conn.QueryRow(`
+		SELECT COUNT(*) FROM run_events
+		WHERE user_id = ? AND strftime('%Y-%m', created_at) = ?
+	`, userID, month).Scan(&count)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("count monthly agent runs: %w", err)
+	}
+	return count, nil
+}
+
 // CountDailyAgentRunsBySource breaks down today's runs by source. Admin
 // dashboard uses this to show "chat: 12, app: 4, schedule: 2" etc.
 func (db *DB) CountDailyAgentRunsBySource(userID string) (map[string]int, error) {

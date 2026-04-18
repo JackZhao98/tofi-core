@@ -407,16 +407,24 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Daily-runs quota gate — applied BEFORE loading the session so a
-	// user over quota doesn't get to see any processing happen. Admin
-	// users have near-unlimited limits (999999) so this is effectively a
-	// no-op for them.
+	// 2. Daily + monthly quota gate — applied BEFORE loading the session
+	// so a user over quota doesn't get to see any processing happen. Admin
+	// users have zero-valued limits (unlimited) so both checks no-op.
 	limits := s.getUserPlanLimits(userID)
 	if limits.DailyRuns > 0 {
 		used, _ := s.db.CountDailyAgentRuns(userID)
 		if used >= limits.DailyRuns {
 			writeJSONError(w, http.StatusTooManyRequests, ErrQuotaExceeded,
 				fmt.Sprintf("daily run limit reached (%d/%d) — upgrade plan or wait until tomorrow (resets at UTC midnight)", used, limits.DailyRuns),
+				"")
+			return
+		}
+	}
+	if limits.MonthlyRuns > 0 {
+		used, _ := s.db.CountMonthlyAgentRuns(userID)
+		if used >= limits.MonthlyRuns {
+			writeJSONError(w, http.StatusTooManyRequests, ErrQuotaExceeded,
+				fmt.Sprintf("monthly run limit reached (%d/%d) — upgrade plan or wait until next month", used, limits.MonthlyRuns),
 				"")
 			return
 		}

@@ -171,6 +171,18 @@ func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverri
 		}
 	}
 
+	// Monthly-runs hard ceiling. Daily caps let bursty usage through; the
+	// monthly cap is what prevents a steady-state user from sustaining a
+	// cap-saturating pace for 30 days and blowing the COGS budget. 0 =
+	// unlimited by the package-wide convention, so this check is a no-op
+	// on plans that haven't rolled out a monthly cap yet.
+	if limits.MonthlyRuns > 0 {
+		used, err := as.server.db.CountMonthlyAgentRuns(userID)
+		if err == nil && used >= limits.MonthlyRuns {
+			return nil, fmt.Errorf("monthly run limit reached (%d/%d) — upgrade plan or wait until next month", used, limits.MonthlyRuns)
+		}
+	}
+
 	// Concurrent-runs cap still uses app_runs since chat sessions are
 	// interactive (one user watching) and should not occupy a slot.
 	if limits.ConcurrentRuns > 0 {

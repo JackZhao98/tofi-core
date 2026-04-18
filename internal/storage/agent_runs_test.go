@@ -67,6 +67,45 @@ func TestAgentRuns_EmptyUserID(t *testing.T) {
 	}
 }
 
+func TestAgentRuns_CountMonthly(t *testing.T) {
+	db, err := InitDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	const u = "u_monthly"
+
+	if n, _ := db.CountMonthlyAgentRuns(u); n != 0 {
+		t.Errorf("empty state: want 0, got %d", n)
+	}
+
+	// 5 runs in the current month — daily + monthly counts should match
+	for i := 0; i < 5; i++ {
+		if err := db.RecordAgentRun(u, "chat"); err != nil {
+			t.Fatalf("RecordAgentRun: %v", err)
+		}
+	}
+
+	if n, _ := db.CountMonthlyAgentRuns(u); n != 5 {
+		t.Errorf("after 5 runs: want 5, got %d", n)
+	}
+
+	// A run from a previous month must not count — backfill a row directly
+	// with an old created_at. We can't go through RecordAgentRun since it
+	// uses CURRENT_TIMESTAMP.
+	if _, err := db.conn.Exec(
+		"INSERT INTO run_events(id, user_id, source, created_at) VALUES(?, ?, ?, ?)",
+		"old-row-1", u, "chat", "2024-01-15 10:00:00",
+	); err != nil {
+		t.Fatalf("backfill old row: %v", err)
+	}
+
+	if n, _ := db.CountMonthlyAgentRuns(u); n != 5 {
+		t.Errorf("previous-month row leaked into current count: want 5, got %d", n)
+	}
+}
+
 func TestAgentRuns_UnknownSource(t *testing.T) {
 	db, err := InitDB(t.TempDir())
 	if err != nil {
