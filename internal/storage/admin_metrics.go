@@ -167,7 +167,13 @@ func (db *DB) ListUserSpending() ([]UserSpendRow, error) {
 	// not ID. (Fixing the schema to be consistent is a separate migration.)
 	out := make([]UserSpendRow, 0, len(users))
 	for _, u := range users {
-		plan, _ := db.GetUserPlan(u.Username)
+		// Admin role always resolves to the "admin" tier for display,
+		// regardless of whether a user_subscriptions row exists. Everyone
+		// else goes through the normal Stripe-fed subscription lookup.
+		plan := "admin"
+		if u.Role != "admin" {
+			plan, _ = db.GetUserPlan(u.Username)
+		}
 		today, _ := db.GetUserSpend(u.Username, todayStart)
 		month, _ := db.GetUserSpend(u.Username, monthStart)
 		all, _ := db.GetUserSpend(u.Username, epoch)

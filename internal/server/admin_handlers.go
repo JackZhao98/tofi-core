@@ -277,7 +277,11 @@ func (s *Server) handleAdminGetUserDetails(w http.ResponseWriter, r *http.Reques
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	epoch := time.Unix(0, 0)
 
-	plan, _ := s.db.GetUserPlan(username)
+	// Admin role → "admin" tier; everyone else → normal subscription lookup.
+	plan := "admin"
+	if user.Role != "admin" {
+		plan, _ = s.db.GetUserPlan(username)
+	}
 	spendToday, _ := s.db.GetUserSpend(username, todayStart)
 	spendMonth, _ := s.db.GetUserSpend(username, monthStart)
 	spendAll, _ := s.db.GetUserSpend(username, epoch)
