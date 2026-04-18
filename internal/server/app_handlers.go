@@ -582,6 +582,27 @@ func (s *Server) handleGetAppRunLog(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// systemSkillPlannerBlurb returns a one-liner describing a system skill
+// for the AI planner's skills catalog. Kept in code rather than parsed
+// from SKILL.md frontmatter at request time because the planner needs a
+// terse, consistent blurb and we'd rather curate than let marketing prose
+// bloat the prompt.
+func systemSkillPlannerBlurb(name string) string {
+	switch name {
+	case "web-search":
+		return "search the web via Brave/Google — use for real-time info (news, prices, etc.)"
+	case "web-fetch":
+		return "fetch a single URL and extract clean text — use when you already know the URL"
+	case "apps", "app-create", "app-inspect", "app-list", "app-manage":
+		return "manage the user's Tofi agents from inside the agent (rarely needed for normal agents)"
+	case "self-improve":
+		return "self-reflection + memory write — niche, skip unless explicitly asked"
+	case "notify":
+		return "deliver results to Telegram/Slack/Discord (runtime handles this automatically, don't need to include)"
+	}
+	return ""
+}
+
 // handlePlanAgent POST /api/v1/agents/plan
 // Multi-turn LLM call to generate/refine an agent config JSON from a
 // conversation. First turn is a single user message describing what the
@@ -620,6 +641,28 @@ func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
 		modelsSection = "\n\nAvailable models (pick from this list only):\n- " + strings.Join(req.AvailableModels, "\n- ")
 	}
 
+	// Build the skills catalog the planner can pick from. Without this
+	// (which was QA #24), the planner returned JSON with no `skills` field,
+	// the frontend then hard-coded `skills: []` during create, and every
+	// AI-made agent launched with zero tools attached — then mysteriously
+	// "couldn't reach the web" mid-run.
+	var skillCatalogLines []string
+	for _, name := range skills.ListSystemSkillNames() {
+		// System skills carry a short Description in their SKILL.md frontmatter,
+		// but ListSystemSkillNames only returns names. The descriptions in the
+		// system prompt are hard to drift with the filesystem so we hand-curate
+		// a short blurb for the ones the planner will want to pick from.
+		desc := systemSkillPlannerBlurb(name)
+		if desc == "" {
+			desc = name
+		}
+		skillCatalogLines = append(skillCatalogLines, fmt.Sprintf("- %s — %s", name, desc))
+	}
+	skillsSection := ""
+	if len(skillCatalogLines) > 0 {
+		skillsSection = "\n\nAvailable skills (pick ONLY from this list — skill names must match exactly):\n" + strings.Join(skillCatalogLines, "\n")
+	}
+
 	systemPrompt := `You are an AI agent architect. The user is designing an agent through conversation. On each turn, return ONLY a complete updated JSON configuration in this exact format:
 
 {
@@ -627,7 +670,8 @@ func (s *Server) handlePlanAgent(w http.ResponseWriter, r *http.Request) {
   "description": "One-line description of what the agent does",
   "prompt": "The task prompt template. Use {{variable}} for runtime parameters.",
   "system_prompt": "Persona and behavior rules for the AI",
-  "model": "gpt-5-mini"
+  "model": "gpt-5-mini",
+  "skills": ["skill-name-1", "skill-name-2"]
 }
 
 Output rules:
@@ -646,7 +690,13 @@ System prompt rules:
 - Always include a line like: "If an expected integration or parameter is missing, complete the core task with whatever data you can gather and clearly note in the output what couldn't be done — do NOT ask the user for clarification mid-run."
 
 Model rules:
-- Default to "gpt-5.4". Use a stronger reasoning model only if the task clearly needs it.` + modelsSection
+- Default to "gpt-5.4". Use a stronger reasoning model only if the task clearly needs it.
+
+Skills rules:
+- "skills" MUST be an array of strings — skill names from the catalog below.
+- Pick the smallest set that covers the task. A stock-price agent only needs web-search / web-fetch; a "create a sub-agent" agent doesn't need app-* skills.
+- If unsure, include web-fetch and web-search — most research-style tasks need them.
+- Empty array [] means "no skills" and is valid only for pure-reasoning agents that don't need external information.` + modelsSection + skillsSection
 
 	model, apiKey, _, err := s.resolveModelAndKey(userID, "")
 	if err != nil {
