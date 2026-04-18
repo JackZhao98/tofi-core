@@ -148,18 +148,30 @@ func (as *AppScheduler) DispatchManualRun(app *storage.AppRecord, userID string,
 func (as *AppScheduler) DispatchRun(app *storage.AppRecord, userID, promptOverride, trigger string, runtimeParams map[string]interface{}) (*storage.AppRunRecord, error) {
 	limits := as.server.getUserPlanLimits(userID)
 
+	// Daily-runs quota is counted against the unified agent_runs log so
+	// that chat turns, app triggers, webhook calls, and scheduled cron
+	// runs all share the same ledger (see storage/agent_runs.go).
 	if limits.DailyRuns > 0 {
-		used, err := as.server.db.CountDailyRuns(userID)
+		used, err := as.server.db.CountDailyAgentRuns(userID)
 		if err == nil && used >= limits.DailyRuns {
 			return nil, fmt.Errorf("daily run limit reached (%d/%d) — upgrade plan or wait until tomorrow", used, limits.DailyRuns)
 		}
 	}
 
+	// Concurrent-runs cap still uses app_runs since chat sessions are
+	// interactive (one user watching) and should not occupy a slot.
 	if limits.ConcurrentRuns > 0 {
 		running, err := as.server.db.CountRunningRuns(userID)
 		if err == nil && running >= limits.ConcurrentRuns {
 			return nil, fmt.Errorf("concurrent run limit reached (%d/%d) — wait for a run to finish", running, limits.ConcurrentRuns)
 		}
+	}
+
+	// Record the run in the unified ledger. A failure here is non-fatal
+	// — we'd rather the agent actually run than reject the request on a
+	// bookkeeping INSERT error.
+	if err := as.server.db.RecordAgentRun(userID, trigger); err != nil {
+		log.Printf("[app-run] ⚠️ RecordAgentRun failed for user %s: %v", userID, err)
 	}
 
 	// Pre-allocate a chat session ID so the HTTP caller can immediately

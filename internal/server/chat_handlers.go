@@ -388,14 +388,36 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Load full session from XML
+	// 2. Daily-runs quota gate — applied BEFORE loading the session so a
+	// user over quota doesn't get to see any processing happen. Admin
+	// users have near-unlimited limits (999999) so this is effectively a
+	// no-op for them.
+	limits := s.getUserPlanLimits(userID)
+	if limits.DailyRuns > 0 {
+		used, _ := s.db.CountDailyAgentRuns(userID)
+		if used >= limits.DailyRuns {
+			writeJSONError(w, http.StatusTooManyRequests, ErrQuotaExceeded,
+				fmt.Sprintf("daily run limit reached (%d/%d) — upgrade plan or wait until tomorrow (resets at UTC midnight)", used, limits.DailyRuns),
+				"")
+			return
+		}
+	}
+
+	// 3. Load full session from XML
 	session, err := s.chatStore.LoadByID(sessionID)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "failed to load session: "+err.Error(), "")
 		return
 	}
 
-	// 3. Agent runs on an independent context so it survives HTTP client
+	// 4. Record the run in the unified ledger so this message counts
+	// toward the daily quota. Best-effort; a DB write hiccup here must
+	// not block the actual agent execution.
+	if err := s.db.RecordAgentRun(userID, "chat"); err != nil {
+		log.Printf("[chat:%s] ⚠️ RecordAgentRun failed: %v", sessionID[:min(8, len(sessionID))], err)
+	}
+
+	// 5. Agent runs on an independent context so it survives HTTP client
 	// disconnects (e.g. browser refresh). Cancellation is driven exclusively
 	// by POST /abort (which also signals any active hold).
 	agentCtx, cancel := context.WithCancel(context.Background())

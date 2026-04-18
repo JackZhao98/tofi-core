@@ -398,9 +398,10 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 	id := r.PathValue("id")
 
-	// Plan limits: daily runs + concurrent runs
+	// Plan limits: daily runs + concurrent runs (daily counted from the
+	// unified agent_runs ledger — includes chat / app / webhook / cron).
 	limits := s.getUserPlanLimits(userID)
-	dailyUsed, _ := s.db.CountDailyRuns(userID)
+	dailyUsed, _ := s.db.CountDailyAgentRuns(userID)
 	if dailyUsed >= limits.DailyRuns {
 		writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
 			fmt.Sprintf("Daily run limit reached (%d/%d). Resets at UTC midnight.", dailyUsed, limits.DailyRuns), "")
