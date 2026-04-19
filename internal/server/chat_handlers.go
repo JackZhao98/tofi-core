@@ -146,14 +146,27 @@ func (s *Server) handleGetChatSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Context usage — expose both the percentage (for the compaction gauge)
+	// and the estimated vs budget raw counts so the frontend can render a
+	// meaningful label on big-context models. With a 1M-token budget a
+	// 10k-token history rounds to 0% and the UI shows "Context: 0%", which
+	// reads as a bug even though it's technically correct.
+	ctxPct := chat.ContextUsagePercent(session.Messages, session.Model)
+	ctxTokens := chat.EstimateTokens(session.Messages)
+	ctxBudget := chat.ContextBudget(session.Model)
+
 	response := struct {
 		*chat.Session
 		ContextUsagePercent int `json:"context_usage_percent"`
+		ContextTokens       int `json:"context_tokens"`
+		ContextBudget       int `json:"context_budget"`
 		LLMCalls            int `json:"llm_calls"`
 		ToolCalls           int `json:"tool_calls"`
 	}{
 		Session:             session,
-		ContextUsagePercent: chat.ContextUsagePercent(session.Messages, session.Model),
+		ContextUsagePercent: ctxPct,
+		ContextTokens:       ctxTokens,
+		ContextBudget:       ctxBudget,
 		LLMCalls:            llmCalls,
 		ToolCalls:           toolCalls,
 	}
