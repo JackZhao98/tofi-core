@@ -471,6 +471,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/v1/user/subscription/portal", s.AuthMiddleware(s.handleCreatePortal))
 	mux.HandleFunc("GET /api/v1/user/subscription/events", s.AuthMiddleware(s.handleListSubEvents))
 	mux.HandleFunc("POST /api/v1/webhooks/stripe", s.handleStripeWebhook)
+	// Public (unauthenticated) — founding-rate slot counter for marketing
+	// pages. Cached 30s via Cache-Control so repeated landing-page hits
+	// don't hammer the DB.
+	mux.HandleFunc("GET /api/v1/founding/status", s.handleGetFoundingStatus)
 
 	// Connectors — 统一多渠道 API
 	mux.HandleFunc("GET /api/v1/connectors", s.AuthMiddleware(s.handleListConnectors))

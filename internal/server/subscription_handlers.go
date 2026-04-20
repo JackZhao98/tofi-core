@@ -38,6 +38,9 @@ func (s *Server) handleGetSubscription(w http.ResponseWriter, r *http.Request) {
 		resp["current_period_end"] = sub.CurrentPeriodEnd
 		resp["cancel_at_period_end"] = sub.CancelAtPeriodEnd
 		resp["stripe_customer_id"] = sub.StripeCustomerID
+		// Exposed so the UI can render a "Founding member · locked in"
+		// badge and the Settings upgrade CTA can show the right price.
+		resp["pricing_cohort"] = sub.PricingCohort
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -67,12 +70,32 @@ func (s *Server) handleGetUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateCheckout POST /api/v1/user/subscription/checkout
+// Body: {"plan": "developer" | "pro", "success_url": "...", "cancel_url": "..."}
+// Default plan is "developer" for backward compatibility with the existing
+// frontend. The pricing cohort (founding vs launch) is decided here based
+// on real-time slot availability and stamped into Stripe metadata so the
+// webhook can persist it on checkout.session.completed.
 func (s *Server) handleCreateCheckout(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
 
-	priceID := stripePriceID("developer")
+	var body struct {
+		Plan       string `json:"plan"`
+		SuccessURL string `json:"success_url"`
+		CancelURL  string `json:"cancel_url"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Plan == "" {
+		body.Plan = "developer"
+	}
+	if body.Plan != "developer" && body.Plan != "pro" {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "invalid plan", "must be 'developer' or 'pro'")
+		return
+	}
+
+	cohort, priceID := s.resolveCheckoutCohort(userID, body.Plan)
 	if priceID == "" {
-		writeJSONError(w, http.StatusServiceUnavailable, ErrInternal, "Stripe not configured", "")
+		writeJSONError(w, http.StatusServiceUnavailable, ErrInternal,
+			fmt.Sprintf("Stripe price not configured for %s tier", body.Plan), "")
 		return
 	}
 
@@ -88,13 +111,6 @@ func (s *Server) handleCreateCheckout(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("Failed to create Stripe customer: %v", err), "")
 		return
 	}
-
-	// Parse optional success/cancel URLs from body
-	var body struct {
-		SuccessURL string `json:"success_url"`
-		CancelURL  string `json:"cancel_url"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
 
 	if body.SuccessURL == "" {
 		body.SuccessURL = "https://tofi.sentiosurge.com/plan/success?session_id={CHECKOUT_SESSION_ID}"
@@ -116,6 +132,12 @@ func (s *Server) handleCreateCheckout(w http.ResponseWriter, r *http.Request) {
 		CancelURL:         stripe.String(body.CancelURL),
 		ClientReferenceID: stripe.String(userID),
 	}
+	// Stamp cohort + plan in metadata so the webhook can persist them
+	// atomically when checkout completes. Stripe preserves metadata across
+	// the entire session lifecycle, so this is more reliable than
+	// re-reading slot availability at webhook time.
+	params.AddMetadata("tofi_plan", body.Plan)
+	params.AddMetadata("tofi_pricing_cohort", cohort)
 
 	session, err := checkoutsession.New(params)
 	if err != nil {
@@ -125,7 +147,24 @@ func (s *Server) handleCreateCheckout(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"checkout_url": session.URL,
+		"checkout_url":    session.URL,
+		"plan":            body.Plan,
+		"pricing_cohort":  cohort,
+	})
+}
+
+// handleGetFoundingStatus GET /api/v1/founding/status
+// Public (no auth) — returns real-time slot availability for the landing
+// page counter. Kept public so marketing pages can render without a token.
+func (s *Server) handleGetFoundingStatus(w http.ResponseWriter, r *http.Request) {
+	devUsed, _ := s.db.CountActivePricingCohort("founding_developer")
+	proUsed, _ := s.db.CountActivePricingCohort("founding_pro")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	json.NewEncoder(w).Encode(map[string]any{
+		"developer": map[string]int{"used": devUsed, "total": FoundingSlotsDeveloper},
+		"pro":       map[string]int{"used": proUsed, "total": FoundingSlotsPro},
 	})
 }
 
@@ -236,10 +275,25 @@ func (s *Server) handleCheckoutCompleted(event stripe.Event) {
 		return
 	}
 
+	// Read back the plan + cohort we stamped in metadata at checkout
+	// create time. Fallback to "developer" / "legacy" so pre-cohort
+	// checkouts that are still in flight don't blow up.
+	plan := "developer"
+	cohort := "legacy"
+	if session.Metadata != nil {
+		if p := session.Metadata["tofi_plan"]; p != "" {
+			plan = p
+		}
+		if c := session.Metadata["tofi_pricing_cohort"]; c != "" {
+			cohort = c
+		}
+	}
+
 	sub := &storage.SubscriptionRecord{
 		UserID:               userID,
-		Plan:                 "developer",
+		Plan:                 plan,
 		Status:               "active",
+		PricingCohort:        cohort,
 		StripeCustomerID:     session.Customer.ID,
 		StripeSubscriptionID: session.Subscription.ID,
 	}
@@ -247,9 +301,17 @@ func (s *Server) handleCheckoutCompleted(event stripe.Event) {
 		log.Printf("[stripe] failed to upsert subscription for %s: %v", userID, err)
 		return
 	}
+	// Upsert preserves an existing cohort — explicitly stamp on first
+	// checkout so the row commits `cohort` even if the caller happened to
+	// re-submit with a different value later (which shouldn't happen, but
+	// be defensive about founding-rate lock-in).
+	if err := s.db.StampPricingCohort(userID, cohort); err != nil {
+		log.Printf("[stripe] failed to stamp cohort %s for %s: %v", cohort, userID, err)
+	}
 
-	s.db.LogSubscriptionEvent(userID, "upgraded", "free", "developer", event.ID, "{}")
-	log.Printf("[stripe] user %s upgraded to developer", userID)
+	s.db.LogSubscriptionEvent(userID, "upgraded", "free", plan, event.ID,
+		fmt.Sprintf(`{"cohort":%q}`, cohort))
+	log.Printf("[stripe] user %s upgraded to %s (%s)", userID, plan, cohort)
 }
 
 func (s *Server) handleInvoicePaid(event stripe.Event) {

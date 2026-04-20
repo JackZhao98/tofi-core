@@ -9,10 +9,18 @@ import (
 )
 
 // SubscriptionRecord represents a user's current subscription state.
+//
+// PricingCohort stamps the price tier the user first subscribed under —
+// empty for free users, one of "founding_developer" / "founding_pro" /
+// "launch_developer" / "launch_pro" / "legacy" otherwise. Once set on
+// checkout.session.completed it never changes for the lifetime of the
+// subscription. That's what lets the first 100 founding members keep
+// $9.99 forever while new customers pay the launch $13.99.
 type SubscriptionRecord struct {
 	UserID               string `json:"user_id"`
 	Plan                 string `json:"plan"`
 	Status               string `json:"status"`
+	PricingCohort        string `json:"pricing_cohort"`
 	StripeCustomerID     string `json:"stripe_customer_id"`
 	StripeSubscriptionID string `json:"stripe_subscription_id"`
 	CurrentPeriodStart   string `json:"current_period_start"`
@@ -62,6 +70,14 @@ func (db *DB) initSubscriptionsTable() error {
 	`)
 	// Migration: add cancel_at_period_end column
 	db.conn.Exec(`ALTER TABLE user_subscriptions ADD COLUMN cancel_at_period_end INTEGER DEFAULT 0`)
+	// Migration: add pricing_cohort column (founding / launch / legacy) so
+	// the first 100 developer + first 100 pro subscribers keep their
+	// original price forever, independent of future price changes.
+	db.conn.Exec(`ALTER TABLE user_subscriptions ADD COLUMN pricing_cohort TEXT DEFAULT ''`)
+	// One-time: stamp pre-existing developer subscribers as 'legacy' so they
+	// stay at the old $5 price until they resubscribe. No-op for new installs.
+	db.conn.Exec(`UPDATE user_subscriptions SET pricing_cohort = 'legacy'
+		WHERE plan = 'developer' AND (pricing_cohort IS NULL OR pricing_cohort = '')`)
 	return err
 }
 
@@ -82,11 +98,11 @@ func (db *DB) GetUserPlan(userID string) (string, error) {
 func (db *DB) GetSubscription(userID string) (*SubscriptionRecord, error) {
 	var s SubscriptionRecord
 	err := db.conn.QueryRow(`
-		SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+		SELECT user_id, plan, status, COALESCE(pricing_cohort,''), stripe_customer_id, stripe_subscription_id,
 		       current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at
 		FROM user_subscriptions WHERE user_id = ?
 	`, userID).Scan(
-		&s.UserID, &s.Plan, &s.Status, &s.StripeCustomerID, &s.StripeSubscriptionID,
+		&s.UserID, &s.Plan, &s.Status, &s.PricingCohort, &s.StripeCustomerID, &s.StripeSubscriptionID,
 		&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CancelAtPeriodEnd, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -99,18 +115,28 @@ func (db *DB) GetSubscription(userID string) (*SubscriptionRecord, error) {
 }
 
 // UpsertSubscription creates or updates the subscription row.
+//
+// PricingCohort is sticky: once set on a user it never changes via Upsert
+// (ON CONFLICT preserves the existing value even if the caller passed an
+// empty string by accident). Only StampPricingCohort can change it — that
+// keeps founding-member lock-in bulletproof against webhook re-entry or
+// subscription renewals that don't carry metadata.
 func (db *DB) UpsertSubscription(s *SubscriptionRecord) error {
 	cancelInt := 0
 	if s.CancelAtPeriodEnd {
 		cancelInt = 1
 	}
 	_, err := db.conn.Exec(`
-		INSERT INTO user_subscriptions (user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+		INSERT INTO user_subscriptions (user_id, plan, status, pricing_cohort, stripe_customer_id, stripe_subscription_id,
 		                                current_period_start, current_period_end, cancel_at_period_end, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			plan = excluded.plan,
 			status = excluded.status,
+			pricing_cohort = CASE
+				WHEN COALESCE(user_subscriptions.pricing_cohort, '') = '' THEN excluded.pricing_cohort
+				ELSE user_subscriptions.pricing_cohort
+			END,
 			stripe_customer_id = excluded.stripe_customer_id,
 			stripe_subscription_id = excluded.stripe_subscription_id,
 			current_period_start = excluded.current_period_start,
@@ -118,13 +144,43 @@ func (db *DB) UpsertSubscription(s *SubscriptionRecord) error {
 			cancel_at_period_end = excluded.cancel_at_period_end,
 			updated_at = excluded.updated_at
 	`,
-		s.UserID, s.Plan, s.Status, s.StripeCustomerID, s.StripeSubscriptionID,
+		s.UserID, s.Plan, s.Status, s.PricingCohort, s.StripeCustomerID, s.StripeSubscriptionID,
 		s.CurrentPeriodStart, s.CurrentPeriodEnd, cancelInt, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert subscription: %w", err)
 	}
 	return nil
+}
+
+// StampPricingCohort force-sets the cohort on a subscription. Used by the
+// Stripe checkout webhook to lock in the founding rate at first purchase.
+// Does NOT overwrite an existing cohort — founding is truly permanent.
+func (db *DB) StampPricingCohort(userID, cohort string) error {
+	_, err := db.conn.Exec(`
+		UPDATE user_subscriptions
+		SET pricing_cohort = ?, updated_at = ?
+		WHERE user_id = ? AND (pricing_cohort IS NULL OR pricing_cohort = '')
+	`, cohort, time.Now().UTC().Format(time.RFC3339), userID)
+	if err != nil {
+		return fmt.Errorf("stamp pricing cohort: %w", err)
+	}
+	return nil
+}
+
+// CountActivePricingCohort returns how many active subscribers currently
+// hold a given cohort. Used by the founding-slot availability check so we
+// can cap founding members at the intended limit.
+func (db *DB) CountActivePricingCohort(cohort string) (int, error) {
+	var n int
+	err := db.conn.QueryRow(`
+		SELECT COUNT(*) FROM user_subscriptions
+		WHERE pricing_cohort = ? AND status IN ('active', 'past_due')
+	`, cohort).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count active pricing cohort: %w", err)
+	}
+	return n, nil
 }
 
 // LogSubscriptionEvent inserts an immutable audit event.
@@ -206,11 +262,11 @@ func (db *DB) CountRunningRuns(userID string) (int, error) {
 func (db *DB) GetSubscriptionByStripeCustomer(customerID string) (*SubscriptionRecord, error) {
 	var s SubscriptionRecord
 	err := db.conn.QueryRow(`
-		SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+		SELECT user_id, plan, status, COALESCE(pricing_cohort,''), stripe_customer_id, stripe_subscription_id,
 		       current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at
 		FROM user_subscriptions WHERE stripe_customer_id = ?
 	`, customerID).Scan(
-		&s.UserID, &s.Plan, &s.Status, &s.StripeCustomerID, &s.StripeSubscriptionID,
+		&s.UserID, &s.Plan, &s.Status, &s.PricingCohort, &s.StripeCustomerID, &s.StripeSubscriptionID,
 		&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CancelAtPeriodEnd, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -226,7 +282,7 @@ func (db *DB) GetSubscriptionByStripeCustomer(customerID string) (*SubscriptionR
 func (db *DB) GetExpiredSubscriptions() ([]*SubscriptionRecord, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := db.conn.Query(`
-		SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+		SELECT user_id, plan, status, COALESCE(pricing_cohort,''), stripe_customer_id, stripe_subscription_id,
 		       current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at
 		FROM user_subscriptions
 		WHERE plan != 'free' AND status = 'active' AND current_period_end != '' AND current_period_end < ?
@@ -239,7 +295,7 @@ func (db *DB) GetExpiredSubscriptions() ([]*SubscriptionRecord, error) {
 	var subs []*SubscriptionRecord
 	for rows.Next() {
 		var s SubscriptionRecord
-		if err := rows.Scan(&s.UserID, &s.Plan, &s.Status, &s.StripeCustomerID, &s.StripeSubscriptionID,
+		if err := rows.Scan(&s.UserID, &s.Plan, &s.Status, &s.PricingCohort, &s.StripeCustomerID, &s.StripeSubscriptionID,
 			&s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CancelAtPeriodEnd, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan expired subscription: %w", err)
 		}
