@@ -1,5 +1,45 @@
 package models
 
+import (
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// StringOrList is a YAML-friendly string that can also parse from a list.
+// Some SKILL.md authors write
+//     allowed-tools: "Bash WebFetch"
+// while others (following the Claude Skills / agentskills.io convention)
+// write
+//     allowed-tools:
+//       - Bash
+//       - WebFetch
+// Both are valid per the spec. We canonicalise to a single space-separated
+// string so downstream splitters don't care which form the author used.
+// JSON serialisation is unaffected because the underlying kind is string.
+type StringOrList string
+
+func (s *StringOrList) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var str string
+		if err := value.Decode(&str); err != nil {
+			return err
+		}
+		*s = StringOrList(str)
+	case yaml.SequenceNode:
+		var list []string
+		if err := value.Decode(&list); err != nil {
+			return err
+		}
+		*s = StringOrList(strings.Join(list, " "))
+	default:
+		return fmt.Errorf("expected string or list of strings, got YAML kind %v", value.Kind)
+	}
+	return nil
+}
+
 // models/skill.go — Skill 相关数据模型
 
 // SkillManifest 表示解析后的 SKILL.md 前置元数据
@@ -24,8 +64,16 @@ type SkillManifest struct {
 	// Metadata 扩展元数据 (key-value 都是 string)
 	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 
-	// AllowedTools 预批准的工具列表 (空格分隔)
-	AllowedTools string `yaml:"allowed-tools,omitempty" json:"allowed_tools,omitempty"`
+	// AllowedTools 预批准的工具列表
+	//
+	// 支持两种 YAML 写法（Claude Skills / agentskills.io 标准都允许）:
+	//   allowed-tools: "Bash WebFetch"
+	//   allowed-tools:
+	//     - Bash
+	//     - WebFetch
+	// Stored internally as a space-separated string; AllowedToolsList()
+	// splits back to a slice at read time.
+	AllowedTools StringOrList `yaml:"allowed-tools,omitempty" json:"allowed_tools,omitempty"`
 
 	// === 扩展字段 (Claude Code / Tofi) ===
 
@@ -110,7 +158,7 @@ func (m *SkillManifest) AllowedToolsList() []string {
 		return nil
 	}
 	var tools []string
-	for _, t := range splitSpaces(m.AllowedTools) {
+	for _, t := range splitSpaces(string(m.AllowedTools)) {
 		if t != "" {
 			tools = append(tools, t)
 		}

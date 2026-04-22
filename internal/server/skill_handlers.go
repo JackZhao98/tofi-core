@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,16 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// serverPathPattern matches absolute paths like /tmp/tofi-skill-zip-1234
+// and /home/user/.tofi/skills/whatever. We strip these from error
+// messages before returning them to users — they expose internal layout
+// and aren't actionable from the user's side.
+var serverPathPattern = regexp.MustCompile(`/(?:tmp|var|home|Users)[^\s,:]*`)
+
+func stripServerPaths(s string) string {
+	return strings.TrimSpace(serverPathPattern.ReplaceAllString(s, ""))
+}
 
 // --- System Skills API ---
 
@@ -188,7 +199,7 @@ func skillFileToRecord(id, scope, source, userID string, sf *models.SkillFile) *
 		Source:          source,
 		ManifestJSON:    manifestJSON,
 		Instructions:    sf.Body,
-		AllowedTools:    sf.Manifest.AllowedTools,
+		AllowedTools:    string(sf.Manifest.AllowedTools),
 		RequiredSecrets: required,
 		HasScripts:      len(sf.ScriptDirs) > 0,
 		UserID:          userID,
@@ -228,7 +239,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		Name:         req.Name,
 		Description:  req.Description,
 		Model:        req.Model,
-		AllowedTools: req.AllowedTools,
+		AllowedTools: models.StringOrList(req.AllowedTools),
 		Inputs:       req.Inputs,
 		Output:       req.Output,
 	}
@@ -318,7 +329,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		Name:         existing.Name,
 		Description:  existing.Description,
 		Model:        req.Model,
-		AllowedTools: req.AllowedTools,
+		AllowedTools: models.StringOrList(req.AllowedTools),
 		Inputs:       req.Inputs,
 		Output:       req.Output,
 	}
@@ -1428,7 +1439,11 @@ func (s *Server) handleInstallSkillZip(w http.ResponseWriter, r *http.Request) {
 
 	if err := skills.ExtractZip(tmpFile.Name(), tempDir); err != nil {
 		cleanup()
-		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, fmt.Sprintf("failed to extract zip: %v", err), "")
+		// Strip anything that looks like a server path from the error —
+		// users get actionable copy ("zip contains too many files", "file
+		// too large", etc.) without seeing our tmp directory layout.
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest,
+			fmt.Sprintf("The uploaded zip couldn't be opened: %s", stripServerPaths(err.Error())), "")
 		return
 	}
 
@@ -1436,9 +1451,9 @@ func (s *Server) handleInstallSkillZip(w http.ResponseWriter, r *http.Request) {
 	discovered, err := skills.DiscoverSkills(tempDir)
 	if err != nil || len(discovered) == 0 {
 		cleanup()
-		errMsg := "no SKILL.md found in zip"
+		errMsg := "No SKILL.md found in the uploaded zip. Include a SKILL.md at the root or inside a skills/ subdirectory."
 		if err != nil {
-			errMsg = fmt.Sprintf("skill discovery failed: %v", err)
+			errMsg = stripServerPaths(err.Error())
 		}
 		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, errMsg, "")
 		return

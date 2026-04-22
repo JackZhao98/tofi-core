@@ -316,9 +316,15 @@ func gitClone(repoURL, ref, destDir string) error {
 //  1.5. AGENTS.md: 解析 agentskills.io 标准索引，定位 skills/<name>/SKILL.md
 //  2. 优先目录: 扫描标准 skill 目录 (skills/, .agents/skills/ 等)
 //  3. 递归回退: 遍历整个目录树
+//
+// parseErrors surfaces any SKILL.md files we *did* find but couldn't
+// parse — a user-facing error like "yaml unmarshal at line 7" is vastly
+// more actionable than "no SKILL.md found", which is what the caller
+// used to see if every candidate file had a syntax error.
 func DiscoverSkills(rootDir string) ([]*models.SkillFile, error) {
 	seen := make(map[string]bool) // 按 name 去重
 	var results []*models.SkillFile
+	var parseErrors []string
 
 	addSkill := func(sf *models.SkillFile) {
 		if sf == nil || seen[sf.Manifest.Name] {
@@ -328,10 +334,31 @@ func DiscoverSkills(rootDir string) ([]*models.SkillFile, error) {
 		results = append(results, sf)
 	}
 
+	// tryParse attempts ParseDir and records any non-"not found" error
+	// so we can surface it as the user-facing failure reason later.
+	tryParse := func(dir string) *models.SkillFile {
+		sf, err := ParseDir(dir)
+		if err == nil {
+			return sf
+		}
+		// Silently ignore "SKILL.md not found" — that's the normal case
+		// for scan candidates. Real parse errors (YAML, validation) are
+		// always worth preserving.
+		if strings.Contains(err.Error(), "SKILL.md not found") {
+			return nil
+		}
+		rel, _ := filepath.Rel(rootDir, dir)
+		if rel == "" || rel == "." {
+			rel = filepath.Base(dir)
+		}
+		parseErrors = append(parseErrors, fmt.Sprintf("%s: %v", rel, err))
+		return nil
+	}
+
 	// Layer 1: 直接检查根目录
-	if sf, err := ParseDir(rootDir); err == nil {
+	if sf := tryParse(rootDir); sf != nil {
 		addSkill(sf)
-		return results, nil // 单技能仓库，直接返回
+		return results, nil
 	}
 
 	// Layer 1.5: 检查 AGENTS.md（agentskills.io 标准）
@@ -340,7 +367,7 @@ func DiscoverSkills(rootDir string) ([]*models.SkillFile, error) {
 		names := parseAgentsMD(data)
 		for _, name := range names {
 			skillDir := filepath.Join(rootDir, "skills", name)
-			if sf, err := ParseDir(skillDir); err == nil {
+			if sf := tryParse(skillDir); sf != nil {
 				addSkill(sf)
 			}
 		}
@@ -357,7 +384,7 @@ func DiscoverSkills(rootDir string) ([]*models.SkillFile, error) {
 		}
 
 		// 检查优先目录本身是否有 SKILL.md
-		if sf, err := ParseDir(scanDir); err == nil {
+		if sf := tryParse(scanDir); sf != nil {
 			addSkill(sf)
 			continue
 		}
@@ -372,7 +399,7 @@ func DiscoverSkills(rootDir string) ([]*models.SkillFile, error) {
 				continue
 			}
 			subDir := filepath.Join(scanDir, entry.Name())
-			if sf, err := ParseDir(subDir); err == nil {
+			if sf := tryParse(subDir); sf != nil {
 				addSkill(sf)
 			}
 		}
@@ -383,13 +410,51 @@ func DiscoverSkills(rootDir string) ([]*models.SkillFile, error) {
 	}
 
 	// Layer 3: 递归回退
-	discoverRecursive(rootDir, 0, addSkill)
+	discoverRecursiveTracking(rootDir, rootDir, 0, addSkill, &parseErrors)
 
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no SKILL.md files found in %s", rootDir)
+		if len(parseErrors) > 0 {
+			// Surface the first real parse error — that's the one the user
+			// can actually fix. Tmp path is rewritten to a relative form
+			// by tryParse so this message stays user-friendly.
+			return nil, fmt.Errorf("SKILL.md could not be parsed — %s", parseErrors[0])
+		}
+		return nil, fmt.Errorf("no SKILL.md file found in the zip (place it at the root or inside a skills/ subdirectory)")
 	}
 
 	return results, nil
+}
+
+// discoverRecursiveTracking mirrors discoverRecursive but records parse
+// errors relative to the zip root so user-facing messages don't leak a
+// temp path. Kept as a sibling function to avoid changing the existing
+// call signature.
+func discoverRecursiveTracking(dir, rootDir string, depth int, addSkill func(*models.SkillFile), parseErrors *[]string) {
+	if depth > maxDiscoveryDepth {
+		return
+	}
+	sf, err := ParseDir(dir)
+	if err == nil {
+		addSkill(sf)
+		return
+	}
+	if err != nil && !strings.Contains(err.Error(), "SKILL.md not found") {
+		rel, _ := filepath.Rel(rootDir, dir)
+		if rel == "" {
+			rel = filepath.Base(dir)
+		}
+		*parseErrors = append(*parseErrors, fmt.Sprintf("%s: %v", rel, err))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || skipDirs[entry.Name()] {
+			continue
+		}
+		discoverRecursiveTracking(filepath.Join(dir, entry.Name()), rootDir, depth+1, addSkill, parseErrors)
+	}
 }
 
 // discoverRecursive 递归搜索 SKILL.md
