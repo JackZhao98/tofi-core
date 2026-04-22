@@ -1346,10 +1346,17 @@ func (s *Server) installConfirm(w http.ResponseWriter, userID, sessionID string,
 		}
 
 		if scope == "private" {
-			// User upload → save directly to user dir
-			content, _ := os.ReadFile(filepath.Join(sf.Dir, "SKILL.md"))
-			if err := localStore.SaveUserLocal(userID, sf.Manifest.Name, string(content)); err != nil {
+			// User upload → copy the whole skill dir (SKILL.md + scripts/)
+			// into the user's private skills dir. SaveUserLocal only writes
+			// SKILL.md and would silently drop scripts, which breaks any
+			// skill that registers direct tools.
+			if sf.Dir == "" {
+				log.Printf("[skills] warning: skipping %s — no source directory", sf.Manifest.Name)
+				continue
+			}
+			if err := localStore.SaveUserSkill(userID, sf.Manifest.Name, sf.Dir); err != nil {
 				log.Printf("[skills] warning: failed to save %s to user dir: %v", sf.Manifest.Name, err)
+				continue
 			}
 		} else {
 			// Git install → global dir + symlink for user
@@ -1460,10 +1467,14 @@ func (s *Server) handleInstallSkillZip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	localStore := skills.NewLocalStore(s.config.HomeDir)
-	installer := skills.NewSkillInstaller(localStore)
 
 	if len(discovered) == 1 {
-		// Single skill → install directly
+		// Single skill → copy into the user's private skill dir so the
+		// filesystem-backed ListUserSkills(userID) call that powers
+		// GET /skills will pick it up. Writing to the global skill dir
+		// via installer.InstallOne() would leave it invisible to the
+		// user's own listing (that was the bug: zip upload "succeeded"
+		// but the skill never appeared in /settings/skills).
 		defer cleanup()
 		sf := discovered[0]
 
@@ -1472,7 +1483,11 @@ func (s *Server) handleInstallSkillZip(w http.ResponseWriter, r *http.Request) {
 		existing, _ := s.db.GetSkill(skillID)
 		isUpdate := existing != nil
 
-		if err := installer.InstallOne(sf); err != nil {
+		if sf.Dir == "" {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "internal: extracted skill has no source directory", "")
+			return
+		}
+		if err := localStore.SaveUserSkill(userID, sf.Manifest.Name, sf.Dir); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("install failed: %v", err), "")
 			return
 		}
