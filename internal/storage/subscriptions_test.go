@@ -96,8 +96,11 @@ func TestCountActivePricingCohort(t *testing.T) {
 	}{
 		{"u1", "developer", "active", "founding_developer"},
 		{"u2", "developer", "active", "founding_developer"},
-		{"u3", "developer", "past_due", "founding_developer"}, // still counts
-		{"u4", "developer", "cancelled", "founding_developer"}, // does NOT count
+		{"u3", "developer", "past_due", "founding_developer"},   // paying, counts
+		{"u4", "developer", "cancelled", "founding_developer"},  // wrong status, excluded
+		// Cancelled-via-webhook path: handleSubscriptionDeleted flips plan to
+		// 'free' but keeps cohort stamped. Must NOT occupy a founding slot.
+		{"u_cancel", "free", "active", "founding_developer"},
 		{"u5", "developer", "active", "launch_developer"},
 		{"u6", "pro", "active", "founding_pro"},
 	}

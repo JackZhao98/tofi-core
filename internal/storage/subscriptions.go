@@ -168,14 +168,22 @@ func (db *DB) StampPricingCohort(userID, cohort string) error {
 	return nil
 }
 
-// CountActivePricingCohort returns how many active subscribers currently
-// hold a given cohort. Used by the founding-slot availability check so we
-// can cap founding members at the intended limit.
+// CountActivePricingCohort returns how many subscribers are currently
+// *paying* under a given cohort — active or past_due on a paid plan.
+//
+// We exclude plan='free' so a cancelled member doesn't occupy a founding
+// slot after their subscription ends (handleSubscriptionDeleted flips
+// plan to 'free' but leaves the cohort stamped, so the user still
+// qualifies for founding rates if they come back while slots remain).
+// This keeps the counter honest: it equals the number of live founders,
+// not the number of people who ever held the cohort.
 func (db *DB) CountActivePricingCohort(cohort string) (int, error) {
 	var n int
 	err := db.conn.QueryRow(`
 		SELECT COUNT(*) FROM user_subscriptions
-		WHERE pricing_cohort = ? AND status IN ('active', 'past_due')
+		WHERE pricing_cohort = ?
+		  AND status IN ('active', 'past_due')
+		  AND plan != 'free'
 	`, cohort).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count active pricing cohort: %w", err)
