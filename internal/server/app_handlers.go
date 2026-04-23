@@ -1196,7 +1196,7 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 		SkillTools: skillTools,
 		ExtraTools: extraTools,
 		SandboxDir: sandboxDir,
-		UserDir:    userID,
+		UserDir:    s.workspace.UserDir(userID),
 		Executor:   s.executor,
 		SecretEnv:  secretEnv,
 		OnStreamChunk: func(cardID, delta string) {

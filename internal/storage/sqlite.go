@@ -278,6 +278,10 @@ func InitDB(homeDir string) (*DB, error) {
 		log.Printf("⚠️  run_events table creation: %v", err)
 	}
 
+	if err := db.initToolRuntimeInventoryTable(); err != nil {
+		log.Printf("⚠️  tool_runtime_inventory table creation: %v", err)
+	}
+
 	return db, nil
 }
 

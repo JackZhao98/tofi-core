@@ -288,6 +288,9 @@ func (s *Server) Start() error {
 	// 启动 app run log/session TTL 清理
 	s.startAppRunCleanup()
 
+	// 启动共享 artifact / 用户私有工具目录清理
+	s.startToolRuntimeCleanup()
+
 	// 启动 refresh token 清理
 	s.startRefreshTokenCleanup()
 
@@ -525,9 +528,12 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/stats", s.AdminMiddleware(s.handleAdminGetStats))
 	mux.HandleFunc("GET /api/v1/admin/settings/registration", s.AdminMiddleware(s.handleGetRegistrationSettings))
 	mux.HandleFunc("PUT /api/v1/admin/settings/registration", s.AdminMiddleware(s.handleSetRegistrationSettings))
+	mux.HandleFunc("GET /api/v1/admin/settings/tool-runtime", s.AdminMiddleware(s.handleAdminGetToolRuntimeSettings))
+	mux.HandleFunc("PUT /api/v1/admin/settings/tool-runtime", s.AdminMiddleware(s.handleAdminSetToolRuntimeSettings))
 	mux.HandleFunc("GET /api/v1/admin/users", s.AdminMiddleware(s.handleAdminListUsers))
 	mux.HandleFunc("POST /api/v1/admin/users", s.AdminMiddleware(s.handleAdminCreateUser))
 	mux.HandleFunc("DELETE /api/v1/admin/users/{id}", s.AdminMiddleware(s.handleAdminDeleteUser))
+	mux.HandleFunc("GET /api/v1/admin/tool-runtime/summary", s.AdminMiddleware(s.handleAdminGetToolRuntimeSummary))
 	mux.HandleFunc("GET /api/v1/admin/secrets", s.AdminMiddleware(s.handleAdminListSecrets))
 	mux.HandleFunc("DELETE /api/v1/admin/secrets/{id}", s.AdminMiddleware(s.handleAdminDeleteSecret))
 	mux.HandleFunc("GET /api/v1/admin/usage", s.AdminMiddleware(s.handleAdminGetUsage))
@@ -536,6 +542,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/admin/cost/by-model", s.AdminMiddleware(s.handleAdminGetModelBreakdown))
 	mux.HandleFunc("GET /api/v1/admin/cost/revenue", s.AdminMiddleware(s.handleAdminGetRevenue))
 	mux.HandleFunc("GET /api/v1/admin/users/{username}/details", s.AdminMiddleware(s.handleAdminGetUserDetails))
+	mux.HandleFunc("GET /api/v1/admin/users/{username}/tool-runtime", s.AdminMiddleware(s.handleAdminGetUserToolRuntime))
+	mux.HandleFunc("PUT /api/v1/admin/users/{username}/tool-runtime/quota", s.AdminMiddleware(s.handleAdminSetUserToolRuntimeQuota))
 	mux.HandleFunc("PUT /api/v1/admin/users/{username}/plan", s.AdminMiddleware(s.handleAdminSetUserPlan))
 
 	// Admin: 3rd-party service keys (Brave, etc.) + usage tracking
@@ -621,5 +629,3 @@ func (s *Server) sendRestartNotification() {
 	_ = sender.SendMessage(chatID, "✅ Tofi 服务已重启完成")
 	log.Printf("[Server] Sent restart confirmation to Telegram chat %s", chatID)
 }
-
-

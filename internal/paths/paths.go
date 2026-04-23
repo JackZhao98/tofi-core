@@ -72,6 +72,36 @@ func PackagesDir() string {
 	return filepath.Join(TofiHome(), "packages")
 }
 
+// PackagesRuntimeDir returns the shared runtime directory.
+func PackagesRuntimeDir() string {
+	return filepath.Join(PackagesDir(), "runtime")
+}
+
+// PackagesArtifactsDir returns the shared content-addressed artifact store.
+func PackagesArtifactsDir() string {
+	return filepath.Join(PackagesDir(), "artifacts")
+}
+
+// PackagesCacheDir returns the shared package-manager cache root.
+func PackagesCacheDir() string {
+	return filepath.Join(PackagesDir(), "cache")
+}
+
+// PackagesPipCacheDir returns the shared pip cache directory.
+func PackagesPipCacheDir() string {
+	return filepath.Join(PackagesCacheDir(), "pip")
+}
+
+// PackagesUVCacheDir returns the shared uv cache directory.
+func PackagesUVCacheDir() string {
+	return filepath.Join(PackagesCacheDir(), "uv")
+}
+
+// PackagesNPMCacheDir returns the shared npm cache directory.
+func PackagesNPMCacheDir() string {
+	return filepath.Join(PackagesCacheDir(), "npm")
+}
+
 // ──────────────────────────────────────────────────────────────
 // Per-user directories under TOFI_HOME/users/{userID}/
 // ──────────────────────────────────────────────────────────────
@@ -119,6 +149,61 @@ func UserUploadsDir(userID string) string {
 // UserArtifactsDir returns the artifacts directory for a user.
 func UserArtifactsDir(userID string) string {
 	return filepath.Join(UserDir(userID), "artifacts")
+}
+
+// UserBinDir returns the private binary directory for a user.
+func UserBinDir(userID string) string {
+	return filepath.Join(UserDir(userID), "bin")
+}
+
+// UserConfigDir returns the private config directory for a user.
+func UserConfigDir(userID string) string {
+	return filepath.Join(UserDir(userID), "config")
+}
+
+// UserCacheDir returns the private cache root for a user.
+func UserCacheDir(userID string) string {
+	return filepath.Join(UserDir(userID), "cache")
+}
+
+// UserStateDir returns the private state root for a user.
+func UserStateDir(userID string) string {
+	return filepath.Join(UserDir(userID), "state")
+}
+
+// UserToolRunStateDir returns the private last-run metadata directory for user tools.
+func UserToolRunStateDir(userID string) string {
+	return filepath.Join(UserStateDir(userID), "tool-runs")
+}
+
+// UserPythonDir returns the private Python root for a user.
+func UserPythonDir(userID string) string {
+	return filepath.Join(UserDir(userID), "python")
+}
+
+// UserPythonVenvsDir returns the private Python venv root for a user.
+func UserPythonVenvsDir(userID string) string {
+	return filepath.Join(UserPythonDir(userID), "venvs")
+}
+
+// UserDefaultPythonVenvDir returns the default Python venv path for a user.
+func UserDefaultPythonVenvDir(userID string) string {
+	return filepath.Join(UserPythonVenvsDir(userID), "default")
+}
+
+// UserNPMDir returns the private npm prefix for a user.
+func UserNPMDir(userID string) string {
+	return filepath.Join(UserDir(userID), "npm")
+}
+
+// UserUVDir returns the private uv data root for a user.
+func UserUVDir(userID string) string {
+	return filepath.Join(UserDir(userID), "uv")
+}
+
+// UserUVToolsDir returns the private uv tool environments root for a user.
+func UserUVToolsDir(userID string) string {
+	return filepath.Join(UserUVDir(userID), "tools")
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -241,6 +241,9 @@ type UserDetailResponse struct {
 	FavoriteModel        *storage.FavoriteModel     `json:"favorite_model,omitempty"`
 	LastActiveAt         string                     `json:"last_active_at"`
 	Events               []*storage.SubscriptionEvent `json:"events"`
+	ToolRuntimeBytes     int64                      `json:"tool_runtime_bytes"`
+	ToolRuntimeQuotaBytes int64                     `json:"tool_runtime_quota_bytes"`
+	ToolRuntimeItemCount int                        `json:"tool_runtime_item_count"`
 }
 
 // SubscriptionInfo is the UI-friendly subset of storage.SubscriptionRecord
@@ -260,6 +263,7 @@ type SubscriptionInfo struct {
 // table uses; see the note in storage/admin_metrics.go).
 // GET /api/v1/admin/users/{username}/details
 func (s *Server) handleAdminGetUserDetails(w http.ResponseWriter, r *http.Request) {
+	s.syncToolRuntimeInventory()
 	username := r.PathValue("username")
 	if username == "" {
 		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "username required", "")
@@ -319,6 +323,7 @@ func (s *Server) handleAdminGetUserDetails(w http.ResponseWriter, r *http.Reques
 		LastActiveAt:  lastActive,
 		Events:        events,
 	}
+	s.augmentUserDetailWithToolRuntime(&resp, username)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

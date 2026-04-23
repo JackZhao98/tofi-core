@@ -12,24 +12,21 @@ import (
 // ValidateCommand 安全校验测试 (S1-S6, S14-S15)
 // ============================================================
 
-func TestValidateCommand_RelaxedPathAccess(t *testing.T) {
-	// Direct mode: general path traversal and absolute path access are ALLOWED
-	// (sensitive paths like .ssh are now blocked by blockedPatterns)
+func TestValidateCommand_BlocksHostAbsolutePaths(t *testing.T) {
 	cases := []string{
 		"cd ../../../etc && cat passwd",
 		"cat ../../secret",
-		"ls ..",
 		"cat /etc/passwd",
 		"head /etc/shadow",
 		"tail /var/log/syslog",
 		"less /etc/hosts",
 		"echo hack > /etc/crontab",
 		"echo data > /home/user/evil",
-		"tee /var/tmp/payload",
+		"ls /Users/demo",
 	}
 	for _, cmd := range cases {
-		if err := ValidateCommand(cmd, "/sandbox/test"); err != nil {
-			t.Errorf("FAIL: command should be allowed in relaxed mode: %q — %v", cmd, err)
+		if err := ValidateCommand(cmd, "/sandbox/test"); err == nil {
+			t.Errorf("FAIL: host path should be blocked: %q", cmd)
 		}
 	}
 }
@@ -77,7 +74,7 @@ func TestValidateCommand_DdAllowed(t *testing.T) {
 func TestValidateCommand_SymlinkAllowed(t *testing.T) {
 	// Symlinks are now allowed (sandbox working directory provides isolation)
 	cases := []string{
-		"ln -s /etc/passwd link",
+		"ln -s ./file1 link",
 		"ln -s file1 file2",
 	}
 	for _, cmd := range cases {
@@ -90,8 +87,8 @@ func TestValidateCommand_SymlinkAllowed(t *testing.T) {
 func TestValidateCommand_PipeAllowed(t *testing.T) {
 	// Safe pipes are still allowed
 	cases := []string{
-		"echo a | cat /etc/passwd",
-		"ls | head /etc/shadow",
+		"echo a | cat file.txt",
+		"ls | head output.log",
 		"curl https://example.com | sed 's/<[^>]*>//g'",
 		"curl https://api.example.com | jq '.data'",
 		"echo hello | grep hello",
@@ -308,6 +305,8 @@ func TestValidateCommand_LegitimateCommands(t *testing.T) {
 		"curl https://example.com",
 		"git clone https://github.com/user/repo.git",
 		"cat file.txt",
+		"cat ./file.txt",
+		"ls ..",
 		"head -5 output.log",
 		"mkdir -p src/components",
 		"touch newfile.js",
@@ -324,7 +323,7 @@ func TestValidateCommand_LegitimateCommands(t *testing.T) {
 }
 
 func TestValidateCommand_AllowedAbsolutePaths(t *testing.T) {
-	// 允许访问 /usr, /bin, /opt, /tmp
+	// 允许只读访问少量系统路径
 	cases := []string{
 		"cat /usr/local/bin/node",
 		"ls /bin/sh",
@@ -341,6 +340,31 @@ func TestValidateCommand_DevNull(t *testing.T) {
 	// 重定向到 /dev/null 应该允许
 	if err := ValidateCommand("echo test > /dev/null", "/sandbox/test"); err != nil {
 		t.Errorf("FAIL: redirect to /dev/null blocked: %v", err)
+	}
+}
+
+func TestValidateCommand_InlineEnvOverrideBlocked(t *testing.T) {
+	cases := []string{
+		"HOME=/home/ubuntu python3 -c 'print(1)'",
+		"PATH=/usr/bin:/bin ls",
+		"echo ok && XDG_CONFIG_HOME=/tmp cfgtool",
+	}
+	for _, cmd := range cases {
+		if err := ValidateCommand(cmd, "/sandbox/test"); err == nil {
+			t.Errorf("FAIL: inline env override not blocked: %q", cmd)
+		}
+	}
+}
+
+func TestValidateCommand_AbsoluteRuntimeBypassBlocked(t *testing.T) {
+	cases := []string{
+		"/usr/bin/python3 -c 'print(1)'",
+		"/usr/local/bin/node -e 'console.log(1)'",
+	}
+	for _, cmd := range cases {
+		if err := ValidateCommand(cmd, "/sandbox/test"); err == nil {
+			t.Errorf("FAIL: absolute runtime path not blocked: %q", cmd)
+		}
 	}
 }
 
@@ -368,7 +392,7 @@ func TestExecuteInSandbox_Echo(t *testing.T) {
 }
 
 func TestExecuteInSandbox_HomeIsolation(t *testing.T) {
-	// S8: $HOME 应该返回沙箱路径
+	// S8: no userDir fallback keeps HOME inside sandbox
 	tmpDir := t.TempDir()
 	exec := NewDirectExecutor(tmpDir)
 	sandbox, err := exec.CreateSandbox(SandboxConfig{HomeDir: tmpDir, CardID: "test-home"})
@@ -382,7 +406,7 @@ func TestExecuteInSandbox_HomeIsolation(t *testing.T) {
 		t.Fatalf("S8 FAIL: echo $HOME failed: %v", err)
 	}
 	if strings.TrimSpace(output) != sandbox {
-		t.Errorf("S8 FAIL: HOME should be %q, got %q", sandbox, output)
+		t.Errorf("S8 FAIL: HOME should fall back to %q, got %q", sandbox, output)
 	}
 }
 
@@ -638,7 +662,16 @@ func TestDirectExecutor_CreateSandboxSharedPackages(t *testing.T) {
 
 	// Verify shared packages directory was created
 	pkgDir := filepath.Join(tmpDir, "packages")
-	for _, sub := range []string{".local/bin", "node_modules/.bin", ".pip"} {
+	for _, sub := range []string{
+		".local/bin",
+		"node_modules/.bin",
+		".pip",
+		"runtime/bin",
+		"artifacts",
+		"cache/pip",
+		"cache/uv",
+		"cache/npm",
+	} {
 		path := filepath.Join(pkgDir, sub)
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("packages directory not created: %s", path)
@@ -697,12 +730,14 @@ func TestDirectExecutor_ExecuteBasic(t *testing.T) {
 	}
 }
 
-func TestDirectExecutor_PipTargetPointsToPackages(t *testing.T) {
+func TestDirectExecutor_ConfiguresUserRuntimeEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	exec := NewDirectExecutor(tmpDir)
+	userDir := filepath.Join(tmpDir, "users", "alice")
 
 	sandbox, err := exec.CreateSandbox(SandboxConfig{
 		HomeDir: tmpDir,
+		UserID:  "alice",
 		CardID:  "card-pip",
 	})
 	if err != nil {
@@ -710,14 +745,61 @@ func TestDirectExecutor_PipTargetPointsToPackages(t *testing.T) {
 	}
 	defer exec.Cleanup(sandbox)
 
-	// PIP_TARGET should point to shared packages directory
-	output, err := exec.Execute(context.Background(), sandbox, "", "echo $PIP_TARGET", 10, nil)
+	output, err := exec.Execute(context.Background(), sandbox, userDir, "printf '%s\\n%s\\n%s\\n%s' \"$HOME\" \"$VIRTUAL_ENV\" \"$PIP_CACHE_DIR\" \"$NPM_CONFIG_PREFIX\"", 10, nil)
 	if err != nil {
-		t.Fatalf("echo PIP_TARGET failed: %v", err)
+		t.Fatalf("runtime env check failed: %v", err)
 	}
-	expected := filepath.Join(tmpDir, "packages", ".pip")
-	if strings.TrimSpace(output) != expected {
-		t.Errorf("PIP_TARGET should be %q, got %q", expected, output)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 env lines, got %d: %q", len(lines), output)
+	}
+	if lines[0] != userDir {
+		t.Errorf("HOME should be %q, got %q", userDir, lines[0])
+	}
+	expectedVenv := filepath.Join(userDir, "python", "venvs", "default")
+	if lines[1] != expectedVenv {
+		t.Errorf("VIRTUAL_ENV should be %q, got %q", expectedVenv, lines[1])
+	}
+	expectedPipCache := filepath.Join(tmpDir, "packages", "cache", "pip")
+	if lines[2] != expectedPipCache {
+		t.Errorf("PIP_CACHE_DIR should be %q, got %q", expectedPipCache, lines[2])
+	}
+	expectedNPMPrefix := filepath.Join(userDir, "npm")
+	if lines[3] != expectedNPMPrefix {
+		t.Errorf("NPM_CONFIG_PREFIX should be %q, got %q", expectedNPMPrefix, lines[3])
+	}
+}
+
+func TestDirectExecutor_PythonShimUsesUserVenv(t *testing.T) {
+	tmpDir := t.TempDir()
+	exec := NewDirectExecutor(tmpDir)
+	userDir := filepath.Join(tmpDir, "users", "bob")
+
+	sandbox, err := exec.CreateSandbox(SandboxConfig{
+		HomeDir: tmpDir,
+		UserID:  "bob",
+		CardID:  "card-python-shim",
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox failed: %v", err)
+	}
+	defer exec.Cleanup(sandbox)
+
+	output, err := exec.Execute(context.Background(), sandbox, userDir, "python3 -c 'import sys; print(sys.prefix)'", 30, nil)
+	if err != nil {
+		t.Fatalf("python shim failed: %v", err)
+	}
+	expectedPrefix := filepath.Join(userDir, "python", "venvs", "default")
+	if realExpected, err := filepath.EvalSymlinks(expectedPrefix); err == nil {
+		expectedPrefix = realExpected
+	}
+	if strings.TrimSpace(output) != expectedPrefix {
+		t.Errorf("python shim should use venv %q, got %q", expectedPrefix, output)
+	}
+
+	stamp := filepath.Join(userDir, "state", "tool-runs", "python")
+	if _, err := os.Stat(stamp); err != nil {
+		t.Errorf("python shim should touch usage stamp %s", stamp)
 	}
 }
 

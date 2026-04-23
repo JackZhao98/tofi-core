@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -62,7 +63,16 @@ var blockedPatterns = []*regexp.Regexp{
 
 	// Encoded bypass: base64 decode | shell
 	regexp.MustCompile(`base64\s+-[dD]\b.*\|\s*(sh|bash)\b`),
+
+	// Relative path traversal out of the sandbox
+	regexp.MustCompile(`(^|[\s"'=;|&()<>:])\.\./`),
 }
+
+var (
+	inlineEnvAssignPattern     = regexp.MustCompile(`(^|[;&|]\s*|&&\s*|\|\|\s*)[A-Za-z_][A-Za-z0-9_]*=`)
+	absolutePathPattern        = regexp.MustCompile("(^|[\\s\"'=;|&()<>:])(/[^ \\t\\r\\n\"';|&()<>]+)")
+	absoluteRuntimeExecPattern = regexp.MustCompile("(^|[;&|]\\s*|&&\\s*|\\|\\|\\s*)(/[^ \\t\\r\\n\"';|&()<>]+/(python3?|pip3?|npm|npx|node|uv))(\\s|$)")
+)
 
 // ─── DirectExecutor ─────────────────────────────────────────
 
@@ -82,7 +92,16 @@ func NewDirectExecutor(homeDir string) *DirectExecutor {
 func (d *DirectExecutor) CreateSandbox(cfg SandboxConfig) (string, error) {
 	// 1. Ensure shared packages directory exists
 	pkgDir := filepath.Join(cfg.HomeDir, "packages")
-	for _, sub := range []string{".local/bin", "node_modules/.bin", ".pip"} {
+	for _, sub := range []string{
+		".local/bin",
+		"node_modules/.bin",
+		".pip",
+		"runtime/bin",
+		"artifacts",
+		"cache/pip",
+		"cache/uv",
+		"cache/npm",
+	} {
 		if err := os.MkdirAll(filepath.Join(pkgDir, sub), 0755); err != nil {
 			return "", fmt.Errorf("failed to create packages directory %s: %v", sub, err)
 		}
@@ -92,6 +111,13 @@ func (d *DirectExecutor) CreateSandbox(cfg SandboxConfig) (string, error) {
 	sandboxDir := filepath.Join(cfg.HomeDir, "sandbox", cfg.CardID)
 	if err := os.MkdirAll(filepath.Join(sandboxDir, "tmp"), 0755); err != nil {
 		return "", fmt.Errorf("failed to create sandbox directory: %v", err)
+	}
+
+	if cfg.UserID != "" {
+		userRoot := filepath.Join(cfg.HomeDir, "users", cfg.UserID)
+		if err := ensureUserRuntimeDirs(userRoot); err != nil {
+			return "", fmt.Errorf("failed to create user runtime directories: %v", err)
+		}
 	}
 
 	return sandboxDir, nil
@@ -105,7 +131,7 @@ func (d *DirectExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 		// Infer from sandboxPath: {homeDir}/sandbox/{cardID}
 		homeDir = filepath.Dir(filepath.Dir(sandboxPath))
 	}
-	return executeInSandboxInternal(ctx, sandboxPath, homeDir, command, timeoutSec, env)
+	return executeInSandboxInternal(ctx, sandboxPath, homeDir, userDir, command, timeoutSec, env)
 }
 
 // Cleanup removes the task-level sandbox directory and all its contents.
@@ -158,7 +184,7 @@ func logCommandAudit(sandboxPath, command string) {
 	fmt.Fprintf(f, "[%s] %s\n", time.Now().Format(time.RFC3339), command)
 }
 
-func executeInSandboxInternal(parentCtx context.Context, sandboxPath, homeDir, command string, timeoutSec int, extraEnv map[string]string) (string, error) {
+func executeInSandboxInternal(parentCtx context.Context, sandboxPath, homeDir, userDir, command string, timeoutSec int, extraEnv map[string]string) (string, error) {
 	// Enforce timeout ceiling
 	if timeoutSec <= 0 {
 		timeoutSec = 60
@@ -176,34 +202,84 @@ func executeInSandboxInternal(parentCtx context.Context, sandboxPath, homeDir, c
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	// Layer 3: Use macOS sandbox-exec if available
+	pkgDir := filepath.Join(homeDir, "packages")
+	if userDir == "" {
+		userDir = sandboxPath
+	}
+
+	// Layer 3: OS sandbox when available
 	var cmd *exec.Cmd
 	if seatbeltAvailable {
 		profile := buildSeatbeltProfile(defaultSeatbeltConfig())
 		cmd = exec.CommandContext(ctx, "sandbox-exec", "-p", profile, "sh", "-c", command)
 		log.Printf("🔒 [sandbox] Executing with seatbelt: %.80s...", command)
+	} else if runtime.GOOS == "linux" {
+		if bwrapPath, err := exec.LookPath("bwrap"); err == nil {
+			args := buildBwrapArgs(sandboxPath, userDir, pkgDir, command)
+			cmd = exec.CommandContext(ctx, bwrapPath, args...)
+			log.Printf("🔒 [sandbox] Executing with bwrap: %.80s...", command)
+		} else {
+			cmd = exec.CommandContext(ctx, "sh", "-c", command)
+		}
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
 	cmd.Dir = sandboxPath
 
 	// Layer 2: Build safe PATH (whitelist instead of full host PATH)
-	pkgDir := filepath.Join(homeDir, "packages")
+	if err := ensureUserRuntimeDirs(userDir); err != nil {
+		return "", fmt.Errorf("prepare user runtime directories: %v", err)
+	}
+	shimDir, shimEnv, err := createRuntimeShims(sandboxPath, userDir, pkgDir)
+	if err != nil {
+		return "", fmt.Errorf("prepare runtime shims: %v", err)
+	}
 	sandboxBinPath := buildSafePATH(pkgDir)
+	venvDir := filepath.Join(userDir, "python", "venvs", "default")
+	userBinDir := filepath.Join(userDir, "bin")
+	runtimeBinDir := filepath.Join(pkgDir, "runtime", "bin")
+	sandboxBinPath = strings.Join([]string{
+		shimDir,
+		userBinDir,
+		filepath.Join(venvDir, "bin"),
+		runtimeBinDir,
+		sandboxBinPath,
+	}, ":")
+	userConfigDir := filepath.Join(userDir, "config")
+	userCacheDir := filepath.Join(userDir, "cache")
+	userStateDir := filepath.Join(userDir, "state")
+	userNPMDir := filepath.Join(userDir, "npm")
+	userUVToolsDir := filepath.Join(userDir, "uv", "tools")
+	pipCacheDir := filepath.Join(pkgDir, "cache", "pip")
+	uvCacheDir := filepath.Join(pkgDir, "cache", "uv")
 
 	// Build environment: inherit host capabilities, isolate file writes
 	env := []string{
-		"HOME=" + sandboxPath,
+		"HOME=" + userDir,
 		"PATH=" + sandboxBinPath,
 		"TMPDIR=" + filepath.Join(sandboxPath, "tmp"),
 		"LANG=en_US.UTF-8",
 		"TERM=dumb",
-		// Package manager targets: shared packages directory (persistent across tasks)
+		"XDG_CONFIG_HOME=" + userConfigDir,
+		"XDG_CACHE_HOME=" + userCacheDir,
 		"NODE_PATH=" + filepath.Join(pkgDir, "node_modules"),
-		"PIP_TARGET=" + filepath.Join(pkgDir, ".pip"),
-		"PYTHONPATH=" + filepath.Join(pkgDir, ".pip"),
-		"UV_CACHE_DIR=" + filepath.Join(pkgDir, ".cache", "uv"),
-		"NPM_CONFIG_PREFIX=" + pkgDir,
+		"PIP_CACHE_DIR=" + pipCacheDir,
+		"PIP_REQUIRE_VIRTUALENV=true",
+		"PYTHONPATH=" + filepath.Join(venvDir, "lib"),
+		"UV_CACHE_DIR=" + uvCacheDir,
+		"UV_TOOL_DIR=" + userUVToolsDir,
+		"UV_TOOL_BIN_DIR=" + userBinDir,
+		"NPM_CONFIG_PREFIX=" + userNPMDir,
+		"NPM_CONFIG_CACHE=" + filepath.Join(userCacheDir, "npm"),
+		"VIRTUAL_ENV=" + venvDir,
+		"TOFI_USER_ROOT=" + userDir,
+		"TOFI_USER_BIN=" + userBinDir,
+		"TOFI_USER_STATE_DIR=" + userStateDir,
+		"TOFI_USER_VENV=" + venvDir,
+		"TOFI_RUNTIME_BIN=" + runtimeBinDir,
+	}
+	for k, v := range shimEnv {
+		env = append(env, k+"="+v)
 	}
 
 	// Inject extra environment variables (e.g., skill secrets)
@@ -218,7 +294,7 @@ func executeInSandboxInternal(parentCtx context.Context, sandboxPath, homeDir, c
 	cmd.Stdout = &limitedWriter{w: &stdout, limit: MaxOutputBytes}
 	cmd.Stderr = &limitedWriter{w: &stderr, limit: MaxOutputBytes}
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	// Combine output
 	output := stdout.String()
@@ -239,6 +315,134 @@ func executeInSandboxInternal(parentCtx context.Context, sandboxPath, homeDir, c
 	}
 
 	return strings.TrimRight(output, "\n"), nil
+}
+
+func ensureUserRuntimeDirs(userDir string) error {
+	for _, dir := range []string{
+		userDir,
+		filepath.Join(userDir, "bin"),
+		filepath.Join(userDir, "config"),
+		filepath.Join(userDir, "config", "npm"),
+		filepath.Join(userDir, "cache"),
+		filepath.Join(userDir, "cache", "npm"),
+		filepath.Join(userDir, "state"),
+		filepath.Join(userDir, "state", "tool-runs"),
+		filepath.Join(userDir, "python"),
+		filepath.Join(userDir, "python", "venvs"),
+		filepath.Join(userDir, "npm"),
+		filepath.Join(userDir, "uv"),
+		filepath.Join(userDir, "uv", "tools"),
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createRuntimeShims(sandboxPath, userDir, pkgDir string) (string, map[string]string, error) {
+	shimDir := filepath.Join(sandboxPath, ".tofi-shims")
+	if err := os.MkdirAll(shimDir, 0755); err != nil {
+		return "", nil, err
+	}
+
+	pythonPath, err := resolveHostTool("python3")
+	if err != nil {
+		return "", nil, fmt.Errorf("python3 not found: %w", err)
+	}
+	nodePath, _ := resolveHostTool("node")
+	npmPath, _ := resolveHostTool("npm")
+	npxPath, _ := resolveHostTool("npx")
+	uvPath, _ := resolveHostTool("uv")
+
+	shimEnv := map[string]string{
+		"TOFI_RUNTIME_PYTHON": pythonPath,
+	}
+	if nodePath != "" {
+		shimEnv["TOFI_RUNTIME_NODE"] = nodePath
+	}
+	if npmPath != "" {
+		shimEnv["TOFI_RUNTIME_NPM"] = npmPath
+	}
+	if npxPath != "" {
+		shimEnv["TOFI_RUNTIME_NPX"] = npxPath
+	}
+	if uvPath != "" {
+		shimEnv["TOFI_RUNTIME_UV"] = uvPath
+	}
+
+	shims := map[string]string{
+		"python": runtimePythonShim(),
+		"python3": runtimePythonShim(),
+		"pip":    runtimePipShim(),
+		"pip3":   runtimePipShim(),
+	}
+	if nodePath != "" {
+		shims["node"] = passthroughShim("runtime-node", "$TOFI_RUNTIME_NODE")
+	}
+	if npmPath != "" {
+		shims["npm"] = passthroughShim("runtime-npm", "$TOFI_RUNTIME_NPM")
+	}
+	if npxPath != "" {
+		shims["npx"] = passthroughShim("runtime-npx", "$TOFI_RUNTIME_NPX")
+	}
+	if uvPath != "" {
+		shims["uv"] = passthroughShim("runtime-uv", "$TOFI_RUNTIME_UV")
+	}
+
+	for name, content := range shims {
+		if err := os.WriteFile(filepath.Join(shimDir, name), []byte(content), 0755); err != nil {
+			return "", nil, err
+		}
+	}
+
+	return shimDir, shimEnv, nil
+}
+
+func resolveHostTool(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func runtimePythonShim() string {
+	return `#!/bin/sh
+set -eu
+STAMP="${TOFI_USER_STATE_DIR}/tool-runs/python"
+mkdir -p "$(dirname "$STAMP")"
+touch "$STAMP"
+if [ ! -x "${TOFI_USER_VENV}/bin/python" ]; then
+  mkdir -p "$(dirname "$TOFI_USER_VENV")"
+  "$TOFI_RUNTIME_PYTHON" -m venv "$TOFI_USER_VENV"
+fi
+exec "${TOFI_USER_VENV}/bin/python" "$@"
+`
+}
+
+func runtimePipShim() string {
+	return `#!/bin/sh
+set -eu
+STAMP="${TOFI_USER_STATE_DIR}/tool-runs/pip"
+mkdir -p "$(dirname "$STAMP")"
+touch "$STAMP"
+if [ ! -x "${TOFI_USER_VENV}/bin/python" ]; then
+  mkdir -p "$(dirname "$TOFI_USER_VENV")"
+  "$TOFI_RUNTIME_PYTHON" -m venv "$TOFI_USER_VENV"
+fi
+exec "${TOFI_USER_VENV}/bin/python" -m pip "$@"
+`
+}
+
+func passthroughShim(toolName, targetVar string) string {
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+STAMP="${TOFI_USER_STATE_DIR}/tool-runs/%s"
+mkdir -p "$(dirname "$STAMP")"
+touch "$STAMP"
+exec %s "$@"
+`, toolName, targetVar)
 }
 
 // fixUnbalancedQuotes removes trailing unmatched double quotes from commands.
@@ -265,6 +469,10 @@ func ValidateCommand(command, sandboxPath string) error {
 
 	lower := strings.ToLower(command)
 
+	if inlineEnvAssignPattern.MatchString(command) {
+		return fmt.Errorf("inline environment overrides are not allowed")
+	}
+
 	// Check blocked command prefixes
 	for _, prefix := range blockedPrefixes {
 		if strings.HasPrefix(lower, prefix) {
@@ -285,7 +493,107 @@ func ValidateCommand(command, sandboxPath string) error {
 		}
 	}
 
+	if absoluteRuntimeExecPattern.MatchString(command) {
+		return fmt.Errorf("absolute runtime paths are not allowed")
+	}
+
+	if err := validateAbsolutePaths(command, sandboxPath); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func validateAbsolutePaths(command, sandboxPath string) error {
+	allowedPrefixes := []string{
+		sandboxPath,
+		"/usr/",
+		"/bin/",
+		"/opt/",
+		"/tmp/",
+		"/dev/null",
+		"/dev/urandom",
+		"/dev/zero",
+	}
+	if realSandbox, err := filepath.EvalSymlinks(sandboxPath); err == nil && realSandbox != "" {
+		allowedPrefixes = append(allowedPrefixes, realSandbox)
+	}
+
+	matches := absolutePathPattern.FindAllStringSubmatch(command, -1)
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		path := strings.TrimRight(match[2], ",)")
+		if path == "" || strings.HasPrefix(path, "//") {
+			continue
+		}
+		if isAllowedAbsolutePath(path, allowedPrefixes) {
+			continue
+		}
+		return fmt.Errorf("absolute path %q is not allowed", path)
+	}
+	return nil
+}
+
+func isAllowedAbsolutePath(path string, allowedPrefixes []string) bool {
+	for _, prefix := range allowedPrefixes {
+		if path == prefix || strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildBwrapArgs(sandboxPath, userDir, pkgDir, command string) []string {
+	args := []string{
+		"--die-with-parent",
+		"--new-session",
+		"--proc", "/proc",
+		"--dev", "/dev",
+	}
+
+	for _, pair := range [][2]string{
+		{"/usr", "/usr"},
+		{"/bin", "/bin"},
+		{"/lib", "/lib"},
+		{"/lib64", "/lib64"},
+		{"/usr/local", "/usr/local"},
+		{"/opt", "/opt"},
+		{"/etc/resolv.conf", "/etc/resolv.conf"},
+		{"/etc/hosts", "/etc/hosts"},
+		{"/etc/nsswitch.conf", "/etc/nsswitch.conf"},
+		{"/etc/passwd", "/etc/passwd"},
+		{"/etc/group", "/etc/group"},
+		{"/etc/localtime", "/etc/localtime"},
+		{"/etc/ssl", "/etc/ssl"},
+		{"/etc/pki", "/etc/pki"},
+		{"/etc/ca-certificates", "/etc/ca-certificates"},
+	} {
+		if _, err := os.Stat(pair[0]); err == nil {
+			args = append(args, "--ro-bind", pair[0], pair[1])
+		}
+	}
+
+	for _, pair := range [][2]string{
+		{pkgDir, pkgDir},
+		{userDir, userDir},
+		{sandboxPath, sandboxPath},
+		{filepath.Join(sandboxPath, "tmp"), filepath.Join(sandboxPath, "tmp")},
+	} {
+		if pair[0] == "" {
+			continue
+		}
+		if _, err := os.Stat(pair[0]); err == nil {
+			args = append(args, "--bind", pair[0], pair[1])
+		}
+	}
+
+	args = append(args,
+		"--chdir", sandboxPath,
+		"sh", "-c", command,
+	)
+	return args
 }
 
 // ─── limitedWriter ──────────────────────────────────────────
