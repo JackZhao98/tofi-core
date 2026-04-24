@@ -152,15 +152,22 @@ func (g *GvisorExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 	defer cancel()
 
 	containerID := filepath.Base(sandboxPath)
-	// --ignore-cgroups: runsc tries to create a sub-cgroup per sandbox, which
-	// fails under a rootless user unless cgroup delegation is explicitly set
-	// up. We lose cgroup-level memory quota but keep per-process rlimits
-	// (NPROC/NOFILE/FSIZE/CPU) defined in the OCI spec — still enough to
-	// contain runaway sandboxes.
+	// Flags required to run runsc as a non-root user under systemctl --user:
+	//   --rootless       skips newuidmap/newgidmap; the process inside the
+	//                    sandbox sees itself as root while staying mapped to
+	//                    the real host UID outside. Required because our
+	//                    subuid/subgid ranges aren't wired for multi-UID
+	//                    containers.
+	//   --ignore-cgroups runsc otherwise tries to create a sub-cgroup per
+	//                    sandbox and hits EPERM on cgroup.subtree_control
+	//                    without explicit delegation. Per-process rlimits
+	//                    (NPROC/NOFILE/FSIZE/CPU) in the OCI spec stay in
+	//                    effect — enough to bound one sandbox.
 	cmd := exec.CommandContext(runCtx,
 		g.runscBin,
 		"--root", g.stateDir,
 		"--network", "sandbox",
+		"--rootless",
 		"--ignore-cgroups",
 		"run",
 		"--bundle", sandboxPath,
