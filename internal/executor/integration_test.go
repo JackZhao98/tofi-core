@@ -65,27 +65,28 @@ func runCmd(t *testing.T, g *GvisorExecutor, userID, command string, envOverride
 }
 
 // ─── T1 — mount isolation ─────────────────────────────────────────
-// Alice installs pandas, Bob installs numpy. Verify A cannot import
-// numpy and B cannot import pandas.
+// Alice installs humanize, bob installs wcwidth. Both are single-file
+// zero-dependency packages; the earlier pandas/numpy pair leaked via
+// the shared dep graph (pandas pulls numpy as a transitive).
 func TestGvisorT1_MountIsolation(t *testing.T) {
 	g, _ := testExecutor(t)
-	runCmd(t, g, "alice", "python3 -m pip install --quiet pandas", nil)
-	runCmd(t, g, "bob", "python3 -m pip install --quiet numpy", nil)
+	runCmd(t, g, "alice", "python3 -m pip install --quiet humanize", nil)
+	runCmd(t, g, "bob", "python3 -m pip install --quiet wcwidth", nil)
 
 	outA := runCmd(t, g, "alice", `python3 -c 'try:
-  import numpy; print("LEAK")
+  import wcwidth; print("LEAK")
 except ImportError:
   print("ISOLATED")'`, nil)
 	if !strings.Contains(outA, "ISOLATED") {
-		t.Errorf("alice should not see bob's numpy: %s", outA)
+		t.Errorf("alice should not see bob's wcwidth: %s", outA)
 	}
 
 	outB := runCmd(t, g, "bob", `python3 -c 'try:
-  import pandas; print("LEAK")
+  import humanize; print("LEAK")
 except ImportError:
   print("ISOLATED")'`, nil)
 	if !strings.Contains(outB, "ISOLATED") {
-		t.Errorf("bob should not see alice's pandas: %s", outB)
+		t.Errorf("bob should not see alice's humanize: %s", outB)
 	}
 }
 
