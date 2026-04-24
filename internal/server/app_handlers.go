@@ -1197,7 +1197,7 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 		ExtraTools: extraTools,
 		SandboxDir: sandboxDir,
 		UserDir:    s.workspace.UserDir(userID),
-		Executor:   s.executor,
+		Executor:   executor.WithQuota(s.executor, userID, s.QuotaGate()),
 		SecretEnv:  secretEnv,
 		OnStreamChunk: func(cardID, delta string) {
 			chunk, _ := json.Marshal(map[string]string{"delta": delta})
