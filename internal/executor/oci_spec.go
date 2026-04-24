@@ -185,10 +185,14 @@ func BuildOCIConfig(opts OCISpecOptions) ([]byte, error) {
 		"linux": map[string]any{
 			"namespaces": []map[string]any{
 				{"type": "pid"},
-				{"type": "network"},
 				{"type": "ipc"},
 				{"type": "uts"},
 				{"type": "mount"},
+				// network namespace intentionally omitted — runsc runs
+				// with --network=host (rootless mode requirement), so the
+				// sandbox shares the host network ns. When the egress
+				// allowlist branch lands we flip this back on with
+				// --network=sandbox.
 			},
 		},
 	}

@@ -79,7 +79,7 @@ func TestBuildOCIConfig_PersistentMode(t *testing.T) {
 
 	linux := spec["linux"].(map[string]any)
 	namespaces := linux["namespaces"].([]any)
-	wantNS := map[string]bool{"pid": true, "network": true, "ipc": true, "uts": true, "mount": true}
+	wantNS := map[string]bool{"pid": true, "ipc": true, "uts": true, "mount": true}
 	gotNS := map[string]bool{}
 	for _, ns := range namespaces {
 		gotNS[ns.(map[string]any)["type"].(string)] = true
@@ -88,6 +88,9 @@ func TestBuildOCIConfig_PersistentMode(t *testing.T) {
 		if !gotNS[name] {
 			t.Errorf("missing %s namespace", name)
 		}
+	}
+	if gotNS["network"] {
+		t.Error("network namespace should NOT be in OCI spec while running --network=host")
 	}
 }
 
