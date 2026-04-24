@@ -111,7 +111,8 @@ func TestGvisorT3_SharedWheelCacheHit(t *testing.T) {
 	g, _ := testExecutor(t)
 	out1 := runCmd(t, g, "alice", "python3 -m pip install requests 2>&1", nil)
 	out2 := runCmd(t, g, "bob", "python3 -m pip install requests 2>&1", nil)
-	if !strings.Contains(out2, "cached") && !strings.Contains(out2, "Already satisfied") {
+	lower := strings.ToLower(out2)
+	if !strings.Contains(lower, "cached") && !strings.Contains(lower, "already satisfied") {
 		t.Errorf("bob's install should hit wheel cache.\nalice:\n%s\nbob:\n%s", out1, out2)
 	}
 }
@@ -189,13 +190,16 @@ func TestGvisorT6_QuotaEnforcement(t *testing.T) {
 }
 
 // ─── T7 — ephemeral install doesn't persist ─────────────────────
+// Uses 'rich' because it is not in the system site-packages on a fresh
+// Ubuntu 24.04 ARM64 box. Earlier versions tried 'six' which shipped
+// with the distro and masked the ephemeral-vs-persistent distinction.
 func TestGvisorT7_EphemeralDoesNotPersist(t *testing.T) {
 	g, _ := testExecutor(t)
-	runCmd(t, g, "alice", "python3 -m pip install --quiet six",
+	runCmd(t, g, "alice", "python3 -m pip install --quiet rich",
 		map[string]string{"TOFI_INSTALL_MODE": "ephemeral"})
 
 	out := runCmd(t, g, "alice", `python3 -c 'try:
-  import six; print("LEAK")
+  import rich; print("LEAK")
 except ImportError:
   print("GONE")'`, nil)
 	if !strings.Contains(out, "GONE") {

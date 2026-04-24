@@ -153,7 +153,12 @@ func BuildOCIConfig(opts OCISpecOptions) ([]byte, error) {
 	// Host paths that vary by distro — /lib64 is x86_64-only, some slim
 	// containers drop /sbin. Only mount what actually exists; bind-mounting
 	// a non-existent source makes runsc abort the sandbox boot.
-	for _, hostPath := range []string{"/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc"} {
+	//
+	// /run/systemd/resolve is included so glibc can follow the
+	// /etc/resolv.conf symlink (Ubuntu 24.04's default). Without it DNS
+	// resolution inside the sandbox fails with EAI_AGAIN even though we
+	// share the host network namespace.
+	for _, hostPath := range []string{"/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc", "/run/systemd/resolve"} {
 		if _, err := os.Stat(hostPath); err != nil {
 			continue
 		}
