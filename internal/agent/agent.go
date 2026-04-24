@@ -367,7 +367,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 								timeoutSec := classifyTimeout(cmd, 0)
 								execInstance := cfg.Executor
 								if execInstance == nil {
-									execInstance = executor.NewDirectExecutor("")
+									execInstance = executor.NewExecutor("")
 								}
 								output, execErr := execInstance.Execute(
 									context.Background(),
@@ -1038,7 +1038,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				var shellResult ShellResult
 				execInstance := cfg.Executor
 				if execInstance == nil {
-					execInstance = executor.NewDirectExecutor("")
+					execInstance = executor.NewExecutor("")
 				}
 
 				if bgManager != nil {

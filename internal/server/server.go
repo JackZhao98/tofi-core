@@ -119,8 +119,9 @@ func NewServer(config Config) (*Server, error) {
 		log.Printf("⚠️  AI key migration warning: %v", err)
 	}
 
-	// Initialize sandbox executor (direct execution with software-level isolation)
-	exec := executor.NewDirectExecutor(config.HomeDir)
+	// Initialize sandbox executor: gVisor on Linux if runsc is present,
+	// DevExecutor (insecure) everywhere else — see internal/executor/factory.go.
+	exec := executor.NewExecutor(config.HomeDir)
 
 	// Read rate limit RPM from settings (default 60)
 	rpm := 60
