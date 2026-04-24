@@ -7,9 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -37,16 +35,18 @@ func NewGvisorExecutor(homeDir, runscBin string) (*GvisorExecutor, error) {
 		return nil, fmt.Errorf("runscBin is required")
 	}
 
-	uid, gid := currentUIDGID()
 	stateDir := filepath.Join(homeDir, "runsc-state")
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return nil, fmt.Errorf("create runsc state dir: %w", err)
 	}
+	// In --rootless mode, runsc maps host uid → sandbox uid 0. The OCI spec's
+	// process uid must therefore be 0, not the host uid, or the sandbox
+	// process will run under an unmapped uid with no filesystem access.
 	return &GvisorExecutor{
 		homeDir:  homeDir,
 		runscBin: runscBin,
-		uid:      uid,
-		gid:      gid,
+		uid:      0,
+		gid:      0,
 		stateDir: stateDir,
 	}, nil
 }
@@ -291,12 +291,3 @@ func logAuditLine(sandboxPath, command string) {
 	fmt.Fprintf(f, "[%s] %s\n", time.Now().Format(time.RFC3339), command)
 }
 
-func currentUIDGID() (uint32, uint32) {
-	u, err := user.Current()
-	if err != nil {
-		return 1000, 1000
-	}
-	uid, _ := strconv.ParseUint(u.Uid, 10, 32)
-	gid, _ := strconv.ParseUint(u.Gid, 10, 32)
-	return uint32(uid), uint32(gid)
-}
