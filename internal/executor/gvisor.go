@@ -73,8 +73,12 @@ func (g *GvisorExecutor) CreateSandbox(cfg SandboxConfig) (string, error) {
 	}
 
 	if cfg.UserID != "" {
-		if err := ensurePersistentUserDirs(filepath.Join(homeDir, "users", cfg.UserID)); err != nil {
+		userRoot := filepath.Join(homeDir, "users", cfg.UserID)
+		if err := ensurePersistentUserDirs(userRoot); err != nil {
 			return "", fmt.Errorf("create user dir: %w", err)
+		}
+		if err := ensureUserVenv(userRoot); err != nil {
+			return "", fmt.Errorf("create user venv: %w", err)
 		}
 	}
 
@@ -221,6 +225,27 @@ func (g *GvisorExecutor) Cleanup(sandboxPath string) {
 func (g *GvisorExecutor) forceDelete(containerID string) {
 	cmd := exec.Command(g.runscBin, "--root", g.stateDir, "delete", "--force", containerID)
 	_ = cmd.Run()
+}
+
+// ensureUserVenv lazily materialises the user's default Python venv on the
+// host so the sandbox sees a working virtualenv when bind-mounted.
+// Idempotent: skips if venv already exists. The in-sandbox path
+// /home/tofi/.local/python/venvs/default is bind-mapped to
+// {userRoot}/python/venvs/default, so what we create on host is what the
+// sandbox sees.
+func ensureUserVenv(userRoot string) error {
+	venvPath := filepath.Join(userRoot, "python", "venvs", "default")
+	if _, err := os.Stat(filepath.Join(venvPath, "bin", "python")); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(venvPath), 0755); err != nil {
+		return err
+	}
+	cmd := exec.Command("python3", "-m", "venv", "--system-site-packages", venvPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("python3 -m venv %s: %v\n%s", venvPath, err, out)
+	}
+	return nil
 }
 
 // ensurePersistentUserDirs creates the full user/{uid} subtree expected by
