@@ -1194,7 +1194,7 @@ User timezone: %s`, string(appsJSON), time.Now().Format("2006-01-02 15:04:05 MST
 		Prompt:     req.Message,
 		Messages:   providerMessages,
 		SkillTools: skillTools,
-		ExtraTools: extraTools,
+		ExtraTools: append(extraTools, s.BuildDiskTools(userID)...),
 		SandboxDir: sandboxDir,
 		UserDir:    s.workspace.UserDir(userID),
 		Executor:   executor.WithQuota(s.executor, userID, s.QuotaGate()),

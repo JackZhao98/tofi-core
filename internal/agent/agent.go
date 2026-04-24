@@ -34,10 +34,15 @@ type SkillTool struct {
 	DirectTools  []models.SkillToolDef  // Direct tool definitions from manifest (skip sub-LLM, execute scripts directly)
 }
 
-// ExtraBuiltinTool allows registering additional built-in tools with custom handlers
+// ExtraBuiltinTool allows registering additional built-in tools with custom handlers.
+// Deferred tools are hidden from the LLM until surfaced via tofi_tool_search —
+// use this for tools that only matter in rare situations (disk cleanup, etc.)
+// so they don't bloat the default context.
 type ExtraBuiltinTool struct {
-	Schema  provider.Tool
-	Handler func(args map[string]interface{}) (string, error)
+	Schema   provider.Tool
+	Handler  func(args map[string]interface{}) (string, error)
+	Deferred bool
+	Hint     string // comma/space-separated keywords for tofi_tool_search
 }
 
 // AgentConfig holds the configuration required to run an autonomous agent
@@ -184,10 +189,13 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 	// Unified tool registry — replaces the old extraHandlers map
 	registry := NewToolRegistry()
 
-	// Register core built-in tools
+	// Register core built-in tools. Deferred ones go into the registry
+	// but NOT into allTools — they surface via tofi_tool_search only.
 	for _, et := range cfg.ExtraTools {
 		registry.Register(WrapExtraBuiltin(et))
-		allTools = append(allTools, et.Schema)
+		if !et.Deferred {
+			allTools = append(allTools, et.Schema)
+		}
 	}
 
 	// Track which skills have been loaded (persisted across turns via session)
