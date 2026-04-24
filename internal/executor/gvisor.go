@@ -153,20 +153,26 @@ func (g *GvisorExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 
 	containerID := filepath.Base(sandboxPath)
 	// Flags required to run runsc as a non-root user under systemctl --user:
-	//   --rootless       skips newuidmap/newgidmap; the process inside the
-	//                    sandbox sees itself as root while staying mapped to
-	//                    the real host UID outside. Required because our
+	//   --rootless       single-user namespace: sandboxed process appears as
+	//                    root inside but stays mapped to the host UID
+	//                    outside. Skips newuidmap/newgidmap (our
 	//                    subuid/subgid ranges aren't wired for multi-UID
-	//                    containers.
+	//                    containers).
 	//   --ignore-cgroups runsc otherwise tries to create a sub-cgroup per
 	//                    sandbox and hits EPERM on cgroup.subtree_control
 	//                    without explicit delegation. Per-process rlimits
 	//                    (NPROC/NOFILE/FSIZE/CPU) in the OCI spec stay in
 	//                    effect — enough to bound one sandbox.
+	//   --network=host   --rootless is incompatible with gVisor's own
+	//                    netstack. Host network means no egress isolation;
+	//                    that's acceptable for now and will be replaced by
+	//                    a host-side iptables allowlist in a later branch.
+	//                    We still keep mount, pid, ipc, uts, and mount-ns
+	//                    isolation — the primary wins over DevExecutor.
 	cmd := exec.CommandContext(runCtx,
 		g.runscBin,
 		"--root", g.stateDir,
-		"--network", "sandbox",
+		"--network=host",
 		"--rootless",
 		"--ignore-cgroups",
 		"run",
