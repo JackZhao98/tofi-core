@@ -152,10 +152,16 @@ func (g *GvisorExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 	defer cancel()
 
 	containerID := filepath.Base(sandboxPath)
+	// --ignore-cgroups: runsc tries to create a sub-cgroup per sandbox, which
+	// fails under a rootless user unless cgroup delegation is explicitly set
+	// up. We lose cgroup-level memory quota but keep per-process rlimits
+	// (NPROC/NOFILE/FSIZE/CPU) defined in the OCI spec — still enough to
+	// contain runaway sandboxes.
 	cmd := exec.CommandContext(runCtx,
 		g.runscBin,
 		"--root", g.stateDir,
 		"--network", "sandbox",
+		"--ignore-cgroups",
 		"run",
 		"--bundle", sandboxPath,
 		containerID,
