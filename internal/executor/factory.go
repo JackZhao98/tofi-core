@@ -29,13 +29,13 @@ func NewExecutor(homeDir string) Executor {
 		}
 	}
 	logDevExecutorBanner()
-	return NewDirectExecutor(homeDir)
+	return NewDevExecutor(homeDir)
 }
 
 func logDevExecutorBanner() {
 	log.Println("┌─────────────────────────────────────────────────────────────┐")
 	log.Println("│  ⚠️  INSECURE DEV EXECUTOR                                  │")
-	log.Println("│  runsc/gVisor unavailable — sandbox is cmd.Dir + seatbelt.  │")
+	log.Println("│  runsc/gVisor unavailable — sandbox is cmd.Dir only.        │")
 	log.Println("│  NEVER run this build in production with real users.        │")
 	log.Println("└─────────────────────────────────────────────────────────────┘")
 }

@@ -1014,18 +1014,11 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				if destructLevel >= DestructiveCommand {
 					ctx.Log("[Shell] ⚠️  Destructive command detected: %s", destructWarning)
 					// TODO: in Chat mode, ask user for confirmation via Hooks
-					// For now, log the warning and proceed (App Run is unattended)
+					// For now, log the warning and proceed (App Run is unattended).
 				}
-
-				// Security validation (blocklist + regex patterns)
-				if err := executor.ValidateCommand(command, cfg.SandboxDir); err != nil {
-					resultMsg := "Security violation: " + err.Error()
-					messages = appendAndEmit(messages, provider.Message{
-						Role: "tool", Content: resultMsg, ToolCallID: callID, ToolName: fnName,
-					})
-					markStepDone(resultMsg)
-					continue
-				}
+				// No pre-execution command validation — the defense is the sandbox
+				// itself (gVisor syscall filter + mount isolation). DevExecutor
+				// runs are local-dev only and explicitly unsafe.
 
 				// Classify timeout based on command type
 				requestedTimeout := 0
