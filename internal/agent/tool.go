@@ -272,6 +272,8 @@ func WrapExtraBuiltin(et ExtraBuiltinTool) ToolDef {
 	return &FuncTool{
 		ToolName:   et.Schema.Name,
 		ToolSchema: et.Schema,
+		IsDeferred: et.Deferred,
+		Hint:       et.Hint,
 		ExecuteFunc: func(_ context.Context, args map[string]interface{}) (string, error) {
 			return et.Handler(args)
 		},

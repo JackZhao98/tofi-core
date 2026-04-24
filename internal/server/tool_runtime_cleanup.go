@@ -285,6 +285,29 @@ func collectToolRuntimeItems(category, root string) ([]ToolRuntimeItemMeta, int6
 	return items, totalBytes, lastActive
 }
 
+// bumpUserInventory rescans a single user's directories and writes a fresh
+// inventory snapshot to SQLite. Cheap enough to run after each install
+// (typical ~50-200ms for 1GB quota) and keeps the quota gate reading
+// accurate numbers without waiting for the 6h sweep.
+//
+// Safe to call from a goroutine — errors are logged and swallowed.
+func (s *Server) bumpUserInventory(userID string) {
+	if userID == "" {
+		return
+	}
+	userRoot := filepath.Join(s.config.HomeDir, "users", userID)
+	items := scanRuntimeInventory("user", userID, map[string]string{
+		"bin":      filepath.Join(userRoot, "bin"),
+		"venv":     filepath.Join(userRoot, "python", "venvs"),
+		"npm":      filepath.Join(userRoot, "npm"),
+		"uv_tool":  filepath.Join(userRoot, "uv", "tools"),
+		"artifact": filepath.Join(userRoot, "artifacts"),
+	})
+	if err := s.db.ReplaceToolRuntimeInventory("user", userID, items); err != nil {
+		log.Printf("[quota] bumpUserInventory(%s) failed: %v", userID, err)
+	}
+}
+
 func (s *Server) syncToolRuntimeInventory() {
 	sharedItems := scanRuntimeInventory("shared", "shared", map[string]string{
 		"artifacts": filepath.Join(s.config.HomeDir, "packages", "artifacts"),
