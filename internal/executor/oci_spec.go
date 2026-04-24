@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -149,7 +150,13 @@ func BuildOCIConfig(opts OCISpecOptions) ([]byte, error) {
 			"options":     []string{"bind", "rw"},
 		},
 	}
+	// Host paths that vary by distro — /lib64 is x86_64-only, some slim
+	// containers drop /sbin. Only mount what actually exists; bind-mounting
+	// a non-existent source makes runsc abort the sandbox boot.
 	for _, hostPath := range []string{"/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc"} {
+		if _, err := os.Stat(hostPath); err != nil {
+			continue
+		}
 		mounts = append(mounts, map[string]any{
 			"destination": hostPath,
 			"type":        "bind",
