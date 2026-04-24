@@ -123,6 +123,16 @@ func (g *GvisorExecutor) Execute(ctx context.Context, sandboxPath, userDir, comm
 		return "", fmt.Errorf("persistent install mode requires userDir")
 	}
 
+	// In ephemeral mode /home/tofi/.local is bind-mounted to
+	// {sandboxPath}/overlay/local, a per-run scratch dir. Lazily materialise
+	// a venv there so pip installs inside the sandbox don't fail with
+	// "Could not find an activated virtualenv".
+	if mode == InstallModeEphemeral {
+		if err := ensureUserVenv(filepath.Join(sandboxPath, "overlay", "local")); err != nil {
+			return "", fmt.Errorf("create ephemeral venv: %w", err)
+		}
+	}
+
 	extraEnv := make([]string, 0, len(env))
 	for k, v := range env {
 		if k == "TOFI_INSTALL_MODE" {
