@@ -409,17 +409,24 @@ func (s *Server) handleRunAppNow(w http.ResponseWriter, r *http.Request) {
 	// Plan limits: daily runs + concurrent runs (daily counted from the
 	// unified agent_runs ledger — includes chat / app / webhook / cron).
 	limits := s.getUserPlanLimits(userID)
-	dailyUsed, _ := s.db.CountDailyAgentRuns(userID)
-	if dailyUsed >= limits.DailyRuns {
-		writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
-			fmt.Sprintf("Daily run limit reached (%d/%d). Resets at UTC midnight.", dailyUsed, limits.DailyRuns), "")
-		return
+	// PlanLimits convention: 0 = unlimited. Skip the bound check entirely
+	// when the plan grants no cap, otherwise admin (every cap = 0) hits a
+	// permanent "0/0" lockout the moment a single run is recorded.
+	if limits.DailyRuns > 0 {
+		dailyUsed, _ := s.db.CountDailyAgentRuns(userID)
+		if dailyUsed >= limits.DailyRuns {
+			writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
+				fmt.Sprintf("Daily run limit reached (%d/%d). Resets at UTC midnight.", dailyUsed, limits.DailyRuns), "")
+			return
+		}
 	}
-	running, _ := s.db.CountRunningRuns(userID)
-	if running >= limits.ConcurrentRuns {
-		writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
-			fmt.Sprintf("Concurrent run limit reached (%d/%d).", running, limits.ConcurrentRuns), "")
-		return
+	if limits.ConcurrentRuns > 0 {
+		running, _ := s.db.CountRunningRuns(userID)
+		if running >= limits.ConcurrentRuns {
+			writeJSONError(w, http.StatusTooManyRequests, "PLAN_LIMIT",
+				fmt.Sprintf("Concurrent run limit reached (%d/%d).", running, limits.ConcurrentRuns), "")
+			return
+		}
 	}
 
 	app, err := s.db.GetApp(id)
