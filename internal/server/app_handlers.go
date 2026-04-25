@@ -320,6 +320,11 @@ func (s *Server) handleDeleteApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step 3: Clean up the app's env vars (encrypted secrets attached to it)
+	if err := s.db.DeleteAppEnvVarsForApp(id); err != nil {
+		log.Printf("[app-delete] failed to delete env vars for %q: %v", id, err)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

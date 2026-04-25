@@ -320,7 +320,7 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 	}
 
 	log.Printf("[app-run:%s] Executing with chat session %s", run.ID[:8], sessionID[:8])
-	result, err := as.server.executeChatSession(run.UserID, scope, session, prompt, onEvent, &bridge.ExecuteOptions{Ctx: agentCtx})
+	result, err := as.server.executeChatSession(run.UserID, scope, session, prompt, onEvent, &bridge.ExecuteOptions{Ctx: agentCtx}, run.AppID)
 
 	status := "done"
 	var failReason string

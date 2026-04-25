@@ -498,7 +498,7 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request) {
 			hub.publish(eventType, data)
 		}
 
-		result, runErr := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, &bridge.ExecuteOptions{Ctx: agentCtx})
+		result, runErr := s.executeChatSession(userID, idx.Scope, session, req.Message, onEvent, &bridge.ExecuteOptions{Ctx: agentCtx}, "")
 		if runErr != nil {
 			// apiKeyError already emitted a structured error event via onEvent.
 			if _, ok := runErr.(*apiKeyError); !ok {
@@ -559,10 +559,13 @@ func streamSessionEventsToSSE(w http.ResponseWriter, r *http.Request, hub *sessi
 }
 
 // executeChatSession runs an agent loop for a chat session.
+// appID is non-empty when this session belongs to an app run; in that case
+// the app's per-app env vars are merged on top of the user's generic env vars
+// before injection into the sandbox.
 // Used by both the HTTP handler (SSE) and the app scheduler.
 // The onEvent callback receives events: "chunk", "tool_call", "context_compact", "error".
 // If onEvent is nil, events are silently discarded.
-func (s *Server) executeChatSession(userID, scope string, session *chat.Session, message string, onEvent func(eventType string, data any), opts *bridge.ExecuteOptions) (*agent.AgentResult, error) {
+func (s *Server) executeChatSession(userID, scope string, session *chat.Session, message string, onEvent func(eventType string, data any), opts *bridge.ExecuteOptions, appID string) (*agent.AgentResult, error) {
 	sessionID := session.ID
 
 	emit := func(eventType string, data any) {
@@ -662,6 +665,14 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	}
 
 	skillTools, _, secretEnv, unavailableSkills := s.buildSkillTools(userID, skillNames)
+
+	// Layer in user-level generic env vars + per-app overrides on top of
+	// skill required secrets. App > User > Skill required (skill values
+	// are already in secretEnv from buildSkillTools, so we apply the
+	// other layers afterwards and let them win where they're defined).
+	for k, v := range s.resolveAppEnv(userID, appID) {
+		secretEnv[k] = v
+	}
 
 	// Fail-fast on missing secrets — the skill is dropped from the tool set
 	// AND we inform the agent via the system prompt so it can explain the

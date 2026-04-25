@@ -317,7 +317,7 @@ func (s *Server) Start() error {
 
 	// Start Bridge Manager (Telegram bidirectional chat)
 	dispatcher := bridge.NewDispatcher(s.db, s.chatStore, func(userID, scope string, session *chat.Session, message string, opts *bridge.ExecuteOptions) error {
-		_, err := s.executeChatSession(userID, scope, session, message, nil, opts)
+		_, err := s.executeChatSession(userID, scope, session, message, nil, opts, "")
 		return err
 	})
 	dispatcher.SetRestartFn(func(botToken, chatID string) {
@@ -496,6 +496,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/v1/agents/{id}/connectors", s.AuthMiddleware(s.handleListAppConnectors))
 	mux.HandleFunc("POST /api/v1/agents/{id}/connectors", s.AuthMiddleware(s.handleLinkAppConnector))
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/connectors/{cid}", s.AuthMiddleware(s.handleUnlinkAppConnector))
+
+	// App-level environment variables (overrides user secrets for this app's runs)
+	mux.HandleFunc("GET /api/v1/agents/{id}/env-vars", s.AuthMiddleware(s.handleListAppEnvVars))
+	mux.HandleFunc("POST /api/v1/agents/{id}/env-vars", s.AuthMiddleware(s.handleSetAppEnvVar))
+	mux.HandleFunc("DELETE /api/v1/agents/{id}/env-vars/{name}", s.AuthMiddleware(s.handleDeleteAppEnvVar))
 
 	// App 管理路由
 	mux.HandleFunc("POST /api/v1/plans", s.AuthMiddleware(s.handlePlanApp))

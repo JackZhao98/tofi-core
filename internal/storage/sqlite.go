@@ -230,6 +230,11 @@ func InitDB(homeDir string) (*DB, error) {
 	}
 	db.migrateAgentsToApps()
 
+	// 创建 app_env_vars 表 — 每个 App 自己的加密 env 覆盖（覆盖 user secrets）
+	if err := db.initAppEnvVarsTable(); err != nil {
+		log.Printf("⚠️  app_env_vars table creation (may already exist): %v", err)
+	}
+
 	// 创建新 connector 表
 	if err := db.initConnectorsTable(); err != nil {
 		log.Printf("⚠️  connectors table creation (may already exist): %v", err)
