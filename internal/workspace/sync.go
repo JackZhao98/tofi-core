@@ -36,7 +36,11 @@ func (s *Sync) SyncAgentToDB(userID, agentDirName string) (*storage.AppRecord, e
 	// Check if agent already exists in DB by ID
 	existing, err := s.db.GetApp(record.ID)
 	if err == nil && existing != nil && existing.UserID == userID {
-		// Update existing record, preserve runtime state
+		// Files are the source of truth for the editable agent definition, but
+		// runtime state still lives in DB. Preserve fields that shouldn't flip
+		// just because the server restarted and re-indexed the workspace.
+		record.IsActive = existing.IsActive
+		record.Parameters = existing.Parameters
 		if err := s.db.UpdateApp(record); err != nil {
 			return nil, fmt.Errorf("update agent index: %w", err)
 		}
