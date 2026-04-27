@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"tofi-core/internal/agent"
 	"tofi-core/internal/apps"
 	"tofi-core/internal/bridge"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/connect"
-	"tofi-core/internal/agent"
 	"tofi-core/internal/storage"
 
 	"github.com/google/uuid"
@@ -52,7 +52,7 @@ type ScheduleRule struct {
 }
 
 type RuleEntry struct {
-	Days    []string     `json:"days"`    // ["mon","tue",...] empty = every day
+	Days    []string     `json:"days"` // ["mon","tue",...] empty = every day
 	Windows []TimeWindow `json:"windows"`
 }
 
@@ -344,9 +344,11 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 		log.Printf("[app-run:%s] Completed (tokens: %d in / %d out, cost: $%.4f)",
 			run.ID[:8], result.TotalUsage.InputTokens, result.TotalUsage.OutputTokens, result.TotalCost)
 
-		// Auto-notify: send AI output to configured notify targets
-		if result.Content != "" {
-			sent, notifyErr := connect.SendNotification(run.UserID, app.ID, result.Content, connect.NotifyDeps{
+		// Auto-notify: send AI output to configured notify targets.
+		// Apps can return a precise no-op sentinel when a scheduled check
+		// succeeds but should not push anything to the user.
+		if notificationContent, shouldNotify := appNotificationContent(result.Content); shouldNotify {
+			sent, notifyErr := connect.SendNotification(run.UserID, app.ID, notificationContent, connect.NotifyDeps{
 				ListConnectorsLinkedToApp: as.server.db.ListConnectorsLinkedToApp,
 				ListConnectorsForApp:      as.server.db.ListConnectorsForApp,
 				ListConnectors:            as.server.db.ListConnectors,
@@ -365,8 +367,10 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 	}
 	// Save result content to DB for historical queries
 	resultContent := ""
-	if result != nil && result.Content != "" {
-		resultContent = result.Content
+	if result != nil {
+		if content, ok := appNotificationContent(result.Content); ok {
+			resultContent = content
+		}
 	} else if failReason != "" {
 		resultContent = "Error: " + failReason
 	}

@@ -81,7 +81,7 @@ func (s *Server) buildListAppsTool(userID string) agent.ExtraBuiltinTool {
 func (s *Server) buildCreateAppTool(userID string) agent.ExtraBuiltinTool {
 	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
-			Name: "tofi_create_app",
+			Name:        "tofi_create_app",
 			Description: `Create a new App (automated AI task). The prompt is the instruction the AI will execute each run. Schedule format is a JSON object string with entries and timezone. Skills is an array of skill names to attach.`,
 			Parameters: map[string]any{
 				"type": "object",
@@ -113,7 +113,7 @@ func (s *Server) buildCreateAppTool(userID string) agent.ExtraBuiltinTool {
 					},
 					"schedule": map[string]any{
 						"type":        "string",
-						"description": "Schedule as JSON object string with entries and timezone, e.g. '{\"entries\":[{\"time\":\"09:00\",\"repeat\":{\"type\":\"daily\"},\"enabled\":true}],\"timezone\":\"America/Los_Angeles\"}' (optional)",
+						"description": "Schedule as JSON object string with entries and timezone, e.g. '{\"entries\":[{\"time\":\"09:00\",\"end_time\":\"17:00\",\"interval_min\":30,\"repeat\":{\"type\":\"daily\"},\"enabled\":true}],\"timezone\":\"America/Los_Angeles\"}' (optional)",
 					},
 				},
 				"required": []string{"id", "description", "prompt"},
@@ -214,7 +214,7 @@ func (s *Server) buildUpdateAppTool(userID string) agent.ExtraBuiltinTool {
 					},
 					"schedule": map[string]any{
 						"type":        "string",
-						"description": "New schedule as JSON object string with entries and timezone, e.g. '{\"entries\":[...],\"timezone\":\"America/Los_Angeles\"}' (optional)",
+						"description": "New schedule as JSON object string with entries and timezone, e.g. '{\"entries\":[{\"time\":\"09:00\",\"end_time\":\"17:00\",\"interval_min\":30,\"repeat\":{\"type\":\"daily\"},\"enabled\":true}],\"timezone\":\"America/Los_Angeles\"}' (optional)",
 					},
 				},
 				"required": []string{"app_id"},
@@ -796,7 +796,7 @@ func truncate(s string, maxRunes int) string {
 func buildDisplayAppPlanTool() agent.ExtraBuiltinTool {
 	return agent.ExtraBuiltinTool{
 		Schema: provider.Tool{
-			Name: "tofi_display_app_plan",
+			Name:        "tofi_display_app_plan",
 			Description: `Display a structured App plan to the user. The TUI renders a rich visual box showing all details. After calling this, just ask "确认创建？" — do NOT repeat or summarize the plan fields in text, the user already sees everything in the box.`,
 			Parameters: map[string]any{
 				"type": "object",

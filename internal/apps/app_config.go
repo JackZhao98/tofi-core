@@ -37,28 +37,35 @@ type AppConfigSchedule struct {
 
 // ScheduleEntry is a single schedule entry.
 type ScheduleEntry struct {
-	Time    string         `yaml:"time" json:"time"`
-	Repeat  ScheduleRepeat `yaml:"repeat" json:"repeat"`
-	Enabled bool           `yaml:"enabled" json:"enabled"`
+	Time        string         `yaml:"time" json:"time"`
+	EndTime     string         `yaml:"end_time,omitempty" json:"end_time,omitempty"`
+	IntervalMin int            `yaml:"interval_min,omitempty" json:"interval_min,omitempty"`
+	Repeat      ScheduleRepeat `yaml:"repeat" json:"repeat"`
+	Enabled     bool           `yaml:"enabled" json:"enabled"`
+	Label       string         `yaml:"label,omitempty" json:"label,omitempty"`
 }
 
 // ScheduleRepeat defines how a schedule entry repeats.
 type ScheduleRepeat struct {
-	Type       string `yaml:"type" json:"type"`                                   // daily, weekdays, weekly, monthly, custom
-	DayOfWeek  int    `yaml:"day_of_week,omitempty" json:"day_of_week,omitempty"` // for weekly
-	DayOfMonth int    `yaml:"day_of_month,omitempty" json:"day_of_month,omitempty"` // for monthly
-	Cron       string `yaml:"cron,omitempty" json:"cron,omitempty"`               // for custom
+	Type       string   `yaml:"type" json:"type"`                                     // daily, weekdays, weekly, monthly, custom
+	DayOfWeek  int      `yaml:"day_of_week,omitempty" json:"day_of_week,omitempty"`   // for weekly
+	DayOfMonth int      `yaml:"day_of_month,omitempty" json:"day_of_month,omitempty"` // for monthly
+	Cron       string   `yaml:"cron,omitempty" json:"cron,omitempty"`                 // for custom
+	Days       []string `yaml:"days,omitempty" json:"days,omitempty"`                 // scheduler weekly format
+	Dates      []int    `yaml:"dates,omitempty" json:"dates,omitempty"`               // scheduler monthly format
+	Date       string   `yaml:"date,omitempty" json:"date,omitempty"`                 // scheduler once format
 }
 
 // AgentDef represents the full agent definition (split files + tofi_app.yaml).
 //
 // File layout:
-//   tofi_app.yaml  — platform config (required)
-//   AGENTS.md      — operational instructions (required)
-//   SOUL.md        — personality, principles, boundaries (optional)
-//   IDENTITY.md    — name, emoji, vibe (optional)
+//
+//	tofi_app.yaml  — platform config (required)
+//	AGENTS.md      — operational instructions (required)
+//	SOUL.md        — personality, principles, boundaries (optional)
+//	IDENTITY.md    — name, emoji, vibe (optional)
 type AgentDef struct {
-	Config     AppConfig `json:"config"`               // from tofi_app.yaml
+	Config     AppConfig `json:"config"`                // from tofi_app.yaml
 	AgentsMD   string    `json:"agents_md"`             // AGENTS.md — operational instructions / task prompt
 	SoulMD     string    `json:"soul_md,omitempty"`     // SOUL.md — personality, principles, boundaries
 	IdentityMD string    `json:"identity_md,omitempty"` // IDENTITY.md — name, emoji, vibe
