@@ -10,11 +10,14 @@ Options:
 Requires Google Chrome or Chromium installed on the system.
 Uses trafilatura for content extraction if available (pip install trafilatura).
 """
+import html as html_lib
 import os
 import platform
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 try:
     import trafilatura
@@ -45,7 +48,7 @@ def find_chrome():
 
     # Check known paths first
     for path in CHROME_PATHS.get(system, []):
-        if os.path.isfile(path):
+        if os.path.isfile(path) and chrome_usable(path):
             return path
 
     # Search common names via which/where
@@ -56,11 +59,32 @@ def find_chrome():
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip().split("\n")[0]
+                path = result.stdout.strip().split("\n")[0]
+                if chrome_usable(path):
+                    return path
         except Exception:
             pass
 
     return None
+
+
+def chrome_usable(path):
+    """Return true if the binary can run in this environment."""
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return False
+    output = (result.stdout + "\n" + result.stderr).lower()
+    if result.returncode != 0:
+        return False
+    if "requires the chromium snap" in output or "snap install chromium" in output:
+        return False
+    return True
 
 
 def fetch_with_chrome(url, chrome_path, max_chars=8000):
@@ -98,18 +122,44 @@ def fetch_with_chrome(url, chrome_path, max_chars=8000):
 
     if not html.strip():
         stderr_hint = result.stderr[:200] if result.stderr else "no output"
-        return url, "Error", f"Empty response from Chrome. stderr: {stderr_hint}"
+        raise RuntimeError(f"Empty response from Chrome. stderr: {stderr_hint}")
 
-    # Extract title from HTML
+    return extract_page(url, html, max_chars)
+
+
+def fetch_with_http(url, max_chars=8000):
+    """Fetch a static page without Chrome. Works for non-JS pages."""
+    user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read(10 * 1024 * 1024)
+            charset = resp.headers.get_content_charset() or "utf-8"
+    except urllib.error.HTTPError as e:
+        body = e.read(1000).decode("utf-8", "replace")
+        return url, "Error", f"HTTP {e.code}: {body}"
+    except Exception as e:
+        return url, "Error", f"HTTP fetch failed: {e}"
+
+    html = raw.decode(charset, "replace")
+    return extract_page(url, html, max_chars)
+
+
+def extract_page(url, html, max_chars):
+    """Extract title and text from an HTML document."""
     title = "Untitled"
     title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
     if title_match:
-        title = title_match.group(1).strip()
-        # Decode HTML entities
-        title = re.sub(r"&amp;", "&", title)
-        title = re.sub(r"&lt;", "<", title)
-        title = re.sub(r"&gt;", ">", title)
-        title = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), title)
+        title = html_lib.unescape(title_match.group(1).strip())
 
     # Extract text content
     text = extract_text(html)
@@ -182,20 +232,23 @@ def main():
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
 
-    # Find Chrome
     chrome_path = find_chrome()
-    if not chrome_path:
-        print("ERROR: Google Chrome or Chromium not found.", file=sys.stderr)
-        print("Install Chrome/Chromium to use web-fetch:", file=sys.stderr)
-        print("  macOS:  brew install --cask google-chrome", file=sys.stderr)
-        print("  Ubuntu: sudo apt install chromium-browser", file=sys.stderr)
-        sys.exit(1)
-
-    fetched_url, title, content = fetch_with_chrome(url, chrome_path, max_chars)
+    fetcher = "http"
+    if chrome_path:
+        try:
+            fetched_url, title, content = fetch_with_chrome(url, chrome_path, max_chars)
+            fetcher = "chrome"
+        except Exception as e:
+            fetched_url, title, content = fetch_with_http(url, max_chars)
+            if title != "Error":
+                fetcher = f"http fallback after Chrome error: {e}"
+    else:
+        fetched_url, title, content = fetch_with_http(url, max_chars)
 
     print(f"=== {title} ===")
     print(f"URL: {fetched_url}")
     print(f"Length: {len(content)} chars")
+    print(f"Fetcher: {fetcher}")
     if USE_TRAFILATURA:
         print("Extractor: trafilatura")
     else:
