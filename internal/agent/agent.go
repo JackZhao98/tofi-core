@@ -29,9 +29,9 @@ type SkillTool struct {
 	Name         string
 	Description  string
 	Instructions string
-	SkillDir     string                 // Absolute path to skill directory on disk (empty if no scripts)
-	BundledTools []ExtraBuiltinTool     // Tools that come with this skill — activated when skill is loaded
-	DirectTools  []models.SkillToolDef  // Direct tool definitions from manifest (skip sub-LLM, execute scripts directly)
+	SkillDir     string                // Absolute path to skill directory on disk (empty if no scripts)
+	BundledTools []ExtraBuiltinTool    // Tools that come with this skill — activated when skill is loaded
+	DirectTools  []models.SkillToolDef // Direct tool definitions from manifest (skip sub-LLM, execute scripts directly)
 }
 
 // ExtraBuiltinTool allows registering additional built-in tools with custom handlers.
@@ -47,23 +47,23 @@ type ExtraBuiltinTool struct {
 
 // AgentConfig holds the configuration required to run an autonomous agent
 type AgentConfig struct {
-	Ctx           context.Context    // Optional: cancellation context (nil = context.Background())
-	Provider      provider.Provider  // LLM provider (handles all API format differences)
-	Model         string             // Model name (for context window, cost calculation)
-	System        string
-	Prompt        string
-	Messages      []provider.Message // Optional: full conversation history (overrides Prompt if non-empty)
-	MCPServers    []MCPServerConfig  // Active MCP server connections
-	SessionID     string             // Session/task identifier for streaming callbacks
-	SkillTools      []SkillTool        // Installed skills (deferred — loaded on-demand via tofi_load_skill)
-	PreloadedSkills []string           // Skills to pre-activate at start (from previous turns in same session)
-	ExtraTools      []ExtraBuiltinTool // Core built-in tools (always available)
-	SandboxDir    string             // Sandbox directory for shell command execution (optional)
-	UserDir       string             // User persistent directory for installed tools (optional)
-	Executor      executor.Executor  // Sandbox executor (nil = use legacy functions)
-	SecretEnv     map[string]string  // Extra env vars injected into sandbox commands (skill secrets)
-	OnStreamChunk    func(sessionID, delta string)                              // Optional: called with each content delta during streaming
-	OnThinkingChunk  func(sessionID, delta string)                              // Optional: called with each reasoning/thinking delta during streaming
+	Ctx              context.Context   // Optional: cancellation context (nil = context.Background())
+	Provider         provider.Provider // LLM provider (handles all API format differences)
+	Model            string            // Model name (for context window, cost calculation)
+	System           string
+	Prompt           string
+	Messages         []provider.Message                                        // Optional: full conversation history (overrides Prompt if non-empty)
+	MCPServers       []MCPServerConfig                                         // Active MCP server connections
+	SessionID        string                                                    // Session/task identifier for streaming callbacks
+	SkillTools       []SkillTool                                               // Installed skills (deferred — loaded on-demand via tofi_load_skill)
+	PreloadedSkills  []string                                                  // Skills to pre-activate at start (from previous turns in same session)
+	ExtraTools       []ExtraBuiltinTool                                        // Core built-in tools (always available)
+	SandboxDir       string                                                    // Sandbox directory for shell command execution (optional)
+	UserDir          string                                                    // User persistent directory for installed tools (optional)
+	Executor         executor.Executor                                         // Sandbox executor (nil = use legacy functions)
+	SecretEnv        map[string]string                                         // Extra env vars injected into sandbox commands (skill secrets)
+	OnStreamChunk    func(sessionID, delta string)                             // Optional: called with each content delta during streaming
+	OnThinkingChunk  func(sessionID, delta string)                             // Optional: called with each reasoning/thinking delta during streaming
 	OnToolCall       func(toolName, input, output string, durationMs int64)    // Optional: called after each tool execution
 	MaxContextTokens int                                                       // 0 = auto-detect from model name
 	OnContextCompact func(summary string, originalTokens, compactedTokens int) // Optional: called when context is compacted
@@ -77,11 +77,11 @@ type AgentConfig struct {
 	// "wrap up now" directive and denies further tool calls, forcing the model
 	// to produce a final answer with what it already has. Prevents a single
 	// runaway "deep research" loop from burning through the user's daily quota.
-	MaxRunCost       float64                                                   // Optional: max real USD cost for this run (uses Tracker.TotalCost())
-	MaxRunLLMCalls   int                                                       // Optional: max number of LLM API calls before forced wrap-up
-	MaxRunDuration   time.Duration                                             // Optional: max wall-clock duration before forced wrap-up
-	AskUserFn        func(question string, options []string) (string, error)   // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
-	IsSubAgent       bool                                                      // True when running as a sub-agent (prevents recursive spawning)
+	MaxRunCost     float64                                                 // Optional: max real USD cost for this run (uses Tracker.TotalCost())
+	MaxRunLLMCalls int                                                     // Optional: max number of LLM API calls before forced wrap-up
+	MaxRunDuration time.Duration                                           // Optional: max wall-clock duration before forced wrap-up
+	AskUserFn      func(question string, options []string) (string, error) // Optional: callback to ask user a question (Chat mode). Nil = tool not registered.
+	IsSubAgent     bool                                                    // True when running as a sub-agent (prevents recursive spawning)
 	// OnSubAgentEvent forwards live sub-agent activity (chunks, tool starts,
 	// tool completions) up to the parent's emit channel. The sub-agent's
 	// own loop wires its hooks through this so the parent UI can render a
@@ -326,8 +326,13 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 							},
 						}
 
-						// Capture for closure
+						// Capture for closure. In sandboxed execution, run scripts
+						// through the sandbox-local skills/{name} symlink; host
+						// absolute paths are not mounted inside gVisor.
 						capturedScript := filepath.Join(skill.SkillDir, toolDef.Script)
+						if cfg.SandboxDir != "" {
+							capturedScript = filepath.Join("skills", name, toolDef.Script)
+						}
 						capturedName := toolDef.Name
 						capturedParams := toolDef.Params
 
@@ -336,7 +341,7 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 							ToolName:   capturedName,
 							ToolSchema: schema,
 							ExecuteFunc: func(_ context.Context, args map[string]interface{}) (string, error) {
-								cmdParts := []string{"python3", capturedScript}
+								cmdParts := []string{"python3", shellQuote(capturedScript)}
 
 								// First positional arg: "query" or "url"
 								if q, ok := args["query"].(string); ok {
@@ -428,15 +433,15 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 			}
 
 			// Replace relative script paths with absolute paths so AI doesn't need to guess
-		instructions := skill.Instructions
-		if skill.SkillDir != "" {
-			// Only replace the relative prefix "skills/{name}/" — single pass to avoid double-replace
-			relativePrefix := "skills/" + name + "/"
-			absolutePrefix := skill.SkillDir + "/"
-			instructions = strings.ReplaceAll(instructions, relativePrefix, absolutePrefix)
-		}
+			instructions := skill.Instructions
+			if skill.SkillDir != "" {
+				// Only replace the relative prefix "skills/{name}/" — single pass to avoid double-replace
+				relativePrefix := "skills/" + name + "/"
+				absolutePrefix := skill.SkillDir + "/"
+				instructions = strings.ReplaceAll(instructions, relativePrefix, absolutePrefix)
+			}
 
-		result := fmt.Sprintf("# Skill: %s\n\n%s", name, instructions)
+			result := fmt.Sprintf("# Skill: %s\n\n%s", name, instructions)
 			if len(activatedTools) > 0 {
 				result += fmt.Sprintf("\n\n---\nActivated tools: %s\nThese tools are now callable.", strings.Join(activatedTools, ", "))
 			}
@@ -919,252 +924,161 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 		} else {
 			// Sequential execution (original path) for non-concurrent-safe tools
 			for _, tc := range resp.ToolCalls {
-			fnName := tc.Name
-			fnArgs := tc.Arguments
-			callID := tc.ID
+				fnName := tc.Name
+				fnArgs := tc.Arguments
+				callID := tc.ID
 
-			ctx.Log("<tool_call name=\" %s \">\n%s\n</tool_call>", fnName, fnArgs)
+				ctx.Log("<tool_call name=\" %s \">\n%s\n</tool_call>", fnName, fnArgs)
 
-			// Log step start (skip internal tools like wait and update_progress)
-			toolStartTime := time.Now()
-			if fnName != "tofi_wait" && cfg.OnStepStart != nil {
-				argsStr := fnArgs
-				if len(argsStr) > 1000 {
-					argsStr = argsStr[:1000] + "..."
+				// Log step start (skip internal tools like wait and update_progress)
+				toolStartTime := time.Now()
+				if fnName != "tofi_wait" && cfg.OnStepStart != nil {
+					argsStr := fnArgs
+					if len(argsStr) > 1000 {
+						argsStr = argsStr[:1000] + "..."
+					}
+					cfg.OnStepStart(fnName, argsStr)
 				}
-				cfg.OnStepStart(fnName, argsStr)
-			}
 
-			// Parse Args
-			var argsMap map[string]interface{}
-			if err := json.Unmarshal([]byte(fnArgs), &argsMap); err != nil {
-				errMsg := fmt.Sprintf("Error parsing arguments for %s: %v", fnName, err)
-				messages = appendAndEmit(messages, provider.Message{
-					Role:       "tool",
-					Content:    errMsg,
-					ToolCallID: callID,
-					ToolName:   fnName,
-				})
-				ctx.Log("[Error] %s", errMsg)
-				continue
-			}
+				// Parse Args
+				var argsMap map[string]interface{}
+				if err := json.Unmarshal([]byte(fnArgs), &argsMap); err != nil {
+					errMsg := fmt.Sprintf("Error parsing arguments for %s: %v", fnName, err)
+					messages = appendAndEmit(messages, provider.Message{
+						Role:       "tool",
+						Content:    errMsg,
+						ToolCallID: callID,
+						ToolName:   fnName,
+					})
+					ctx.Log("[Error] %s", errMsg)
+					continue
+				}
 
-			// PreToolCall hook — can modify args or block execution
-			if modifiedArgs, hookErr := cfg.Hooks.callPreToolCall(fnName, argsMap); hookErr != nil {
-				errMsg := fmt.Sprintf("PreToolCall hook blocked %s: %v", fnName, hookErr)
-				messages = appendAndEmit(messages, provider.Message{
-					Role: "tool", Content: errMsg, ToolCallID: callID, ToolName: fnName,
-				})
-				ctx.Log("[Hook] %s", errMsg)
-				continue
-			} else {
-				argsMap = modifiedArgs
-			}
-
-			// markStepDone is a helper to update the step status after tool execution
-			markStepDone := func(result string) {
-				durationMs := time.Since(toolStartTime).Milliseconds()
-				// PostToolCall hook — can modify output
-				if modified, hookErr := cfg.Hooks.callPostToolCall(fnName, argsMap, result); hookErr != nil {
-					ctx.Log("[Hook] PostToolCall error for %s: %v", fnName, hookErr)
+				// PreToolCall hook — can modify args or block execution
+				if modifiedArgs, hookErr := cfg.Hooks.callPreToolCall(fnName, argsMap); hookErr != nil {
+					errMsg := fmt.Sprintf("PreToolCall hook blocked %s: %v", fnName, hookErr)
+					messages = appendAndEmit(messages, provider.Message{
+						Role: "tool", Content: errMsg, ToolCallID: callID, ToolName: fnName,
+					})
+					ctx.Log("[Hook] %s", errMsg)
+					continue
 				} else {
-					result = modified
-				}
-				// Record in trace
-				state.Trace.RecordToolExec(state.Step, fnName, fnArgs, result, true, time.Since(toolStartTime))
-				if fnName != "tofi_wait" && cfg.OnStepDone != nil {
-					cfg.OnStepDone(fnName, result, durationMs)
-				}
-				if cfg.OnToolCall != nil {
-					cfg.OnToolCall(fnName, fnArgs, result, durationMs)
-				}
-			}
-
-			// Handle Built-in 'wait'
-			if fnName == "tofi_wait" {
-				secVal := 0.0
-				if s, ok := argsMap["seconds"].(float64); ok {
-					secVal = s
-				}
-				ctx.Log("[Wait] Sleeping for %.1f seconds...", secVal)
-				time.Sleep(time.Duration(secVal * float64(time.Second)))
-
-				messages = appendAndEmit(messages, provider.Message{
-					Role:       "tool",
-					Content:    fmt.Sprintf("Waited for %.1f seconds.", secVal),
-					ToolCallID: callID,
-					ToolName:   fnName,
-				})
-				continue
-			}
-
-			// Handle Built-in 'tofi_shell'
-			if fnName == "tofi_shell" && cfg.SandboxDir != "" {
-				command, _ := argsMap["command"].(string)
-
-				// Detect skill script in command → override display name for OnToolCall
-				if displayName := detectSkillFromCommand(command); displayName != "" {
-					origMarkStepDone := markStepDone
-					markStepDone = func(result string) {
-						durationMs := time.Since(toolStartTime).Milliseconds()
-						if cfg.OnStepDone != nil {
-							cfg.OnStepDone(displayName, result, durationMs)
-						}
-						if cfg.OnToolCall != nil {
-							cfg.OnToolCall(displayName, fnArgs, result, durationMs)
-						}
-					}
-					_ = origMarkStepDone // suppress unused warning
+					argsMap = modifiedArgs
 				}
 
-				// Destructive command detection (AST-based)
-				destructLevel, destructWarning := DetectDestructiveAST(command)
-				if destructLevel >= DestructiveCommand {
-					ctx.Log("[Shell] ⚠️  Destructive command detected: %s", destructWarning)
-					// TODO: in Chat mode, ask user for confirmation via Hooks
-					// For now, log the warning and proceed (App Run is unattended).
-				}
-				// No pre-execution command validation — the defense is the sandbox
-				// itself (gVisor syscall filter + mount isolation). DevExecutor
-				// runs are local-dev only and explicitly unsafe.
-
-				// Classify timeout based on command type
-				requestedTimeout := 0
-				if t, ok := argsMap["timeout"].(float64); ok && t > 0 {
-					requestedTimeout = int(t)
-				}
-				timeout := classifyTimeout(command, requestedTimeout)
-
-				// Execute with auto-backgrounding for long commands
-				var shellResult ShellResult
-				execInstance := cfg.Executor
-				if execInstance == nil {
-					execInstance = executor.NewExecutor("")
-				}
-
-				if bgManager != nil {
-					shellResult = bgManager.RunWithAutoBackground(
-						loopCtx, execInstance,
-						cfg.SandboxDir, cfg.UserDir, command, timeout, cfg.SecretEnv,
-						func(status string) {
-							if cfg.OnProgress != nil {
-								cfg.OnProgress("running", 0, status)
-							}
-						},
-					)
-				} else {
-					// Direct execution (no background manager)
-					output, execErr := execInstance.Execute(loopCtx, cfg.SandboxDir, cfg.UserDir, command, timeout, cfg.SecretEnv)
-					shellResult = ShellResult{
-						Stdout:     output,
-						DurationMs: time.Since(toolStartTime).Milliseconds(),
-					}
-					if execErr != nil {
-						shellResult.Stderr = execErr.Error()
-						shellResult.ExitCode = 1
-						if strings.Contains(execErr.Error(), "timed out") {
-							shellResult.TimedOut = true
-						}
-					}
-					shellResult.Interpretation = interpretExitCode(command, shellResult.ExitCode)
-				}
-
-				// Format result with smart truncation
-				resultMsg := shellResult.FormatForAgent()
-				resultMsg = smartTruncate(resultMsg, 4000)
-
-				ctx.Log("[Shell] %s → %s (exit=%d, %dms)", truncate(command, 80), truncate(resultMsg, 200), shellResult.ExitCode, shellResult.DurationMs)
-				messages = appendAndEmit(messages, provider.Message{
-					Role:       "tool",
-					Content:    resultMsg,
-					ToolCallID: callID,
-					ToolName:   fnName,
-				})
-				markStepDone(resultMsg)
-				continue
-			}
-
-			// Handle registry tools (core + skill + activated deferred)
-			if tool := registry.Get(fnName); tool != nil {
-				result, err := tool.Execute(context.Background(), argsMap)
-				resultMsg := ""
-				if err != nil {
-					resultMsg = fmt.Sprintf("Tool error: %v", err)
-				} else {
-					resultMsg = result
-					// If skill returned commands (code blocks), hint agent to execute them
-					if strings.Contains(result, "```") {
-						resultMsg += "\n\n[This skill returned suggested commands. Execute them using tofi_shell to get actual results — do NOT relay these instructions to the user.]"
-					}
-				}
-				ctx.Log("[ExtraTool:%s] %s", fnName, truncate(resultMsg, 200))
-				messages = appendAndEmit(messages, provider.Message{
-					Role:       "tool",
-					Content:    resultMsg,
-					ToolCallID: callID,
-					ToolName:   fnName,
-				})
-				markStepDone(resultMsg)
-				continue
-			}
-
-			// Handle skill tools (sub-LLM call with skill instructions)
-			if strings.HasPrefix(fnName, "run_skill__") {
-				skillKey := strings.TrimPrefix(fnName, "run_skill__")
-				var matchedSkill *SkillTool
-				for i := range cfg.SkillTools {
-					if sanitizeToolName(cfg.SkillTools[i].Name) == skillKey {
-						matchedSkill = &cfg.SkillTools[i]
-						break
-					}
-				}
-				if matchedSkill != nil {
-					input, _ := argsMap["input"].(string)
-					ctx.Log("[Skill:%s] Executing with input: %s", matchedSkill.Name, truncate(input, 100))
-
-					// 如果 skill 有脚本目录，在沙箱中创建 symlink
-					var symlinkErr string
-					if matchedSkill.SkillDir != "" && cfg.SandboxDir != "" {
-						symlinkDir := filepath.Join(cfg.SandboxDir, "skills")
-						os.MkdirAll(symlinkDir, 0755)
-						link := filepath.Join(symlinkDir, matchedSkill.Name)
-						if _, err := os.Lstat(link); os.IsNotExist(err) {
-							if err := os.Symlink(matchedSkill.SkillDir, link); err != nil {
-								symlinkErr = fmt.Sprintf("Failed to symlink skill scripts: %v", err)
-								ctx.Log("[Skill:%s] Warning: %s", matchedSkill.Name, symlinkErr)
-							} else {
-								ctx.Log("[Skill:%s] Symlinked scripts: skills/%s/ → %s", matchedSkill.Name, matchedSkill.Name, matchedSkill.SkillDir)
-							}
-						}
-					}
-
-					result, err := executeSkillSubCall(cfg.Provider, cfg.Model, *matchedSkill, input)
-					resultMsg := ""
-					if err != nil {
-						// Build diagnostic info for the agent
-						var diag strings.Builder
-						diag.WriteString(fmt.Sprintf("Skill '%s' execution failed: %v\n", matchedSkill.Name, err))
-						diag.WriteString("\nDiagnostics:\n")
-						// Check scripts directory
-						if matchedSkill.SkillDir != "" {
-							scriptsDir := filepath.Join(matchedSkill.SkillDir, "scripts")
-							if _, statErr := os.Stat(scriptsDir); statErr != nil {
-								diag.WriteString(fmt.Sprintf("- Scripts directory: MISSING (%s)\n", scriptsDir))
-							} else {
-								diag.WriteString(fmt.Sprintf("- Scripts directory: exists (%s)\n", scriptsDir))
-							}
-						} else {
-							diag.WriteString("- Scripts directory: N/A (no bundled scripts)\n")
-						}
-						if symlinkErr != "" {
-							diag.WriteString(fmt.Sprintf("- Symlink: FAILED (%s)\n", symlinkErr))
-						}
-						diag.WriteString("\nSuggestion: Try installing missing dependencies with tofi_shell, or write your own code to accomplish the goal.")
-						resultMsg = diag.String()
+				// markStepDone is a helper to update the step status after tool execution
+				markStepDone := func(result string) {
+					durationMs := time.Since(toolStartTime).Milliseconds()
+					// PostToolCall hook — can modify output
+					if modified, hookErr := cfg.Hooks.callPostToolCall(fnName, argsMap, result); hookErr != nil {
+						ctx.Log("[Hook] PostToolCall error for %s: %v", fnName, hookErr)
 					} else {
-						resultMsg = result
+						result = modified
 					}
-					ctx.Log("[Skill:%s] Result: %s", matchedSkill.Name, truncate(resultMsg, 200))
+					// Record in trace
+					state.Trace.RecordToolExec(state.Step, fnName, fnArgs, result, true, time.Since(toolStartTime))
+					if fnName != "tofi_wait" && cfg.OnStepDone != nil {
+						cfg.OnStepDone(fnName, result, durationMs)
+					}
+					if cfg.OnToolCall != nil {
+						cfg.OnToolCall(fnName, fnArgs, result, durationMs)
+					}
+				}
+
+				// Handle Built-in 'wait'
+				if fnName == "tofi_wait" {
+					secVal := 0.0
+					if s, ok := argsMap["seconds"].(float64); ok {
+						secVal = s
+					}
+					ctx.Log("[Wait] Sleeping for %.1f seconds...", secVal)
+					time.Sleep(time.Duration(secVal * float64(time.Second)))
+
+					messages = appendAndEmit(messages, provider.Message{
+						Role:       "tool",
+						Content:    fmt.Sprintf("Waited for %.1f seconds.", secVal),
+						ToolCallID: callID,
+						ToolName:   fnName,
+					})
+					continue
+				}
+
+				// Handle Built-in 'tofi_shell'
+				if fnName == "tofi_shell" && cfg.SandboxDir != "" {
+					command, _ := argsMap["command"].(string)
+
+					// Detect skill script in command → override display name for OnToolCall
+					if displayName := detectSkillFromCommand(command); displayName != "" {
+						origMarkStepDone := markStepDone
+						markStepDone = func(result string) {
+							durationMs := time.Since(toolStartTime).Milliseconds()
+							if cfg.OnStepDone != nil {
+								cfg.OnStepDone(displayName, result, durationMs)
+							}
+							if cfg.OnToolCall != nil {
+								cfg.OnToolCall(displayName, fnArgs, result, durationMs)
+							}
+						}
+						_ = origMarkStepDone // suppress unused warning
+					}
+
+					// Destructive command detection (AST-based)
+					destructLevel, destructWarning := DetectDestructiveAST(command)
+					if destructLevel >= DestructiveCommand {
+						ctx.Log("[Shell] ⚠️  Destructive command detected: %s", destructWarning)
+						// TODO: in Chat mode, ask user for confirmation via Hooks
+						// For now, log the warning and proceed (App Run is unattended).
+					}
+					// No pre-execution command validation — the defense is the sandbox
+					// itself (gVisor syscall filter + mount isolation). DevExecutor
+					// runs are local-dev only and explicitly unsafe.
+
+					// Classify timeout based on command type
+					requestedTimeout := 0
+					if t, ok := argsMap["timeout"].(float64); ok && t > 0 {
+						requestedTimeout = int(t)
+					}
+					timeout := classifyTimeout(command, requestedTimeout)
+
+					// Execute with auto-backgrounding for long commands
+					var shellResult ShellResult
+					execInstance := cfg.Executor
+					if execInstance == nil {
+						execInstance = executor.NewExecutor("")
+					}
+
+					if bgManager != nil {
+						shellResult = bgManager.RunWithAutoBackground(
+							loopCtx, execInstance,
+							cfg.SandboxDir, cfg.UserDir, command, timeout, cfg.SecretEnv,
+							func(status string) {
+								if cfg.OnProgress != nil {
+									cfg.OnProgress("running", 0, status)
+								}
+							},
+						)
+					} else {
+						// Direct execution (no background manager)
+						output, execErr := execInstance.Execute(loopCtx, cfg.SandboxDir, cfg.UserDir, command, timeout, cfg.SecretEnv)
+						shellResult = ShellResult{
+							Stdout:     output,
+							DurationMs: time.Since(toolStartTime).Milliseconds(),
+						}
+						if execErr != nil {
+							shellResult.Stderr = execErr.Error()
+							shellResult.ExitCode = 1
+							if strings.Contains(execErr.Error(), "timed out") {
+								shellResult.TimedOut = true
+							}
+						}
+						shellResult.Interpretation = interpretExitCode(command, shellResult.ExitCode)
+					}
+
+					// Format result with smart truncation
+					resultMsg := shellResult.FormatForAgent()
+					resultMsg = smartTruncate(resultMsg, 4000)
+
+					ctx.Log("[Shell] %s → %s (exit=%d, %dms)", truncate(command, 80), truncate(resultMsg, 200), shellResult.ExitCode, shellResult.DurationMs)
 					messages = appendAndEmit(messages, provider.Message{
 						Role:       "tool",
 						Content:    resultMsg,
@@ -1172,69 +1086,160 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 						ToolName:   fnName,
 					})
 					markStepDone(resultMsg)
-				} else {
+					continue
+				}
+
+				// Handle registry tools (core + skill + activated deferred)
+				if tool := registry.Get(fnName); tool != nil {
+					result, err := tool.Execute(context.Background(), argsMap)
+					resultMsg := ""
+					if err != nil {
+						resultMsg = fmt.Sprintf("Tool error: %v", err)
+					} else {
+						resultMsg = result
+						// If skill returned commands (code blocks), hint agent to execute them
+						if strings.Contains(result, "```") {
+							resultMsg += "\n\n[This skill returned suggested commands. Execute them using tofi_shell to get actual results — do NOT relay these instructions to the user.]"
+						}
+					}
+					ctx.Log("[ExtraTool:%s] %s", fnName, truncate(resultMsg, 200))
 					messages = appendAndEmit(messages, provider.Message{
 						Role:       "tool",
-						Content:    fmt.Sprintf("Skill '%s' not found", skillKey),
+						Content:    resultMsg,
 						ToolCallID: callID,
 						ToolName:   fnName,
 					})
+					markStepDone(resultMsg)
+					continue
 				}
-				continue
-			}
 
-			// Find appropriate MCP client
-			cli, exists := clientMap[fnName]
-			if !exists {
-				errMsg := fmt.Sprintf("Tool '%s' not found.", fnName)
+				// Handle skill tools (sub-LLM call with skill instructions)
+				if strings.HasPrefix(fnName, "run_skill__") {
+					skillKey := strings.TrimPrefix(fnName, "run_skill__")
+					var matchedSkill *SkillTool
+					for i := range cfg.SkillTools {
+						if sanitizeToolName(cfg.SkillTools[i].Name) == skillKey {
+							matchedSkill = &cfg.SkillTools[i]
+							break
+						}
+					}
+					if matchedSkill != nil {
+						input, _ := argsMap["input"].(string)
+						ctx.Log("[Skill:%s] Executing with input: %s", matchedSkill.Name, truncate(input, 100))
+
+						// 如果 skill 有脚本目录，在沙箱中创建 symlink
+						var symlinkErr string
+						if matchedSkill.SkillDir != "" && cfg.SandboxDir != "" {
+							symlinkDir := filepath.Join(cfg.SandboxDir, "skills")
+							os.MkdirAll(symlinkDir, 0755)
+							link := filepath.Join(symlinkDir, matchedSkill.Name)
+							if _, err := os.Lstat(link); os.IsNotExist(err) {
+								if err := os.Symlink(matchedSkill.SkillDir, link); err != nil {
+									symlinkErr = fmt.Sprintf("Failed to symlink skill scripts: %v", err)
+									ctx.Log("[Skill:%s] Warning: %s", matchedSkill.Name, symlinkErr)
+								} else {
+									ctx.Log("[Skill:%s] Symlinked scripts: skills/%s/ → %s", matchedSkill.Name, matchedSkill.Name, matchedSkill.SkillDir)
+								}
+							}
+						}
+
+						result, err := executeSkillSubCall(cfg.Provider, cfg.Model, *matchedSkill, input)
+						resultMsg := ""
+						if err != nil {
+							// Build diagnostic info for the agent
+							var diag strings.Builder
+							diag.WriteString(fmt.Sprintf("Skill '%s' execution failed: %v\n", matchedSkill.Name, err))
+							diag.WriteString("\nDiagnostics:\n")
+							// Check scripts directory
+							if matchedSkill.SkillDir != "" {
+								scriptsDir := filepath.Join(matchedSkill.SkillDir, "scripts")
+								if _, statErr := os.Stat(scriptsDir); statErr != nil {
+									diag.WriteString(fmt.Sprintf("- Scripts directory: MISSING (%s)\n", scriptsDir))
+								} else {
+									diag.WriteString(fmt.Sprintf("- Scripts directory: exists (%s)\n", scriptsDir))
+								}
+							} else {
+								diag.WriteString("- Scripts directory: N/A (no bundled scripts)\n")
+							}
+							if symlinkErr != "" {
+								diag.WriteString(fmt.Sprintf("- Symlink: FAILED (%s)\n", symlinkErr))
+							}
+							diag.WriteString("\nSuggestion: Try installing missing dependencies with tofi_shell, or write your own code to accomplish the goal.")
+							resultMsg = diag.String()
+						} else {
+							resultMsg = result
+						}
+						ctx.Log("[Skill:%s] Result: %s", matchedSkill.Name, truncate(resultMsg, 200))
+						messages = appendAndEmit(messages, provider.Message{
+							Role:       "tool",
+							Content:    resultMsg,
+							ToolCallID: callID,
+							ToolName:   fnName,
+						})
+						markStepDone(resultMsg)
+					} else {
+						messages = appendAndEmit(messages, provider.Message{
+							Role:       "tool",
+							Content:    fmt.Sprintf("Skill '%s' not found", skillKey),
+							ToolCallID: callID,
+							ToolName:   fnName,
+						})
+					}
+					continue
+				}
+
+				// Find appropriate MCP client
+				cli, exists := clientMap[fnName]
+				if !exists {
+					errMsg := fmt.Sprintf("Tool '%s' not found.", fnName)
+					messages = appendAndEmit(messages, provider.Message{
+						Role:       "tool",
+						Content:    errMsg,
+						ToolCallID: callID,
+						ToolName:   fnName,
+					})
+					ctx.Log("[Error] %s", errMsg)
+					continue
+				}
+
+				// Execute via MCP Client
+				toolResult, err := cli.CallTool(context.Background(), mcp.CallToolRequest{
+					Params: mcp.CallToolParams{
+						Name:      fnName,
+						Arguments: argsMap,
+					},
+				})
+
+				var outputText string
+				if err != nil {
+					outputText = fmt.Sprintf("Tool execution error: %v", err)
+					ctx.Log("[Result] Error: %v", err)
+				} else {
+					var sb strings.Builder
+					for _, c := range toolResult.Content {
+						switch v := c.(type) {
+						case mcp.TextContent:
+							sb.WriteString(v.Text)
+						case mcp.ImageContent:
+							sb.WriteString(fmt.Sprintf("[Image: %s]", v.MIMEType))
+						case mcp.EmbeddedResource:
+							sb.WriteString(fmt.Sprintf("[Resource: %s]", v.Type))
+						default:
+							sb.WriteString("[Unknown Content]")
+						}
+					}
+					outputText = sb.String()
+					ctx.Log("[Result] %s", truncate(outputText, 100))
+				}
+
 				messages = appendAndEmit(messages, provider.Message{
 					Role:       "tool",
-					Content:    errMsg,
+					Content:    outputText,
 					ToolCallID: callID,
 					ToolName:   fnName,
 				})
-				ctx.Log("[Error] %s", errMsg)
-				continue
+				markStepDone(outputText)
 			}
-
-			// Execute via MCP Client
-			toolResult, err := cli.CallTool(context.Background(), mcp.CallToolRequest{
-				Params: mcp.CallToolParams{
-					Name:      fnName,
-					Arguments: argsMap,
-				},
-			})
-
-			var outputText string
-			if err != nil {
-				outputText = fmt.Sprintf("Tool execution error: %v", err)
-				ctx.Log("[Result] Error: %v", err)
-			} else {
-				var sb strings.Builder
-				for _, c := range toolResult.Content {
-					switch v := c.(type) {
-					case mcp.TextContent:
-						sb.WriteString(v.Text)
-					case mcp.ImageContent:
-						sb.WriteString(fmt.Sprintf("[Image: %s]", v.MIMEType))
-					case mcp.EmbeddedResource:
-						sb.WriteString(fmt.Sprintf("[Resource: %s]", v.Type))
-					default:
-						sb.WriteString("[Unknown Content]")
-					}
-				}
-				outputText = sb.String()
-				ctx.Log("[Result] %s", truncate(outputText, 100))
-			}
-
-			messages = appendAndEmit(messages, provider.Message{
-				Role:       "tool",
-				Content:    outputText,
-				ToolCallID: callID,
-				ToolName:   fnName,
-			})
-			markStepDone(outputText)
-		}
 		} // end sequential execution else block
 
 		// Post-call context compaction — use actual API-reported token count
