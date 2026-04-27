@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"tofi-core/internal/agent"
 	"tofi-core/internal/bridge"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/connect"
 	"tofi-core/internal/executor"
-	"tofi-core/internal/agent"
 	"tofi-core/internal/models"
 	"tofi-core/internal/provider"
 	"tofi-core/internal/skills"
@@ -30,7 +30,7 @@ func (s *Server) handleCreateChatSession(w http.ResponseWriter, r *http.Request)
 	userID := r.Context().Value(UserContextKey).(string)
 
 	var req struct {
-		Scope  string   `json:"scope"`  // "" or "agent:{name}"
+		Scope  string   `json:"scope"` // "" or "agent:{name}"
 		Model  string   `json:"model"`
 		Skills []string `json:"skills"`
 	}
@@ -580,9 +580,9 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		// Return structured error for AI key issues so callers can produce actionable messages
 		if keyErr, ok := err.(*apiKeyError); ok {
 			emit("error", map[string]string{
-				"code":    keyErr.Code,
-				"error":   keyErr.Message,
-				"hint":    keyErr.Hint,
+				"code":  keyErr.Code,
+				"error": keyErr.Message,
+				"hint":  keyErr.Hint,
 			})
 			return nil, keyErr
 		}
@@ -602,10 +602,14 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	systemPrompt := s.buildChatSystemPrompt(userID, scope)
 
 	// 3. Load skills — filesystem is the single source of truth.
-	// System skills from embed FS, user skills from filesystem.
-	// All skills are deferred: name+description in system prompt,
-	// full Instructions loaded on-demand via tofi_load_skill tool.
-	skillNames := skills.ListSystemSkillNames()
+	// User chat gets the full system skill surface. Agent/App runs only get
+	// their configured skills; otherwise a narrow monitor can accidentally see
+	// app-creation and management skills and reinterpret its own prompt as an
+	// instruction to create another App.
+	var skillNames []string
+	if autoLoadSystemSkills(scope) {
+		skillNames = skills.ListSystemSkillNames()
+	}
 
 	// Global chat: auto-import all user-installed skills
 	if !strings.HasPrefix(scope, chat.ScopeAgentPrefix) {
@@ -755,10 +759,14 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 	if scope == chat.ScopeUser {
 		coreTools = append(coreTools, s.buildChatWishTools()...)
 	}
-	coreTools = append(coreTools, s.buildMemoryTools(userID, "")...)
+	if !isAppRun {
+		coreTools = append(coreTools, s.buildMemoryTools(userID, "")...)
+	}
 	coreTools = append(coreTools, s.buildBuiltinTools(userID)...)
 	coreTools = append(coreTools, buildSessionInfoTool(session, resolvedModel, &liveUsage))
-	coreTools = append(coreTools, s.buildScheduleTools(userID)...)
+	if !isAppRun {
+		coreTools = append(coreTools, s.buildScheduleTools(userID)...)
+	}
 
 	// Bundle app tools with ALL app-related skills
 	// Loading any app skill (apps, app-create, app-list, etc.) activates the tools
@@ -845,10 +853,10 @@ func (s *Server) executeChatSession(userID, scope string, session *chat.Session,
 		// silently reappear when the loop eventually finishes.
 		OnMessage: func(msg provider.Message) {
 			chatMsg := chat.Message{
-				Role:       msg.Role,
-				Content:    msg.Content,
-				CallID:     msg.ToolCallID,
-				Name:       msg.ToolName,
+				Role:    msg.Role,
+				Content: msg.Content,
+				CallID:  msg.ToolCallID,
+				Name:    msg.ToolName,
 			}
 			for _, tc := range msg.ToolCalls {
 				chatMsg.ToolCalls = append(chatMsg.ToolCalls, chat.ToolCall{

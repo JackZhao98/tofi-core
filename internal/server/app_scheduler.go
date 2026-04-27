@@ -287,7 +287,7 @@ func (as *AppScheduler) dispatchRun(run *storage.AppRunRecord, promptOverride st
 
 	// Create a Chat Session for this app run. Use the session ID pre-allocated
 	// in DispatchRun so the HTTP caller's navigation target stays stable.
-	scope := chat.AgentScope("app-" + app.ID[:8])
+	scope := appRunScope(app.ID)
 	sessionID := run.SessionID
 	if sessionID == "" {
 		sessionID = "s_" + uuid.New().String()[:12]
