@@ -664,7 +664,7 @@ func (s *Server) handleListAppConnectors(w http.ResponseWriter, r *http.Request)
 	userID := r.Context().Value(UserContextKey).(string)
 	appID := r.PathValue("id")
 
-	connectors, err := s.db.ListConnectorsForApp(userID, appID)
+	connectors, err := s.db.ListConnectorsLinkedToApp(userID, appID)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "failed to list", "")
 		return
