@@ -456,12 +456,26 @@ func (as *AppScheduler) doRenewal(app *storage.AppRecord) {
 // ── Public methods ──
 
 func (as *AppScheduler) ActivateApp(app *storage.AppRecord) error {
+	pendingCount, err := as.server.db.CountPendingAppRuns(app.ID)
+	if err != nil {
+		return fmt.Errorf("count pending runs: %w", err)
+	}
+	need := app.BufferSize - pendingCount
+	if need <= 0 {
+		log.Printf("App %s activation is a no-op: %d pending runs already queued", app.ID[:8], pendingCount)
+		return nil
+	}
+
 	startFrom := time.Now()
-	times := ExpandSchedule(app.ScheduleRules, startFrom, app.BufferSize)
+	if pendingCount > 0 {
+		startFrom, _ = as.server.db.GetLastAppScheduledTime(app.ID)
+	}
+	times := ExpandSchedule(app.ScheduleRules, startFrom, need)
 	if len(times) == 0 {
 		return fmt.Errorf("schedule rules produced no future runs")
 	}
 
+	added := 0
 	for _, t := range times {
 		run := &storage.AppRunRecord{
 			ID:          uuid.New().String(),
@@ -473,9 +487,10 @@ func (as *AppScheduler) ActivateApp(app *storage.AppRecord) error {
 		if err := as.server.db.CreateAppRun(run); err != nil {
 			continue
 		}
+		added++
 	}
 
-	log.Printf("App %s activated with %d scheduled runs", app.ID[:8], len(times))
+	log.Printf("App %s activation queued %d scheduled runs (%d pending total target)", app.ID[:8], added, app.BufferSize)
 	return nil
 }
 
