@@ -172,14 +172,15 @@ def extract_page(url, html, max_chars):
 
 def extract_text(html):
     """Extract clean text from HTML. Uses trafilatura if available, else regex fallback."""
+    main_html = isolate_main_content(html)
     if USE_TRAFILATURA:
-        text = trafilatura.extract(html, include_comments=False, include_tables=True)
+        text = trafilatura.extract(main_html, include_comments=False, include_tables=True)
         if text and len(text) > 100:
             return text
 
     # Fallback: regex-based extraction
     # Remove scripts, styles, and hidden elements
-    text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<script[^>]*>.*?</script>", "", main_html, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<noscript[^>]*>.*?</noscript>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
@@ -206,6 +207,19 @@ def extract_text(html):
         if line:
             cleaned.append(line)
     return "\n\n".join(cleaned)
+
+
+def isolate_main_content(html):
+    """Prefer the main content region to reduce navigation noise."""
+    patterns = [
+        r"<main\b[^>]*>(.*?)</main>",
+        r"<body\b[^>]*>(.*?)</body>",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+        if match and match.group(1).strip():
+            return match.group(1)
+    return html
 
 
 def main():
