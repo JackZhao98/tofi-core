@@ -268,19 +268,16 @@ func RunAgentLoop(cfg AgentConfig, ctx *models.ExecutionContext) (*AgentResult, 
 				}
 			}
 
-			// If skill has scripts, create sandbox symlink + register tools
+			// If skill has scripts, copy them into the sandbox + register tools.
 			if skill.SkillDir != "" {
-				// Create symlink NOW so tofi_shell can find scripts at skills/{name}/
+				// Make scripts available at skills/{name}/ inside the sandbox.
+				// gVisor cannot follow symlinks to host paths outside /work, so
+				// this must copy the files rather than symlink the host skill dir.
 				if cfg.SandboxDir != "" {
-					symlinkDir := filepath.Join(cfg.SandboxDir, "skills")
-					os.MkdirAll(symlinkDir, 0755)
-					link := filepath.Join(symlinkDir, name)
-					if _, err := os.Lstat(link); os.IsNotExist(err) {
-						if err := os.Symlink(skill.SkillDir, link); err != nil {
-							ctx.Log("[Skill:%s] Warning: failed to symlink scripts: %v", name, err)
-						} else {
-							ctx.Log("[Skill:%s] Symlinked scripts: skills/%s/ → %s", name, name, skill.SkillDir)
-						}
+					if err := copySkillToSandbox(cfg.SandboxDir, name, skill.SkillDir); err != nil {
+						ctx.Log("[Skill:%s] Warning: failed to copy scripts into sandbox: %v", name, err)
+					} else {
+						ctx.Log("[Skill:%s] Copied scripts into sandbox: skills/%s/", name, name)
 					}
 				}
 
@@ -1739,6 +1736,49 @@ func mapKeys(m map[string]bool) []string {
 // shellQuote wraps a string in single quotes with proper escaping for shell safety.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func copySkillToSandbox(sandboxDir, skillName, skillDir string) error {
+	target := filepath.Join(sandboxDir, "skills", skillName)
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("clear target: %w", err)
+	}
+	if err := os.MkdirAll(target, 0755); err != nil {
+		return fmt.Errorf("create target: %w", err)
+	}
+	return copyDir(skillDir, target)
+}
+
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if err := os.MkdirAll(dstPath, info.Mode().Perm()); err != nil {
+				return err
+			}
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(dstPath, data, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sanitizeToolName(name string) string {
