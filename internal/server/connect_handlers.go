@@ -6,10 +6,13 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"tofi-core/internal/connect"
 	"tofi-core/internal/storage"
+
+	"rsc.io/qr"
 )
 
 // pendingVerifiesMu 保护所有 pending verify maps
@@ -164,8 +167,8 @@ func (s *Server) handleGetConnector(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"connector":  conn,
-		"receivers":  receivers,
+		"connector":   conn,
+		"receivers":   receivers,
 		"can_receive": conn.Type.CanReceive(),
 	})
 }
@@ -385,6 +388,44 @@ func (s *Server) handleConnectorVerify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleConnectorVerifyQR GET /api/v1/connectors/{id}/verify-qr?code=1234
+func (s *Server) handleConnectorVerifyQR(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(UserContextKey).(string)
+	connID := r.PathValue("id")
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "code is required", "")
+		return
+	}
+
+	conn, err := s.db.GetConnector(connID, userID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "connector not found", "")
+		return
+	}
+	if conn.Type != storage.ConnectorTelegram {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "verify QR only supported for telegram", "")
+		return
+	}
+
+	tgCfg, err := conn.TelegramConfig()
+	if err != nil || tgCfg.BotUsername == "" {
+		writeJSONError(w, http.StatusBadRequest, ErrBadRequest, "telegram bot username unavailable", "")
+		return
+	}
+
+	deepLink := fmt.Sprintf("https://t.me/%s?start=%s", tgCfg.BotUsername, code)
+	svg, err := renderQRCodeSVG(deepLink)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "failed to generate QR code", "")
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(svg))
+}
+
 // handleConnectorReceivers GET /api/v1/connectors/{id}/receivers
 func (s *Server) handleConnectorReceivers(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(UserContextKey).(string)
@@ -404,6 +445,35 @@ func (s *Server) handleConnectorReceivers(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(receivers)
+}
+
+func renderQRCodeSVG(text string) (string, error) {
+	code, err := qr.Encode(text, qr.M)
+	if err != nil {
+		return "", err
+	}
+
+	const quietZone = 4
+	const moduleSize = 8
+	size := (code.Size + quietZone*2) * moduleSize
+
+	var path strings.Builder
+	for y := 0; y < code.Size; y++ {
+		for x := 0; x < code.Size; x++ {
+			if !code.Black(x, y) {
+				continue
+			}
+			px := (x + quietZone) * moduleSize
+			py := (y + quietZone) * moduleSize
+			path.WriteString(fmt.Sprintf("M%d %dh%dv%dh-%dz", px, py, moduleSize, moduleSize, moduleSize))
+		}
+	}
+
+	return fmt.Sprintf(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %[1]d %[1]d" shape-rendering="crispEdges"><rect width="%[1]d" height="%[1]d" fill="white"/><path d="%[2]s" fill="black"/></svg>`,
+		size,
+		path.String(),
+	), nil
 }
 
 // handleDeleteConnectorReceiver DELETE /api/v1/connectors/{id}/receivers/{rid}

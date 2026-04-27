@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 	"tofi-core/internal/bridge"
-	"tofi-core/internal/daemon"
 	"tofi-core/internal/chat"
 	"tofi-core/internal/crypto"
+	"tofi-core/internal/daemon"
 	"tofi-core/internal/executor"
 	"tofi-core/internal/models"
 	"tofi-core/internal/skills"
@@ -132,9 +132,9 @@ func NewServer(config Config) (*Server, error) {
 	}
 
 	return &Server{
-		config:   config,
-		db:       db,
-		executor: exec,
+		config:          config,
+		db:              db,
+		executor:        exec,
 		holdChannels:    make(map[string]chan HoldSignal),
 		sessionHubs:     make(map[string]*sessionHub),
 		sessionCancels:  make(map[string]context.CancelFunc),
@@ -488,6 +488,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("PUT /api/v1/connectors/{id}/toggle", s.AuthMiddleware(s.handleToggleConnector))
 	mux.HandleFunc("POST /api/v1/connectors/{id}/verify", s.AuthMiddleware(s.handleConnectorVerify))
 	mux.HandleFunc("GET /api/v1/connectors/{id}/verify-status", s.AuthMiddleware(s.handleConnectorVerifyStatus))
+	mux.HandleFunc("GET /api/v1/connectors/{id}/verify-qr", s.AuthMiddleware(s.handleConnectorVerifyQR))
 	mux.HandleFunc("GET /api/v1/connectors/{id}/receivers", s.AuthMiddleware(s.handleConnectorReceivers))
 	mux.HandleFunc("DELETE /api/v1/connectors/{id}/receivers/{rid}", s.AuthMiddleware(s.handleDeleteConnectorReceiver))
 	mux.HandleFunc("POST /api/v1/connectors/{id}/test", s.AuthMiddleware(s.handleConnectorTest))
@@ -580,9 +581,9 @@ func (s *Server) Start() error {
 
 // Build info — set by main package at startup via SetBuildInfo().
 var (
-	buildVersion   = "dev"
-	buildTime      = "unknown"
-	buildCommit    = "unknown"
+	buildVersion    = "dev"
+	buildTime       = "unknown"
+	buildCommit     = "unknown"
 	serverStartedAt time.Time
 )
 
