@@ -21,12 +21,27 @@ const (
 
 // resolveRunCaps returns the per-run budget to enforce for userID. The
 // resolution order is:
-//  1. Hard-coded defaults (free tier).
-//  2. System-scoped settings (admin default for all users).
-//  3. User-scoped settings (admin override for a specific user).
+//  1. Admin bypass — admin users get no per-run cap (matches PlanLimits
+//     where admin's DailyRuns/MaxApps/etc. are all 0 = unlimited).
+//  2. Hard-coded defaults (free tier).
+//  3. System-scoped settings (admin default for all users).
+//  4. User-scoped settings (admin override for a specific user).
 // Each later layer overrides the earlier one per-field. A negative or
 // unparseable value is ignored.
+//
+// Returning all zeros for admin is the agreed "no cap" sentinel — checkRunBudget
+// in internal/agent/budget.go skips fields whose cap is <= 0.
 func (s *Server) resolveRunCaps(userID string) (float64, int, time.Duration) {
+	// Admin bypass: no per-run budget. Without this the hardcoded
+	// $0.20 / 15 LLM calls / 3min defaults strangle admin runs (the
+	// Telegram bridge keeps the same chat session forever, so a few
+	// web fetches cumulatively trip the cap and every subsequent
+	// turn poisoning the session history with "reached budget" wrap-up
+	// content).
+	if user, err := s.db.GetUser(userID); err == nil && user.Role == "admin" {
+		return 0, 0, 0
+	}
+
 	cost := defaultMaxRunCost
 	llm := defaultMaxRunLLMCalls
 	dur := defaultMaxRunDuration
